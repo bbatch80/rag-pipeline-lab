@@ -1,0 +1,21 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: raglab-db
+    ports:
+      - "127.0.0.1:5433:5432"
+    environment:
+      POSTGRES_USER: raglab
+      POSTGRES_PASSWORD: raglab
+      POSTGRES_DB: raglab
+    volumes:
+      - raglab-pgdata:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U raglab -d raglab"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  raglab-pgdata:

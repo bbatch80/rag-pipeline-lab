@@ -1,0 +1,18 @@
+# Never commit — local planning material
+PLAN.md
+phases/
+CLAUDE.md
+.DS_Store
+
+# Secrets — the only file that ever holds real credentials
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Local data artifacts
+data/

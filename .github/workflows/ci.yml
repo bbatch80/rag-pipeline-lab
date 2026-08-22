@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: raglab
+          POSTGRES_PASSWORD: raglab
+          POSTGRES_DB: raglab
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U raglab -d raglab"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync
+      - run: uv run raglab init-db
+      - run: uv run pytest -v

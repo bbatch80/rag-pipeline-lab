@@ -59,32 +59,54 @@ def download(full: bool):
 @main.command("ingest")
 @click.option("--full", is_flag=True, help="Ingest the full corpus, not the dev subset.")
 def ingest_cmd(full: bool):
-    """Parse, chunk, gate, and load brochures into the database."""
-    from raglab import corpus, ingest
+    """Parse, chunk, gate, and load brochures + internal tier into the database."""
+    from raglab import corpus, ingest, internal_corpus
+    from raglab.parsing.markdown_backend import CsvBackend, MarkdownBackend
     from raglab.parsing.unstructured_backend import UnstructuredBackend
+    from raglab.metadata import derive_document_meta
 
     receipt = Receipt("raglab ingest" + (" --full" if full else ""))
-    backend = UnstructuredBackend()
+    backends = {
+        "pdf": UnstructuredBackend(),
+        "markdown": MarkdownBackend(),
+        "csv": CsvBackend(),
+    }
     counts = {"skipped": 0, "ingested": 0, "reingested": 0, "quarantined": 0}
+
+    def one(conn, path, meta, backend_kind, label):
+        action = ingest.ingest_document(conn, path, meta, backends[backend_kind])
+        counts[action] += 1
+        if action == "quarantined":
+            gates = conn.execute(
+                "SELECT gate, detail FROM quarantine WHERE source_path = %s",
+                (ingest.rel_source_path(path),),
+            ).fetchall()
+            tripped = "; ".join(f"{g}: {d}" for g, d in gates)
+            receipt.fail(f"QUARANTINED {label} — {tripped}")
+
     try:
         with db.connect() as conn:
             for cell in corpus.cells(dev_only=not full):
                 if not cell.pdf_path.exists():
                     receipt.fail(f"missing PDF (run `raglab download`): {cell.pdf_path.name} {cell.year}")
                     continue
-                from raglab.metadata import derive_document_meta
+                one(conn, cell.pdf_path, derive_document_meta(cell), "pdf",
+                    f"{cell.spec.ri}/{cell.year}")
 
-                action = ingest.ingest_document(
-                    conn, cell.pdf_path, derive_document_meta(cell), backend
-                )
-                counts[action] += 1
-                if action == "quarantined":
-                    gates = conn.execute(
-                        "SELECT gate, detail FROM quarantine WHERE source_path = %s",
-                        (ingest.rel_source_path(cell.pdf_path),),
-                    ).fetchall()
-                    tripped = "; ".join(f"{g}: {d}" for g, d in gates)
-                    receipt.fail(f"QUARANTINED {cell.spec.ri}/{cell.year} — {tripped}")
+            internal_items = internal_corpus.items()
+            for item in internal_items:
+                one(conn, item.path, item.meta, item.backend_kind, item.meta.title)
+            if internal_items:
+                # Remove rows for internal docs whose source files are gone
+                # (churn deletions) — cascade clears their chunks.
+                present = [ingest.rel_source_path(i.path) for i in internal_items]
+                gone = conn.execute(
+                    "DELETE FROM documents WHERE source_path LIKE 'data/internal/%%' "
+                    "AND NOT (source_path = ANY(%s)) RETURNING source_path",
+                    (present,),
+                ).fetchall()
+                for (source_path,) in gone:
+                    receipt.add("deleted (source gone)", source_path)
             conn.commit()
 
             for status_name, count in counts.items():
@@ -175,6 +197,72 @@ def benchmark_cmd():
     receipt.finish()
 
 
+@main.command("synth")
+@click.option("--count", default=250, help="Number of clinical notes.")
+@click.option("--seed", default=42, help="Generation seed.")
+def synth_cmd(count: int, seed: int):
+    """Generate the internal tier: docs, clinical notes + PHI manifest, PDFs."""
+    from raglab.synth import internal_docs, notes, render_pdf
+
+    receipt = Receipt("raglab synth")
+    try:
+        docs_written = internal_docs.write_all()
+        receipt.add("internal docs", docs_written)
+        with db.connect() as conn:
+            stats = notes.generate(conn, count=count, seed=seed)
+        receipt.add("clinical notes", stats["notes"])
+        receipt.add("by template", stats["by_template"])
+        pdfs = render_pdf.render_all()
+        receipt.add("rendered PDFs", f"{pdfs} (md+pdf total = notes)")
+        manifest_lines = notes.MANIFEST_PATH.read_text().count("\n")
+        if manifest_lines != stats["notes"]:
+            receipt.fail(f"manifest has {manifest_lines} entries, expected {stats['notes']}")
+        receipt.add("PHI manifest", f"{manifest_lines} entries at {notes.MANIFEST_PATH.name}")
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+@main.command("churn")
+@click.option("--seed", required=True, type=int, help="Churn seed (determinism contract).")
+@click.option("--rate", default=0.08, help="Fraction of the churnable pool to touch.")
+def churn_cmd(seed: int, rate: float):
+    """Mutate/delete a slice of the churnable internal docs (golden-anchored spared)."""
+    from raglab.synth import churn
+
+    receipt = Receipt(f"raglab churn --seed {seed}")
+    try:
+        actions = churn.run(seed=seed, rate=rate)
+        for action in actions:
+            receipt.add(action.action, action.relpath)
+        receipt.add("pool size", len(churn.churn_pool()))
+        if not actions:
+            receipt.fail("churn touched nothing — pool empty?")
+    except OSError as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+@main.command("load-synthea")
+def load_synthea_cmd():
+    """Load Synthea CSV exports into the synthea schema (drop-and-recreate)."""
+    from raglab import synthea_load
+
+    receipt = Receipt("raglab load-synthea")
+    try:
+        with db.connect() as conn:
+            for result in synthea_load.load_all(conn):
+                note = (
+                    f"{result.rows} rows"
+                    + (f" ({result.skipped_csv_columns} csv cols ignored)"
+                       if result.skipped_csv_columns else "")
+                )
+                receipt.add(f"synthea.{result.table}", note)
+    except (OSError, psycopg.Error) as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
 @main.command("status")
 def status():
     """One-command health snapshot."""
@@ -207,6 +295,17 @@ def status():
             ).fetchone()
             if null_embeddings is not None:
                 receipt.add("chunks w/o embedding", null_embeddings[0])
+
+            synthea_patients = conn.execute(
+                "SELECT count(*) FROM synthea.patients"
+            ).fetchone()[0] if conn.execute(
+                "SELECT to_regclass('synthea.patients')"
+            ).fetchone()[0] else None
+            receipt.add(
+                "synthea lane",
+                f"{synthea_patients} patients" if synthea_patients is not None
+                else "not loaded",
+            )
 
             hnsw = conn.execute(
                 "SELECT indexdef FROM pg_indexes WHERE indexname = 'chunks_embedding_idx'"

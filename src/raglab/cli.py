@@ -33,6 +33,29 @@ def init_db():
     receipt.finish()
 
 
+@main.command("download")
+@click.option("--full", is_flag=True, help="Fetch the full corpus, not the dev subset.")
+def download(full: bool):
+    """Fetch OPM brochures (PDF + BrochureJson listing) into data/raw/."""
+    from raglab import corpus, opm
+
+    receipt = Receipt("raglab download" + (" --full" if full else ""))
+    counts = {"fetched": 0, "cached": 0, "absent": 0, "failed": 0}
+    with opm.client() as http:
+        for cell in corpus.cells(dev_only=not full):
+            listing = opm.fetch_listing(http, cell.spec.ri, cell.year, cell.listing_path)
+            pdf = opm.fetch_pdf(http, cell.spec.ri, cell.year, cell.pdf_path)
+            for result in (listing, pdf):
+                counts[result.status] += 1
+                if result.status == "failed":
+                    receipt.fail(f"{cell.spec.ri}/{cell.year}: {result.detail}")
+                elif result.status == "absent":
+                    receipt.add(f"absent {cell.spec.ri}/{cell.year}", result.detail)
+    for status, count in counts.items():
+        receipt.add(status, count)
+    receipt.finish()
+
+
 @main.command("status")
 def status():
     """One-command health snapshot."""

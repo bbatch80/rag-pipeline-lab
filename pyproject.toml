@@ -5,6 +5,7 @@ description = "Governed retrieval pipeline lab: parsing, hybrid retrieval, evalu
 requires-python = ">=3.12"
 dependencies = [
     "click>=8.1",
+    "httpx>=0.28.1",
     "psycopg[binary]>=3.2",
     "python-dotenv>=1.0",
 ]

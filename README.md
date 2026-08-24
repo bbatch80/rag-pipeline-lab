@@ -38,3 +38,30 @@ Exact scan median: 42 ms. **Operating point: `ef_search=40`** — recall 0.996
 at 1.2 ms (35x speedup) — selected by rule: recall ≥ 0.95 at the lowest
 latency achieving it. At this corpus size the index is near-saturated at
 minimal search effort; the sweep demonstrates methodology, not necessity.
+
+## Retrieval funnel ablation
+
+Query → rule-based router (scope gate, year resolution, plan filters) →
+hybrid search (pgvector + Postgres full-text) → reciprocal rank fusion
+(k=60, rank-only, in SQL) → top-50 → cross-encoder reranker
+(BAAI/bge-reranker-base, local). Measured as hit@5 on a 29-question golden
+set with human-verified source labels (`eval/golden.jsonl`); reproduce with
+`raglab ablation`, inspect any query with `raglab explain "<query>"`.
+
+| arm | hit@5 |
+|---|---:|
+| vector only | 0.793 |
+| lexical only | 0.207 |
+| RRF fusion | 0.793 |
+| RRF + rerank | **0.931** |
+
+Findings: the reranker delivers the decisive lift; fusion ties vector on
+natural-language questions and wins on identifier-style queries (exact
+member IDs, dollar amounts, enrollment codes hit rank 1 via the lexical
+arm — Postgres FTS lacks IDF, so the lexical arm queries rare lexemes only,
+using a document-frequency table rebuilt at index time). The router's scope
+gate resolved 6/6 out-of-domain/out-of-year probes without retrieval.
+Abstention threshold (0.5) separates answerable questions (best rerank
+score ≥ 0.72 across the golden set) from absent-topic questions (0.30);
+redirect-style questions score high on genuinely-relevant-but-non-answering
+chunks and are handled at the generation layer instead.

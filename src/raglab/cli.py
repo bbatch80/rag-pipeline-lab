@@ -158,7 +158,7 @@ def embed_cmd():
 
 @main.command("index")
 def index_cmd():
-    """Drop and rebuild the HNSW index (bulk-load-then-index rule)."""
+    """Drop and rebuild the HNSW index and lexeme DF stats (bulk-load-then-index)."""
     receipt = Receipt("raglab index")
     try:
         with db.connect() as conn:
@@ -167,8 +167,18 @@ def index_cmd():
                 "CREATE INDEX chunks_embedding_idx ON chunks "
                 "USING hnsw (embedding vector_cosine_ops)"
             )
+            # Postgres FTS has no IDF; the lexical arm compensates by
+            # querying rare terms only. This table is its rarity oracle.
+            conn.execute("DROP TABLE IF EXISTS lexeme_df")
+            conn.execute(
+                "CREATE TABLE lexeme_df AS "
+                "SELECT word, ndoc FROM ts_stat('SELECT tsv FROM chunks')"
+            )
+            conn.execute("CREATE INDEX lexeme_df_word_idx ON lexeme_df (word)")
+            n_lexemes = conn.execute("SELECT count(*) FROM lexeme_df").fetchone()[0]
             conn.commit()
         receipt.add("index", "chunks_embedding_idx (hnsw, cosine, m=16, ef_construction=64)")
+        receipt.add("lexeme_df", f"{n_lexemes} lexemes")
     except psycopg.Error as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()
@@ -259,6 +269,92 @@ def load_synthea_cmd():
                 )
                 receipt.add(f"synthea.{result.table}", note)
     except (OSError, psycopg.Error) as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+@main.command("explain")
+@click.argument("query")
+def explain_cmd(query: str):
+    """Full retrieval trace: router -> per-method -> RRF -> rerank -> verdict."""
+    from raglab import rerank, retrieval, router
+
+    decision = router.route(query)
+    click.echo(f"\nQUERY: {query}")
+    click.echo("\n[1] ROUTER")
+    click.echo(f"    scope: {decision.scope}")
+    for reason in decision.reasons:
+        click.echo(f"    - {reason}")
+    if decision.scope != "in_scope":
+        click.echo(f"    boundary response: {decision.boundary_response}")
+        click.echo("\n    (no retrieval attempted — scope gate)")
+        return
+    click.echo(f"    year filter: {list(decision.years)}")
+    click.echo(f"    plan filter: {list(decision.plan_codes) or 'none'} (NULL plan_code passes)")
+
+    with db.connect() as conn:
+        candidates = retrieval.search(
+            conn, query, retrieval.embed_query(query), decision
+        )
+
+    def _line(c, extra=""):
+        loc = f"{c.doc_title[:38]} | {c.section[:24]}" if c.section else c.doc_title[:64]
+        return f"    {extra}[{loc}] {c.content[:64].replace(chr(10), ' ')}"
+
+    by_vec = sorted((c for c in candidates if c.vector_rank), key=lambda c: c.vector_rank)
+    by_txt = sorted((c for c in candidates if c.text_rank), key=lambda c: c.text_rank)
+    click.echo(f"\n[2] VECTOR top 3 (of {len(by_vec)} in fused set)")
+    for c in by_vec[:3]:
+        click.echo(_line(c, f"v#{c.vector_rank} "))
+    click.echo(f"\n[3] BM25 top 3 (of {len(by_txt)} in fused set)")
+    for c in by_txt[:3]:
+        click.echo(_line(c, f"t#{c.text_rank} "))
+
+    click.echo(f"\n[4] RRF FUSION (k={retrieval.RRF_K}) top 5 of {len(candidates)}")
+    for c in sorted(candidates, key=lambda x: -x.rrf_score)[:5]:
+        v = f"1/(60+{c.vector_rank})" if c.vector_rank else "0"
+        t = f"1/(60+{c.text_rank})" if c.text_rank else "0"
+        click.echo(_line(c, f"{c.rrf_score:.4f} = {v} + {t}  "))
+
+    reranked = rerank.rerank(query, candidates)
+    click.echo("\n[5] RERANK (bge-reranker-base) top 5")
+    for c in reranked[:5]:
+        click.echo(_line(c, f"{c.rerank_score:.4f}  "))
+
+    abstain, best = rerank.abstention_verdict(reranked)
+    click.echo("\n[6] VERDICT")
+    click.echo(f"    best rerank score: {best:.4f} vs threshold {rerank.ABSTAIN_THRESHOLD}")
+    click.echo(f"    {'ABSTAIN (insufficient evidence)' if abstain else 'ANSWERABLE'}")
+    click.echo("    RLS trim: n/a until Phase 6 (all tiers visible)\n")
+
+
+@main.command("ablation")
+def ablation_cmd():
+    """Run the retrieval ablation over the golden set."""
+    from raglab import ablation
+
+    receipt = Receipt("raglab ablation")
+    try:
+        with db.connect() as conn:
+            report = ablation.run(conn)
+        click.echo("\n" + ablation.markdown_table(report) + "\n")
+        for arm, result in report.arms.items():
+            receipt.add(arm, f"{result.rate:.3f}")
+        gates_ok = sum(1 for _, exp, act in report.gate_results if exp == act)
+        receipt.add("scope gate", f"{gates_ok}/{len(report.gate_results)} as expected")
+        if report.answerable_best_scores:
+            lo = min(s for _, s in report.answerable_best_scores)
+            receipt.add("answerable best-score min", f"{lo:.4f}")
+        for qid, score in report.unanswerable_best_scores:
+            receipt.add(f"unanswerable {qid} best-score", f"{score:.4f}")
+        misses = [
+            f"{r['id']}:{','.join(a for a in ('vector','bm25','rrf','rrf+rerank') if not r[a])}"
+            for r in report.per_question
+            if not all(r[a] for a in ("vector", "bm25", "rrf", "rrf+rerank"))
+        ]
+        for miss in misses:
+            receipt.add("miss", miss)
+    except Exception as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()
 

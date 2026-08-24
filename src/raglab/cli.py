@@ -56,6 +56,58 @@ def download(full: bool):
     receipt.finish()
 
 
+@main.command("ingest")
+@click.option("--full", is_flag=True, help="Ingest the full corpus, not the dev subset.")
+def ingest_cmd(full: bool):
+    """Parse, chunk, gate, and load brochures into the database."""
+    from raglab import corpus, ingest
+    from raglab.parsing.unstructured_backend import UnstructuredBackend
+
+    receipt = Receipt("raglab ingest" + (" --full" if full else ""))
+    backend = UnstructuredBackend()
+    counts = {"skipped": 0, "ingested": 0, "reingested": 0, "quarantined": 0}
+    try:
+        with db.connect() as conn:
+            for cell in corpus.cells(dev_only=not full):
+                if not cell.pdf_path.exists():
+                    receipt.fail(f"missing PDF (run `raglab download`): {cell.pdf_path.name} {cell.year}")
+                    continue
+                from raglab.metadata import derive_document_meta
+
+                action = ingest.ingest_document(
+                    conn, cell.pdf_path, derive_document_meta(cell), backend
+                )
+                counts[action] += 1
+                if action == "quarantined":
+                    gates = conn.execute(
+                        "SELECT gate, detail FROM quarantine WHERE source_path = %s",
+                        (ingest.rel_source_path(cell.pdf_path),),
+                    ).fetchall()
+                    tripped = "; ".join(f"{g}: {d}" for g, d in gates)
+                    receipt.fail(f"QUARANTINED {cell.spec.ri}/{cell.year} — {tripped}")
+            conn.commit()
+
+            for status_name, count in counts.items():
+                receipt.add(status_name, count)
+            total, histogram = _chunk_histogram(conn)
+            receipt.add("chunks total", total)
+            receipt.add("size histogram", histogram)
+    except psycopg.Error as exc:
+        receipt.fail(f"database error: {exc}")
+    receipt.finish()
+
+
+def _chunk_histogram(conn, bucket: int = 250, top: int = 2000) -> tuple[int, str]:
+    rows = conn.execute(
+        "SELECT width_bucket(length(content), 0, %s, %s) AS b, count(*) "
+        "FROM chunks GROUP BY b ORDER BY b",
+        (top, top // bucket),
+    ).fetchall()
+    total = sum(count for _, count in rows)
+    bars = " ".join(f"{(b - 1) * bucket}+:{count}" for b, count in rows)
+    return total, bars or "empty"
+
+
 @main.command("status")
 def status():
     """One-command health snapshot."""

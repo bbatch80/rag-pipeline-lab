@@ -108,6 +108,73 @@ def _chunk_histogram(conn, bucket: int = 250, top: int = 2000) -> tuple[int, str
     return total, bars or "empty"
 
 
+@main.command("embed")
+def embed_cmd():
+    """Embed all chunks lacking embeddings (resumable; commits per batch)."""
+    from openai import OpenAI
+
+    from raglab import embed
+
+    receipt = Receipt("raglab embed")
+    try:
+        with db.connect() as conn:
+            stats = embed.embed_pending(conn, OpenAI())
+            remaining = conn.execute(
+                "SELECT count(*) FROM chunks WHERE embedding IS NULL"
+            ).fetchone()[0]
+        receipt.add("embedded", stats.embedded)
+        receipt.add("batches", stats.batches)
+        receipt.add("tokens", stats.tokens)
+        receipt.add("est. cost", f"${stats.cost:.4f}")
+        receipt.add("still NULL", remaining)
+        if remaining:
+            receipt.fail(f"{remaining} chunks still lack embeddings")
+    except Exception as exc:  # API errors surface loudly, not as tracebacks
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+@main.command("index")
+def index_cmd():
+    """Drop and rebuild the HNSW index (bulk-load-then-index rule)."""
+    receipt = Receipt("raglab index")
+    try:
+        with db.connect() as conn:
+            conn.execute("DROP INDEX IF EXISTS chunks_embedding_idx")
+            conn.execute(
+                "CREATE INDEX chunks_embedding_idx ON chunks "
+                "USING hnsw (embedding vector_cosine_ops)"
+            )
+            conn.commit()
+        receipt.add("index", "chunks_embedding_idx (hnsw, cosine, m=16, ef_construction=64)")
+    except psycopg.Error as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+@main.command("benchmark")
+def benchmark_cmd():
+    """Benchmark HNSW recall/latency against exact scan across ef_search."""
+    from raglab import benchmark
+
+    receipt = Receipt("raglab benchmark")
+    try:
+        with db.connect() as conn:
+            result = benchmark.run(conn)
+        click.echo("\n" + benchmark.markdown_table(result) + "\n")
+        passing = [r for r in result.rows if r.recall >= 0.95]
+        if passing:
+            best = min(passing, key=lambda r: r.median_ms)
+            receipt.add("operating point", f"ef_search={best.ef_search} "
+                        f"(recall {best.recall:.3f}, {best.median_ms:.1f} ms)")
+        else:
+            receipt.fail("no ef_search value reached recall 0.95")
+        receipt.add("exact median", f"{result.exact_median_ms:.1f} ms")
+    except psycopg.Error as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
 @main.command("status")
 def status():
     """One-command health snapshot."""
@@ -140,6 +207,11 @@ def status():
             ).fetchone()
             if null_embeddings is not None:
                 receipt.add("chunks w/o embedding", null_embeddings[0])
+
+            hnsw = conn.execute(
+                "SELECT indexdef FROM pg_indexes WHERE indexname = 'chunks_embedding_idx'"
+            ).fetchone()
+            receipt.add("hnsw index", "present" if hnsw else "absent (exact scan)")
 
             backlog = conn.execute(
                 "SELECT source_path, gate FROM quarantine ORDER BY quarantined_at"

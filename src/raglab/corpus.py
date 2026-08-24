@@ -6,12 +6,16 @@ from pathlib import Path
 from raglab import config
 
 
+YEARS = tuple(range(2021, 2027))
+
+
 @dataclass(frozen=True)
 class BrochureSpec:
     ri: str
     options: tuple[str, ...]
     carrier: str = "GEHA"
     program: str = "FEHB"
+    years: tuple[int, ...] = YEARS
 
     @property
     def plan_code(self) -> str:
@@ -24,7 +28,15 @@ FEHB_PLANS = (
     BrochureSpec("71-018", options=("Elevate", "Elevate Plus")),
 )
 
-YEARS = tuple(range(2021, 2027))
+# PSHB program began 2025. RIs discovered via BrochureJson probe 2026-08:
+# 71-022 (Indemnity) exists for 2025 only — its absence in 2026 is data.
+PSHB_PLANS = (
+    BrochureSpec("71-021", options=("High", "Standard"), program="PSHB", years=(2025, 2026)),
+    BrochureSpec("71-022", options=("Elevate", "Elevate Plus"), program="PSHB", years=(2025,)),
+    BrochureSpec("71-026", options=("HDHP",), program="PSHB", years=(2025, 2026)),
+)
+
+ALL_PLANS = FEHB_PLANS + PSHB_PLANS
 
 # Fast-path subset for dev/CI iteration only — the full corpus is the product.
 # Composition covers both variation axes: cross-plan (all plans, 2026) and
@@ -51,7 +63,7 @@ class CorpusCell:
 def cells(dev_only: bool = True) -> list[CorpusCell]:
     return [
         CorpusCell(spec, year)
-        for spec in FEHB_PLANS
-        for year in YEARS
+        for spec in ALL_PLANS
+        for year in spec.years
         if not dev_only or (spec.ri, year) in DEV_SUBSET
     ]

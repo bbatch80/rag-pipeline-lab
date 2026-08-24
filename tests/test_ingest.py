@@ -12,6 +12,7 @@ META = DocumentMeta(
     carrier="GEHA",
     plan_code="71-006",
     plan_options=("High", "Standard"),
+    program="FEHB",
     year=2026,
     doc_type="brochure",
     acl_tag="public",

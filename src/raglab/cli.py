@@ -27,7 +27,7 @@ def init_db():
         with db.connect() as conn:
             conn.execute(sql)
         receipt.add("schema", str(config.SCHEMA_PATH))
-        receipt.add("tables", "documents, chunks (recreated)")
+        receipt.add("tables", "documents, chunks, quarantine (recreated)")
     except (OSError, psycopg.Error) as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()
@@ -50,7 +50,7 @@ def status():
             else:
                 receipt.fail("pgvector extension not installed")
 
-            for table in ("documents", "chunks"):
+            for table in ("documents", "chunks", "quarantine"):
                 exists = conn.execute(
                     "SELECT to_regclass(%s)", (table,)
                 ).fetchone()[0]
@@ -65,6 +65,12 @@ def status():
             ).fetchone()
             if null_embeddings is not None:
                 receipt.add("chunks w/o embedding", null_embeddings[0])
+
+            backlog = conn.execute(
+                "SELECT source_path, gate FROM quarantine ORDER BY quarantined_at"
+            ).fetchall()
+            for source_path, gate in backlog:
+                receipt.fail(f"quarantined: {source_path} (gate: {gate})")
     except psycopg.Error as exc:
         receipt.fail(f"database unreachable: {exc}")
     receipt.finish()

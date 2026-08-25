@@ -14,8 +14,13 @@ from raglab import config
 
 INTERNAL_DIR = config.REPO_ROOT / "data" / "internal"
 
-# Documents the churn simulator must never mutate or delete.
-GOLDEN_ANCHORED = {"formulary/formulary_core.md"}
+# Documents the churn simulator must never mutate or delete — everything the
+# golden set cites as a source (eval labels are assertions about the corpus).
+GOLDEN_ANCHORED = {
+    "formulary/formulary_core.md",
+    "kb/kb_mail_order.md",
+    "kb/kb_specialist_visits.md",
+}
 
 
 @dataclass(frozen=True)

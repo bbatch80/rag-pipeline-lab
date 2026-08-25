@@ -88,3 +88,21 @@ reproduces baseline metrics exactly.
 \* overall source_coverage. Multi-year questions are searched per routed
 year and re-ranked with per-year slot guarantees — one blended ranking lets
 near-identical cross-year chunks crowd each other out of the pool entirely.
+
+## Orchestration
+
+Three Airflow DAGs (`dags/`): `raglab_ingest_sync` (daily freshness SLA —
+download, hash-diff ingest, embed, index; content fingerprints cover source
+bytes AND processing config, so config changes rebuild exactly the affected
+documents), `raglab_eval_drift` (daily: gated retrieval eval + embedding
+drift check + dashboard refresh), and `raglab_backfill` (manual: full
+re-derive drill for embedding-model swaps). Tasks invoke the CLI commands
+1:1 — every task log contains the command's run receipt, and task success is
+the receipt's exit code. Verified scenarios: single-document surgical sync
+(290 skipped / 1 reingested / 1 embedded), deletion propagation (source gone
+→ rows cascade out), full backfill with post-rebuild re-baseline.
+
+Known limitation: Airflow 3.x's task supervisor deadlocks forked task
+processes on macOS (apache/airflow#64874, #65691); on macOS dev machines DAG
+executions run via Airflow's in-process `dags test` runner. Linux and
+containerized deployments use the native executor unaffected.

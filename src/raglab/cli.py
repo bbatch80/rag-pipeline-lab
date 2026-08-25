@@ -359,6 +359,49 @@ def ablation_cmd():
     receipt.finish()
 
 
+@main.command("eval-retrieval")
+@click.option("--label", default="baseline", help="config_label recorded with the run.")
+@click.option("--gate", is_flag=True, help="Exit non-zero if thresholds are breached.")
+@click.option("--sabotage", is_flag=True, help="Discrimination check: junk query vectors.")
+def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool):
+    """Tier-1 deterministic retrieval eval over the golden set (free)."""
+    from raglab import eval_retrieval
+
+    receipt = Receipt("raglab eval-retrieval" + (" --sabotage" if sabotage else ""))
+    try:
+        with db.connect() as conn:
+            result = eval_retrieval.run(conn, config_label=label, sabotage=sabotage)
+        receipt.add("run id", result.run_id)
+        for metric, value in result.overall.items():
+            if value is not None:
+                receipt.add(metric, f"{value:.3f}")
+        for category, metrics in sorted(result.by_category.items()):
+            receipt.add(f"  {category}", "  ".join(f"{m}={v}" for m, v in metrics.items()))
+        for failure in result.failures:
+            if gate and not sabotage:
+                receipt.fail(f"THRESHOLD: {failure}")
+            else:
+                receipt.add("below threshold", failure)
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+@main.command("dashboard")
+def dashboard_cmd():
+    """Render the metrics dashboard to data/eval/dashboard.html."""
+    from raglab import dashboard
+
+    receipt = Receipt("raglab dashboard")
+    try:
+        with db.connect() as conn:
+            path = dashboard.render(conn)
+        receipt.add("dashboard", str(path))
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
 @main.command("status")
 def status():
     """One-command health snapshot."""

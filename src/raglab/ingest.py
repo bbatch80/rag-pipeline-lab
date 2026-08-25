@@ -95,8 +95,23 @@ def ingest_document(
             )
         return "quarantined"
 
-    if os.environ.get("RAGLAB_CONTEXTUAL") == "1":
+    contextual_mode = os.environ.get("RAGLAB_CONTEXTUAL")
+    if contextual_mode == "1":
         chunks = _contextualize(chunks, meta)
+    elif contextual_mode == "template":
+        # Template arm: the situating sentence built purely from metadata we
+        # already govern — no model, no API, no latency, no nondeterminism.
+        chunks = [
+            Chunk(
+                text=(
+                    f"This chunk is from {meta.title}"
+                    + (f", section '{c.section}'" if c.section else "")
+                    + f".\n\n{c.text}"
+                ),
+                section=c.section, pages=c.pages, categories=c.categories,
+            )
+            for c in chunks
+        ]
 
     if row is not None:
         conn.execute("DELETE FROM documents WHERE id = %s", (row[0],))

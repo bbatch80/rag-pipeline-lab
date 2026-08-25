@@ -88,7 +88,10 @@ def run(
 
         vector = junk_vector if sabotage else retrieval.embed_query(item["question"])
         candidates = retrieval.search(conn, item["question"], vector, decision)
-        reranked = rerank.rerank(item["question"], candidates, top_n=10)
+        reranked = rerank.rerank(
+            item["question"], candidates, top_n=10,
+            stratify_years=decision.years,
+        )
         abstained, best = rerank.abstention_verdict(reranked)
 
         top5 = reranked[:5]

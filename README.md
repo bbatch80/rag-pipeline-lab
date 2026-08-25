@@ -65,3 +65,26 @@ Abstention threshold (0.5) separates answerable questions (best rerank
 score ≥ 0.72 across the golden set) from absent-topic questions (0.30);
 redirect-style questions score high on genuinely-relevant-but-non-answering
 chunks and are handled at the generation layer instead.
+
+## Evaluation experiments
+
+Deterministic retrieval suite (`raglab eval-retrieval`) over the golden set,
+writing to a metrics store; discrimination-checked (a sabotaged retriever
+trips the gate thresholds). Rebuild equivalence verified: wipe + re-ingest
+reproduces baseline metrics exactly.
+
+| experiment | arm | hit@5 | yoy coverage | conclusion |
+|---|---|---:|---:|---|
+| chunk size | small (1200/900/150) | 0.793 | 0.736 | fragments answers; trips gate |
+| chunk size | **baseline (2000/1500/250)** | 0.931 | 0.417 | **kept** |
+| chunk size | large (3000/2400/400) | 0.862 | 0.799* | overall regression |
+| parser bake-off | Unstructured-fast | 0.931 | — | **production default** |
+| parser bake-off | Docling (table docs) | 0.862 | — | hypothesis rejected: lost table hit@5 1.0→0.875 |
+| year routing | blended search | 0.931 | 0.417 | one year crowds out the other |
+| year routing | **per-year search + stratified rerank + router vocab** | **0.966** | **0.521** | metadata-native fix, $0 |
+| contextual chunks | model-written chunk context | 0.966 | 0.750 | ties hit@5; large yoy-coverage gain; costs ~$0.70 + hours per rebuild; traded away a factual hit |
+| contextual chunks | metadata-template context | TBD | TBD | same situating sentence from governed metadata, $0 |
+
+\* overall source_coverage. Multi-year questions are searched per routed
+year and re-ranked with per-year slot guarantees — one blended ranking lets
+near-identical cross-year chunks crowd each other out of the pool entirely.

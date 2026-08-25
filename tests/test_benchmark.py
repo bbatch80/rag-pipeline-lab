@@ -19,28 +19,25 @@ def _manifold_vectors(rng, n: int = 200) -> list[str]:
 
 
 def test_hnsw_agrees_with_exact_at_operating_point(db):
+    """Runs on its own temp table, NOT chunks: CREATE INDEX deliberately
+    indexes tuples deleted by uncommitted transactions (they might roll
+    back), so an index built over the fixture-emptied chunks table contains
+    ~11k invisible corpus vectors — the 200 test rows become a starving
+    minority and the scan flakes to short/zero results. A temp table's index
+    holds exactly the rows the test inserted."""
     rng = random.Random(42)
-    doc_id = db.execute(
-        "INSERT INTO documents (source_path, title, content_hash) "
-        "VALUES ('t/b.pdf', 'B', 'h') RETURNING id"
-    ).fetchone()[0]
     vectors = _manifold_vectors(rng)
+    db.execute(
+        "CREATE TEMP TABLE bench_vectors (id serial, embedding vector(1536))"
+    )
     with db.cursor() as cur:
         cur.executemany(
-            "INSERT INTO chunks (document_id, chunk_index, content, embedding) "
-            "VALUES (%s, %s, 'x', %s::vector)",
-            [(doc_id, i, v) for i, v in enumerate(vectors)],
+            "INSERT INTO bench_vectors (embedding) VALUES (%s::vector)",
+            [(v,) for v in vectors],
         )
-    # Bulk-load-then-index: the fixture emptied the table, so a pre-existing
-    # index graph would be full of invisible entries and starve the scan.
-    # DDL is transactional — the rollback restores any real index.
-    db.execute("DROP INDEX IF EXISTS chunks_embedding_idx")
-    # Parallel index-build workers cannot see this transaction's uncommitted
-    # rows and intermittently produce a malformed graph (observed: zero-row
-    # scans). Single-process build is required for in-transaction fixtures.
     db.execute("SET LOCAL max_parallel_maintenance_workers = 0")
     db.execute(
-        "CREATE INDEX chunks_embedding_idx ON chunks "
+        "CREATE INDEX bench_hnsw ON bench_vectors "
         "USING hnsw (embedding vector_cosine_ops)"
     )
 
@@ -52,8 +49,8 @@ def test_hnsw_agrees_with_exact_at_operating_point(db):
         db.execute("SET LOCAL enable_indexscan = off")
         db.execute("SET LOCAL enable_seqscan = on")
         exact = db.execute(
-            "SELECT embedding <=> %s::vector AS d FROM chunks "
-            "WHERE embedding IS NOT NULL ORDER BY d LIMIT %s",
+            "SELECT embedding <=> %s::vector AS d FROM bench_vectors "
+            "ORDER BY d LIMIT %s",
             (query, k),
         ).fetchall()
         kth = exact[-1][0]
@@ -68,8 +65,8 @@ def test_hnsw_agrees_with_exact_at_operating_point(db):
         # synthetic data flips between runs).
         db.execute("SELECT set_config('hnsw.ef_search', '200', true)")
         approx = db.execute(
-            "SELECT embedding <=> %s::vector AS d FROM chunks "
-            "WHERE embedding IS NOT NULL ORDER BY d LIMIT %s",
+            "SELECT embedding <=> %s::vector AS d FROM bench_vectors "
+            "ORDER BY d LIMIT %s",
             (query, k),
         ).fetchall()
         # Distance-inflation check, not membership: HNSW graph builds are

@@ -164,6 +164,97 @@ def verify(sf_conn) -> dict:
     return report
 
 
+# The semantic contract: member data is reachable ONLY through these named,
+# parameterized queries — grain and meaning authored once, here. No freeform
+# SQL crosses the tool boundary (an agent-written query is an injection
+# surface and a wrong-number machine). Warehouse policies still apply on
+# top: what each role sees inside these results is masked/trimmed by
+# Snowflake, not by this code.
+NAMED_QUERIES = {
+    "member_claims_summary": {
+        "doc": ("One row per member matching the name: claim-line count, "
+                "total claim cost, payer coverage, and service-date span."),
+        "params": {"last_name": str, "first_name": type(None)},
+        "sql": """
+            SELECT PATIENT_ID, FIRST_NAME, LAST_NAME,
+                   COUNT(*) AS CLAIM_LINES,
+                   SUM(TOTAL_CLAIM_COST) AS TOTAL_COST,
+                   SUM(PAYER_COVERAGE) AS PAYER_COVERAGE,
+                   MIN(SERVICE_DATE) AS FIRST_SERVICE,
+                   MAX(SERVICE_DATE) AS LAST_SERVICE
+            FROM CLAIM_DETAIL
+            WHERE UPPER(LAST_NAME) = UPPER(%(last_name)s)
+              AND (%(first_name)s IS NULL
+                   OR UPPER(FIRST_NAME) = UPPER(%(first_name)s))
+            GROUP BY PATIENT_ID, FIRST_NAME, LAST_NAME
+            ORDER BY CLAIM_LINES DESC
+        """,
+    },
+    "member_recent_claims": {
+        "doc": ("One row per claim line for the member, newest first: "
+                "service date, encounter class, description, costs."),
+        "params": {"last_name": str, "limit": int},
+        "sql": """
+            SELECT FIRST_NAME, LAST_NAME, SERVICE_DATE, ENCOUNTER_CLASS,
+                   DESCRIPTION, REASON, TOTAL_CLAIM_COST, PAYER_COVERAGE
+            FROM CLAIM_DETAIL
+            WHERE UPPER(LAST_NAME) = UPPER(%(last_name)s)
+            ORDER BY SERVICE_DATE DESC
+            LIMIT %(limit)s
+        """,
+    },
+    "cost_by_condition": {
+        "doc": ("Aggregate across members: claim-line count, average and "
+                "total cost, grouped by encounter description matching the "
+                "pattern. De-identified by role policy where applicable."),
+        "params": {"description_like": str},
+        "sql": """
+            SELECT DESCRIPTION,
+                   COUNT(*) AS CLAIM_LINES,
+                   COUNT(DISTINCT PATIENT_ID) AS MEMBERS,
+                   AVG(TOTAL_CLAIM_COST) AS AVG_COST,
+                   SUM(TOTAL_CLAIM_COST) AS TOTAL_COST
+            FROM CLAIM_DETAIL
+            WHERE DESCRIPTION ILIKE %(description_like)s
+            GROUP BY DESCRIPTION
+            ORDER BY CLAIM_LINES DESC
+        """,
+    },
+}
+
+
+def run_named_query(sf_conn, query_name: str, params: dict) -> dict:
+    """Execute a catalog query with bound parameters; returns column names,
+    rows, and the query's documented meaning. Unknown names are refused —
+    the catalog IS the surface area."""
+    if query_name not in NAMED_QUERIES:
+        return {
+            "status": "unknown_query",
+            "known_queries": {
+                name: spec["doc"] for name, spec in NAMED_QUERIES.items()
+            },
+        }
+    spec = NAMED_QUERIES[query_name]
+    bound = {"first_name": None, "limit": 20}
+    bound.update({k: v for k, v in params.items() if v is not None})
+    cur = sf_conn.cursor()
+    cur.execute(spec["sql"], bound)
+    columns = [d[0] for d in cur.description]
+    rows = [
+        [v.isoformat() if hasattr(v, "isoformat") else
+         float(v) if hasattr(v, "as_tuple") else v for v in row]
+        for row in cur.fetchall()
+    ]
+    return {
+        "status": "ok",
+        "query_name": query_name,
+        "meaning": spec["doc"],
+        "columns": columns,
+        "rows": rows,
+        "row_count": len(rows),
+    }
+
+
 def access_history_peek(sf_cursor, limit: int = 5) -> list[tuple]:
     """Platform audit, consumed not built (the deliberate contrast with
     Lane 1's hand-built disclosure log). ACCOUNT_USAGE has up to ~3h

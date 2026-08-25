@@ -33,6 +33,7 @@ class Candidate:
     text_rank: int | None
     rrf_score: float
     rerank_score: float | None = None
+    content_hash: str = ""
 
 
 # A lexeme is "informative" if it appears in fewer than this fraction of
@@ -159,7 +160,8 @@ def search(
                c.metadata->>'section', d.title, d.source_path,
                c.plan_code, c.year, c.acl_tag,
                c.metadata->'pages',
-               f.vector_rank, f.text_rank, f.score
+               f.vector_rank, f.text_rank, f.score,
+               d.content_hash
         FROM fused f
         JOIN chunks c ON c.id = f.id
         JOIN documents d ON d.id = c.document_id
@@ -177,7 +179,7 @@ def search(
             chunk_id=r[0], content=r[1], section=r[2] or "", doc_title=r[3],
             source_path=r[4], plan_code=r[5], year=r[6], acl_tag=r[7],
             pages=r[8] or [], vector_rank=r[9], text_rank=r[10],
-            rrf_score=float(r[11]),
+            rrf_score=float(r[11]), content_hash=r[12],
         )
         for r in rows
     ]

@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "raglab context payload",
+  "description": "Hand-off contract between the retrieval layer and any consuming application. spec_version follows semver; consumers pin against it.",
+  "type": "object",
+  "required": ["spec_version", "query", "status", "retrieved_at", "chunks"],
+  "properties": {
+    "spec_version": {"const": "1.0.0"},
+    "query": {"type": "string"},
+    "status": {"enum": ["ok", "insufficient_evidence", "out_of_scope"]},
+    "confidence": {
+      "type": "number", "minimum": 0, "maximum": 1,
+      "description": "Best reranker score. Informs the consumer; does not authorize. Absent on out_of_scope."
+    },
+    "boundary_response": {
+      "type": "string",
+      "description": "Definitive corpus-boundary statement. Present only on out_of_scope; the consumer relays it verbatim."
+    },
+    "retrieved_at": {"type": "string", "format": "date-time"},
+    "router": {
+      "type": "object",
+      "required": ["years", "plan_codes"],
+      "properties": {
+        "years": {"type": "array", "items": {"type": "integer"}},
+        "plan_codes": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "chunks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text", "source", "acl_basis", "scores"],
+        "properties": {
+          "text": {"type": "string"},
+          "source": {
+            "type": "object",
+            "required": ["title", "path", "year", "pages", "section", "content_hash"],
+            "properties": {
+              "title": {"type": "string"},
+              "path": {"type": "string"},
+              "plan_code": {"type": ["string", "null"]},
+              "year": {"type": "integer"},
+              "pages": {"type": "array", "items": {"type": "integer"}},
+              "section": {"type": "string"},
+              "content_hash": {
+                "type": "string",
+                "description": "Source document fingerprint (bytes + processing recipe): lineage to the exact version retrieved."
+              }
+            }
+          },
+          "acl_basis": {
+            "enum": ["public", "employee", "care_team"],
+            "description": "The ACL tier that entitled the caller to this chunk."
+          },
+          "scores": {
+            "type": "object",
+            "required": ["rrf", "rerank"],
+            "properties": {
+              "rrf": {"type": "number"},
+              "rerank": {"type": "number"}
+            }
+          }
+        }
+      }
+    },
+    "payload_id": {"type": "string", "description": "UUID; joins to the disclosure log."},
+    "persona": {"type": "string"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "out_of_scope"}}},
+      "then": {"required": ["boundary_response"]}
+    },
+    {
+      "if": {"properties": {"status": {"enum": ["ok", "insufficient_evidence"]}}},
+      "then": {"required": ["confidence", "router"]}
+    }
+  ]
+}

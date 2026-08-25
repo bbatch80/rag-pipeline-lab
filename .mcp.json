@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "raglab": {
+      "command": "uv",
+      "args": ["run", "raglab-mcp"],
+      "env": {
+        "RAGLAB_PERSONA": "care_team"
+      }
+    }
+  }
+}

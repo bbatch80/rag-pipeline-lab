@@ -104,6 +104,30 @@ class _FakeModel:
         return [0.9 if "answer" in chunk else 0.1 for _, chunk in pairs]
 
 
+def test_rerank_year_stratification(monkeypatch):
+    class _YearBiasModel:
+        def predict(self, pairs):
+            # 2026 chunks always outscore 2025 ones — the crowding-out setup.
+            return [0.9 if "y2026" in chunk else 0.6 for _, chunk in pairs]
+
+    monkeypatch.setattr(rerank, "_model", _YearBiasModel())
+    cands = [
+        _candidate(chunk_id=i, year=2026, content=f"y2026 chunk {i}")
+        for i in range(6)
+    ] + [
+        _candidate(chunk_id=10 + i, year=2025, content=f"y2025 chunk {i}")
+        for i in range(6)
+    ]
+    plain = rerank.rerank("q", list(cands), top_n=6)
+    assert all(c.year == 2026 for c in plain), "unstratified: 2026 crowds out 2025"
+
+    strat = rerank.rerank("q", list(cands), top_n=6, stratify_years=(2025, 2026))
+    years = [c.year for c in strat]
+    assert years.count(2025) == 3 and years.count(2026) == 3, (
+        "stratified: both routed years hold their share of slots"
+    )
+
+
 def test_rerank_orders_and_verdicts(monkeypatch):
     monkeypatch.setattr(rerank, "_model", _FakeModel())
     cands = [

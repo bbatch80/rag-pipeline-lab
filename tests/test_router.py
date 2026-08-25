@@ -18,6 +18,9 @@ IN_SCOPE_CASES = [
     ("What is the Elevate Plus deductible?", (2026,), ("71-018",)),
     ("What is the postal HDHP deductible?", (2026,), ("71-026",)),
     ("How does GEHA coordinate benefits with Medicare?", (2026,), ()),
+    # 71-006's product name, not a generic phrase
+    ("How did the GEHA Benefit Plan deductible change from 2025 to 2026?",
+     (2025, 2026), ("71-006",)),
 ]
 
 

@@ -39,6 +39,9 @@ _PLAN_PATTERNS = [
     (re.compile(r"\belevate\b", re.IGNORECASE), "elevate"),
     (re.compile(r"\bhigh option\b", re.IGNORECASE), "high"),
     (re.compile(r"\bstandard option\b", re.IGNORECASE), "standard"),
+    # "GEHA Benefit Plan" is 71-006's product name (the brochure cover
+    # title), not a generic phrase — it maps to the High/Standard brochure.
+    (re.compile(r"\bbenefit plan\b", re.IGNORECASE), "high"),
 ]
 _PSHB = re.compile(r"\bpshb\b|\bpostal\b", re.IGNORECASE)
 

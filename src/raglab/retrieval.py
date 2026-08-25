@@ -96,6 +96,26 @@ def search(
     route: Route,
     fused_limit: int = FUSED_LIMIT,
 ) -> list[Candidate]:
+    """Multi-year routes search each year separately and merge — one blended
+    ranking lets the dominant year crowd the other's chunks out of the pool
+    entirely, and no downstream stage can recover a chunk that never
+    surfaced."""
+    if len(route.years) >= 2:
+        from dataclasses import replace
+
+        per_year = max(15, fused_limit // len(route.years))
+        merged, seen = [], set()
+        for year in route.years:
+            sub = search(
+                conn, query_text, query_vector,
+                replace(route, years=(year,)), fused_limit=per_year,
+            )
+            for candidate in sub:
+                if candidate.chunk_id not in seen:
+                    merged.append(candidate)
+                    seen.add(candidate.chunk_id)
+        return merged
+
     where, filter_params = _filters(route)
     lexical = _lexical_query(conn, query_text) or "'__nomatch__'"
     conn.execute("SELECT set_config('hnsw.ef_search', %s, true)", (str(EF_SEARCH),))

@@ -340,7 +340,9 @@ def audit_cmd(document: str | None, persona: str | None, limit: int):
 @main.command("explain")
 @click.argument("query")
 @click.option("--persona", default=None, type=click.Choice(["public", "employee", "care_team"]))
-def explain_cmd(query: str, persona: str | None):
+@click.option("--generate", is_flag=True,
+              help="Also send the payload to both generators and print their answers.")
+def explain_cmd(query: str, persona: str | None, generate: bool):
     """Full retrieval trace: router -> per-method -> RRF -> rerank -> verdict."""
     from raglab import rerank, retrieval, router
 
@@ -357,12 +359,22 @@ def explain_cmd(query: str, persona: str | None):
     click.echo(f"    year filter: {list(decision.years)}")
     click.echo(f"    plan filter: {list(decision.plan_codes) or 'none'} (NULL plan_code passes)")
 
+    search_query = query
     with db.connect() as conn:
+        # Mirror the pipeline exactly: vault-entitled sessions (admin,
+        # care_team) get query translation via the owner connection.
+        if persona in (None, "care_team"):
+            from raglab import deid
+
+            search_query = deid.translate_query(conn, query)
+            if search_query != query:
+                click.echo("\n[1b] VAULT TRANSLATION (re-identification entitlement)")
+                click.echo(f"    search query: {search_query}")
         if persona:
             conn.execute(f"SET LOCAL ROLE persona_{persona}")
             click.echo(f"    RLS: querying as persona_{persona} (engine trims before ranking)")
         candidates = retrieval.search(
-            conn, query, retrieval.embed_query(query), decision
+            conn, search_query, retrieval.embed_query(search_query), decision
         )
         if persona:
             conn.execute("RESET ROLE")
@@ -386,7 +398,7 @@ def explain_cmd(query: str, persona: str | None):
         t = f"1/(60+{c.text_rank})" if c.text_rank else "0"
         click.echo(_line(c, f"{c.rrf_score:.4f} = {v} + {t}  "))
 
-    reranked = rerank.rerank(query, candidates, stratify_years=decision.years)
+    reranked = rerank.rerank(search_query, candidates, stratify_years=decision.years)
     click.echo("\n[5] RERANK (bge-reranker-base) top 5"
                + (" — year-stratified" if len(decision.years) > 1 else ""))
     for c in reranked[:5]:
@@ -399,6 +411,22 @@ def explain_cmd(query: str, persona: str | None):
     click.echo(
         f"    RLS: {'persona_' + persona + ' — invisible tiers never entered retrieval' if persona else 'admin view (all tiers)'}\n"
     )
+
+    if generate:
+        from raglab import payload as payload_mod
+        from raglab.generators import GENERATORS
+
+        built = payload_mod.build(query, decision, reranked)
+        built["persona"] = persona or "admin"
+        click.echo("[7] GENERATION (identical payload to both models)")
+        click.echo(f"    payload: status={built['status']} "
+                   f"confidence={built.get('confidence')} "
+                   f"chunks={len(built['chunks'])}")
+        for generator in GENERATORS:
+            click.echo(f"\n    ──── {generator.name} ────")
+            for line in generator.generate(built).splitlines():
+                click.echo(f"    {line}")
+        click.echo()
 
 
 @main.command("ablation")
@@ -671,3 +699,19 @@ def snowflake_verify_cmd():
     except Exception as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()
+
+
+@main.command("query")
+@click.argument("prompt")
+@click.option("--persona", default=None,
+              help="public | employee | care_team (omit for admin full view)")
+def query_cmd(prompt: str, persona: str | None):
+    """Run a prompt through the full funnel and print the context payload —
+    exactly what a consuming model receives."""
+    import json
+
+    from raglab.pipeline import run_query
+
+    with db.connect() as conn:
+        built = run_query(conn, prompt, persona=persona, source="interactive")
+    click.echo(json.dumps(built, indent=2, default=str))

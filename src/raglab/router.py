@@ -37,8 +37,8 @@ _PLAN_PATTERNS = [
     (re.compile(r"\bhdhp\b|high.deductible", re.IGNORECASE), "hdhp"),
     (re.compile(r"\belevate plus\b", re.IGNORECASE), "elevate_plus"),
     (re.compile(r"\belevate\b", re.IGNORECASE), "elevate"),
-    (re.compile(r"\bhigh option\b", re.IGNORECASE), "high"),
-    (re.compile(r"\bstandard option\b", re.IGNORECASE), "standard"),
+    (re.compile(r"\bhigh (option|plan)\b", re.IGNORECASE), "high"),
+    (re.compile(r"\bstandard (option|plan)\b", re.IGNORECASE), "standard"),
     # "GEHA Benefit Plan" is 71-006's product name (the brochure cover
     # title), not a generic phrase — it maps to the High/Standard brochure.
     (re.compile(r"\bbenefit plan\b", re.IGNORECASE), "high"),

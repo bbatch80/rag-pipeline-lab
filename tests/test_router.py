@@ -21,6 +21,10 @@ IN_SCOPE_CASES = [
     # 71-006's product name, not a generic phrase
     ("How did the GEHA Benefit Plan deductible change from 2025 to 2026?",
      (2025, 2026), ("71-006",)),
+    # "plan" phrasing routes like "option" phrasing
+    ("For the 2025 FEHB standard plan, who is covered under Self and Family?",
+     (2025,), ("71-006",)),
+    ("What does the high plan pay for urgent care?", (2026,), ("71-006",)),
 ]
 
 

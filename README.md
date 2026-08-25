@@ -83,7 +83,7 @@ reproduces baseline metrics exactly.
 | year routing | blended search | 0.931 | 0.417 | one year crowds out the other |
 | year routing | **per-year search + stratified rerank + router vocab** | **0.966** | **0.521** | metadata-native fix, $0 |
 | contextual chunks | model-written chunk context | 0.966 | 0.750 | ties hit@5; large yoy-coverage gain; costs ~$0.70 + hours per rebuild; traded away a factual hit |
-| contextual chunks | metadata-template context | TBD | TBD | same situating sentence from governed metadata, $0 |
+| contextual chunks | **metadata-template context** | **0.966** | **0.688** | **adopted as ingest default**: ~80% of the LLM arm's coverage gain, best precision, no noise cost, $0 |
 
 \* overall source_coverage. Multi-year questions are searched per routed
 year and re-ranked with per-year slot guarantees — one blended ranking lets

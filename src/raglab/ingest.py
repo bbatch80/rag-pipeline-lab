@@ -95,12 +95,13 @@ def ingest_document(
             )
         return "quarantined"
 
-    contextual_mode = os.environ.get("RAGLAB_CONTEXTUAL")
+    # Production default: template context (Phase 4 A/B winner — captures
+    # most of LLM-contextual's coverage gain at zero cost from metadata we
+    # already govern). RAGLAB_CONTEXTUAL=plain disables; =1 uses the LLM arm.
+    contextual_mode = os.environ.get("RAGLAB_CONTEXTUAL", "template")
     if contextual_mode == "1":
         chunks = _contextualize(chunks, meta)
     elif contextual_mode == "template":
-        # Template arm: the situating sentence built purely from metadata we
-        # already govern — no model, no API, no latency, no nondeterminism.
         chunks = [
             Chunk(
                 text=(

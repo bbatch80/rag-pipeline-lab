@@ -15,13 +15,16 @@ Knobs (starting points; chunk size is a Phase 4 experiment):
 - merge_under: chunks smaller than this are merged into a neighbor
 """
 
+import os
 from dataclasses import dataclass, field
 
 from raglab.parsing.base import Element
 
-HARD_MAX = 2000
-SOFT_MAX = 1500
-MERGE_UNDER = 250
+# Env-overridable for A/B experiments (chunk size is a measured knob, not a
+# tuned-by-feel one). Defaults are the Phase 1 starting points.
+HARD_MAX = int(os.environ.get("RAGLAB_CHUNK_HARD", 2000))
+SOFT_MAX = int(os.environ.get("RAGLAB_CHUNK_SOFT", 1500))
+MERGE_UNDER = int(os.environ.get("RAGLAB_CHUNK_MERGE", 250))
 
 
 @dataclass

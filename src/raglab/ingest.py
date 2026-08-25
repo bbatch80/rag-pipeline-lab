@@ -9,15 +9,49 @@ Contract (Phase 5 sync depends on it):
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import psycopg
 
 from raglab import config
-from raglab.chunking import chunk_elements
+from raglab.chunking import Chunk, chunk_elements
 from raglab.gates import run_gates
 from raglab.metadata import DocumentMeta, chunk_jsonb
 from raglab.parsing.base import ParserBackend
+
+
+def _contextualize(chunks: list[Chunk], meta: DocumentMeta) -> list[Chunk]:
+    """Contextual-retrieval A/B arm (RAGLAB_CONTEXTUAL=1): prepend a short
+    model-written situating passage to each chunk before embedding."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from openai import OpenAI
+
+    client = OpenAI()
+
+    def one(chunk: Chunk) -> Chunk:
+        prompt = (
+            f"Document: {meta.title}\nSection: {chunk.section}\n\n"
+            f"Chunk:\n{chunk.text[:1500]}\n\n"
+            "Write 1-2 short sentences situating this chunk within its "
+            "document (which plan, year, and topic it concerns) to improve "
+            "search retrieval. Reply with only the sentences."
+        )
+        response = client.chat.completions.create(
+            model="gpt-5-nano",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        context = (response.choices[0].message.content or "").strip()
+        return Chunk(
+            text=f"{context}\n\n{chunk.text}",
+            section=chunk.section,
+            pages=chunk.pages,
+            categories=chunk.categories,
+        )
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        return list(pool.map(one, chunks))
 
 
 def content_hash(path: Path) -> str:
@@ -60,6 +94,9 @@ def ingest_document(
                 (source_path, failure.gate, failure.detail),
             )
         return "quarantined"
+
+    if os.environ.get("RAGLAB_CONTEXTUAL") == "1":
+        chunks = _contextualize(chunks, meta)
 
     if row is not None:
         conn.execute("DELETE FROM documents WHERE id = %s", (row[0],))

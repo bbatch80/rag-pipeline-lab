@@ -316,8 +316,9 @@ def explain_cmd(query: str):
         t = f"1/(60+{c.text_rank})" if c.text_rank else "0"
         click.echo(_line(c, f"{c.rrf_score:.4f} = {v} + {t}  "))
 
-    reranked = rerank.rerank(query, candidates)
-    click.echo("\n[5] RERANK (bge-reranker-base) top 5")
+    reranked = rerank.rerank(query, candidates, stratify_years=decision.years)
+    click.echo("\n[5] RERANK (bge-reranker-base) top 5"
+               + (" — year-stratified" if len(decision.years) > 1 else ""))
     for c in reranked[:5]:
         click.echo(_line(c, f"{c.rerank_score:.4f}  "))
 
@@ -382,6 +383,49 @@ def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool):
                 receipt.fail(f"THRESHOLD: {failure}")
             else:
                 receipt.add("below threshold", failure)
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+@main.command("bakeoff")
+@click.argument("backend_kind", type=click.Choice(["docling", "fast"]))
+def bakeoff_cmd(backend_kind: str):
+    """Re-ingest the table-heavy 2026 brochures with the chosen parser."""
+    from raglab import experiments
+
+    receipt = Receipt(f"raglab bakeoff {backend_kind}")
+    try:
+        with db.connect() as conn:
+            for line in experiments.bakeoff_reingest(conn, backend_kind):
+                receipt.add("reingested", line)
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+@main.command("eval-generation")
+@click.option("--label", default="demo", help="config_label recorded with the run.")
+def eval_generation_cmd(label: str):
+    """Tier-2 end-to-end eval: dual generators, cross-family judged (~$0.05)."""
+    from raglab import eval_generation
+
+    receipt = Receipt("raglab eval-generation")
+    try:
+        with db.connect() as conn:
+            result = eval_generation.run(conn, config_label=label)
+        receipt.add("run id", result.run_id)
+        for generator, metrics in result.by_generator.items():
+            receipt.add(generator, "  ".join(f"{m}={v}" for m, v in metrics.items()))
+        for row in result.rows:
+            flag = "ABSTAINED" if row["abstained"] else f"c={row['correctness']:.2f} f={row['faithfulness']:.2f}"
+            receipt.add(f"  {row['question_id']} {row['generator'][:16]}", flag)
+        wrong_answers = [
+            r for r in result.rows
+            if r["category"] == "unanswerable" and not r["abstained"]
+        ]
+        for row in wrong_answers:
+            receipt.fail(f"{row['question_id']}: {row['generator']} answered instead of abstaining")
     except Exception as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()

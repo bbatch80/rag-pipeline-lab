@@ -90,6 +90,18 @@ def test_quarantine_blocks_ingest_and_clears_on_success(db, tmp_path):
     assert backlog == 0
 
 
+def test_recipe_change_triggers_reingest(db, tmp_path, monkeypatch):
+    pdf = _write_pdf(tmp_path)
+    monkeypatch.setenv("RAGLAB_CONTEXTUAL", "plain")
+    assert ingest_document(db, pdf, META, HealthyBackend()) == "ingested"
+    assert ingest_document(db, pdf, META, HealthyBackend()) == "skipped"
+
+    # Same bytes, different processing recipe -> stale, must rebuild.
+    monkeypatch.setenv("RAGLAB_CONTEXTUAL", "template")
+    assert ingest_document(db, pdf, META, HealthyBackend()) == "reingested"
+    assert ingest_document(db, pdf, META, HealthyBackend()) == "skipped"
+
+
 def test_failed_update_preserves_prior_good_version(db, tmp_path):
     pdf = _write_pdf(tmp_path)
     assert ingest_document(db, pdf, META, HealthyBackend()) == "ingested"

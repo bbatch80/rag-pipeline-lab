@@ -16,3 +16,6 @@ __pycache__/
 
 # Local data artifacts
 data/
+
+# Airflow runtime home (DAG files are committed in dags/)
+.airflow/

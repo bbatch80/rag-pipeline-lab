@@ -431,6 +431,30 @@ def eval_generation_cmd(label: str):
     receipt.finish()
 
 
+@main.command("drift")
+def drift_cmd():
+    """Embedding-drift check vs previous drift run (stable chunk sample)."""
+    from raglab import drift
+
+    receipt = Receipt("raglab drift")
+    try:
+        with db.connect() as conn:
+            result = drift.run(conn)
+        receipt.add("run id", result.run_id)
+        receipt.add("sample", result.sample_size)
+        receipt.add("norm mean", f"{result.norm_mean:.4f}")
+        receipt.add(
+            "centroid shift",
+            "first run (no baseline)" if result.centroid_shift is None
+            else f"{result.centroid_shift:.5f} (alert > {drift.CENTROID_SHIFT_ALERT})",
+        )
+        if result.alert:
+            receipt.fail(f"embedding drift {result.centroid_shift:.5f} exceeds threshold")
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
 @main.command("dashboard")
 def dashboard_cmd():
     """Render the metrics dashboard to data/eval/dashboard.html."""

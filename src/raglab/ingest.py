@@ -54,8 +54,24 @@ def _contextualize(chunks: list[Chunk], meta: DocumentMeta) -> list[Chunk]:
         return list(pool.map(one, chunks))
 
 
-def content_hash(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def processing_recipe(backend_name: str) -> str:
+    """The recipe half of a document's identity: what would change the
+    stored chunks even when the source bytes don't."""
+    from raglab import chunking
+
+    contextual_mode = os.environ.get("RAGLAB_CONTEXTUAL", "template")
+    return (
+        f"{backend_name}|{chunking.HARD_MAX}/{chunking.SOFT_MAX}/"
+        f"{chunking.MERGE_UNDER}|{contextual_mode}"
+    )
+
+
+def content_hash(path: Path, recipe: str = "") -> str:
+    """Fingerprint = source bytes + processing recipe. A doc is stale if
+    either its file or how we process it changed."""
+    digest = hashlib.sha256(path.read_bytes())
+    digest.update(b"|" + recipe.encode())
+    return digest.hexdigest()
 
 
 def rel_source_path(path: Path) -> str:
@@ -73,7 +89,7 @@ def ingest_document(
 ) -> str:
     """Returns the action taken: skipped | ingested | reingested | quarantined."""
     source_path = rel_source_path(pdf_path)
-    digest = content_hash(pdf_path)
+    digest = content_hash(pdf_path, processing_recipe(backend.name))
 
     row = conn.execute(
         "SELECT id, content_hash FROM documents WHERE source_path = %s",

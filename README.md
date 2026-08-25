@@ -106,3 +106,111 @@ Known limitation: Airflow 3.x's task supervisor deadlocks forked task
 processes on macOS (apache/airflow#64874, #65691); on macOS dev machines DAG
 executions run via Airflow's in-process `dags test` runner. Linux and
 containerized deployments use the native executor unaffected.
+
+## Governance
+
+Two lanes, enforcement in the engine — application code never filters
+content. Identical questions produce correctly different answers per role,
+with an audit trail in both lanes.
+
+### Document lane (Postgres row-level security)
+
+Chunks and documents carry an `acl_tag`; real Postgres roles
+(`persona_public` / `persona_employee` / `persona_care_team`) enforce a
+lateral need-to-know model under `FORCE ROW LEVEL SECURITY`: everyone sees
+public documents, only the employee role sees internal operations content,
+only the care_team role sees clinical notes — the two non-public tiers are
+mutually invisible. Rows outside a role's entitlement are trimmed by the
+engine before ranking, so unauthorized content never enters a candidate
+set, a payload, or a context window. Revoking a role membership changes the
+retrievable set at the next query with zero re-indexing. HNSW scans run
+with `iterative_scan=relaxed_order` so heavily-trimmed roles still fill k
+results (tested at 3% row visibility).
+
+Every retrieval flows through one pipeline entrypoint
+(`raglab.pipeline.run_query`) that assumes the caller's role via
+`SET LOCAL ROLE` and writes a disclosure record: persona, query, payload
+id, chunk ids, content hashes, document titles, ACL basis, score.
+The disclosure log has no foreign keys and denormalizes document identity,
+so audit records survive document deletion and reingest. `raglab audit`
+reports both directions: what a persona saw, and which payloads used a
+given document.
+
+```sh
+uv run raglab query "<question>" --persona care_team   # full context payload JSON
+uv run raglab explain "<question>" --persona employee --generate
+uv run raglab audit --document "<title>"    # lineage: payloads that used it
+uv run raglab audit --persona public        # disclosure: what a role saw
+```
+
+### PHI de-identification (Presidio, before indexing)
+
+Clinical notes are de-identified at ingest — before embedding — so
+protected text never enters the embedding space, the searchable corpus, or
+any model API. Two modes (`RAGLAB_DEID=mask|tokenize`; the mode is part of
+the document processing recipe, so flipping it re-ingests exactly the
+affected documents). Tokenize mode issues consistent pseudonyms
+(`[PERSON-0002]` is the same patient in every note) backed by an owner-only
+vault table; persona roles cannot read the vault. Queries from
+vault-entitled sessions (admin, care_team) are translated
+name → pseudonym before search, restricted to lookup-identifier entity
+types, so de-identified notes remain searchable by the identifiers
+clinicians actually use — for entitled roles only.
+
+Detection is scored against a generation-time PHI injection manifest
+(ground truth by construction), written to the metrics store by
+`raglab deid-eval`:
+
+| entity type | detection recall |
+|---|---:|
+| ssn | 1.000 |
+| member_id | 0.984 |
+| phone | 0.936 |
+| address | 0.926 |
+| date | 0.827 |
+| name | 0.824 |
+| mrn | 0.325 |
+| **overall** | **0.854** |
+
+Corpus leakage rate (injected entities surviving verbatim in indexed
+text): **12.45%**, dominated by MRNs and shorthand dates — stock Presidio
+has no recognizer for bare medical record numbers in clinical shorthand.
+Production hardening is custom recognizers for local identifier formats,
+re-measured against the same manifest.
+
+### Member-data lane (Snowflake row access policies + dynamic masking)
+
+Synthea claims (11,519 patients, 676,859 claim lines) served from
+Snowflake as a governed copy; Postgres remains the system of record.
+`raglab snowflake-setup` rebuilds the lane end-to-end (warehouse, roles,
+tables, policies, load) idempotently in ~25 s. One `SELECT` against
+`CLAIM_DETAIL`, four result shapes — enforced by the warehouse:
+
+| role | rows | identity columns | financial columns |
+|---|---:|---|---|
+| CLAIMS_EXAMINER | 676,859 | visible | visible |
+| PSHB_EXAMINER | 126,799 (PSHB book only) | visible | visible |
+| CARE_MANAGER | 676,859 | visible | masked (NULL) |
+| ACTUARY | 676,859 | SSN NULL, names → SHA-256, DOB → year | visible |
+
+The actuary's hashes are stable, so de-identified member-level aggregation
+still works (`COUNT(DISTINCT ...)` matches the examiner's). Row scope is a
+row access policy consulting an owner-only entitlement table; sessions pin
+a single role (`USE SECONDARY ROLES NONE`), as a production service
+connection would. Audit is Snowflake's own `ACCESS_HISTORY` — consumed,
+not built — which also records the policy's entitlement-table lookups.
+`raglab snowflake-verify` asserts the full matrix; the same assertions run
+as pytest (skipped where no credentials exist — CI holds no secrets).
+
+### Entitlement assertions in CI
+
+The golden set includes persona-negative questions asserting both
+directions per entitlement wall: the unauthorized persona must return
+`insufficient_evidence` and the authorized persona must answer citing the
+expected document, run through the full persona pipeline (RLS, vault
+translation, disclosure). `deny_abstained`, `allow_answered`, and
+retrieval `hit@5` gate CI; the entitlement metrics are thresholded at 1.0 —
+a single leak fails the build. Payload `status`/`confidence` inform the
+consumer; grounding is enforced at the generation layer, whose contract
+(answer only from supplied chunks, refuse otherwise) is exercised by
+abstention-trap questions in the generation eval.

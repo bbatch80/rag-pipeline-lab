@@ -1,5 +1,6 @@
 """raglab command-line interface."""
 
+import os
 import re
 
 import click
@@ -597,4 +598,76 @@ def status():
                 receipt.fail(f"quarantined: {source_path} (gate: {gate})")
     except psycopg.Error as exc:
         receipt.fail(f"database unreachable: {exc}")
+    receipt.finish()
+
+
+@main.command("snowflake-setup")
+def snowflake_setup_cmd():
+    """Build Lane 2 end to end: warehouse, roles, tables, masking + row
+    access policies, then export Synthea from Postgres and load. Idempotent —
+    re-run to rebuild a lapsed trial."""
+    from raglab import snowlane
+
+    receipt = Receipt("raglab snowflake-setup")
+    try:
+        with db.connect() as pg:
+            counts = snowlane.export_csvs(pg)
+        for name, rows in counts.items():
+            receipt.add(f"exported {name}", rows)
+
+        sf = snowlane.connect(bootstrap=True)
+        cur = sf.cursor()
+        receipt.add("statements run", snowlane.run_setup(cur))
+        for name, rows in snowlane.load(cur).items():
+            receipt.add(f"loaded {name}", rows)
+        snowlane.grant_roles_to_user(cur, os.environ["SNOWFLAKE_USER"])
+        receipt.add("roles granted", ", ".join(snowlane.ROLES))
+        sf.close()
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+@main.command("snowflake-verify")
+def snowflake_verify_cmd():
+    """The entitlement test: same SELECT under every role; per-role result
+    shapes must differ exactly as the policies dictate."""
+    from raglab import snowlane
+
+    receipt = Receipt("raglab snowflake-verify")
+    try:
+        sf = snowlane.connect()
+        report = snowlane.verify(sf)
+        for role, r in report.items():
+            name = r["sample_name"] or "-"
+            shown = name if len(name) <= 16 else name[:13] + "..."
+            receipt.add(
+                role,
+                f"rows={r['rows']} lobs={r['lobs']} ssn={'Y' if r['ssn_visible'] else 'MASKED'} "
+                f"cost={'Y' if r['cost_visible'] else 'MASKED'} "
+                f"patients={r['distinct_patients']} name={shown}",
+            )
+
+        full = report["CLAIMS_EXAMINER"]
+        if not (full["ssn_visible"] and full["cost_visible"]):
+            receipt.fail("examiner must see full detail")
+        if report["CARE_MANAGER"]["cost_visible"]:
+            receipt.fail("care manager saw financial columns")
+        if report["ACTUARY"]["ssn_visible"]:
+            receipt.fail("actuary saw identifiers")
+        if report["ACTUARY"]["distinct_patients"] != full["distinct_patients"]:
+            receipt.fail("actuary aggregates must still count distinct members")
+        if not (report["PSHB_EXAMINER"]["rows"] < full["rows"]
+                and report["PSHB_EXAMINER"]["lobs"] == 1):
+            receipt.fail("PSHB examiner must be row-scoped to one book")
+
+        history = snowlane.access_history_peek(sf.cursor())
+        receipt.add(
+            "access_history",
+            f"{len(history)} recent rows" if history
+            else "0 rows yet (ACCOUNT_USAGE latency up to ~3h)",
+        )
+        sf.close()
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()

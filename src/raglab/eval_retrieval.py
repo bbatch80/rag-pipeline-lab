@@ -15,6 +15,12 @@ Metrics per answerable question:
 Per unanswerable question:
 - gate_correct     — scope gate fired iff expected
 - abstained        — for low-confidence-type questions, funnel must abstain
+
+Per persona_negative question (entitlement assertions, run through the full
+persona pipeline — RLS, vault translation, disclosure — in both directions):
+- deny_abstained   — the unauthorized persona must get insufficient_evidence
+- allow_answered   — the authorized persona must get status ok
+- allow_hit        — the authorized answer cites the expected document
 """
 
 import subprocess
@@ -22,15 +28,19 @@ from dataclasses import dataclass, field
 
 import psycopg
 
-from raglab import ablation, config, rerank, retrieval, router
+from raglab import ablation, config, deid, rerank, retrieval, router
 
 EVAL_SCHEMA_PATH = config.REPO_ROOT / "db" / "eval.sql"
 
 # Gate thresholds — a regression below any of these fails the build.
+# Entitlement metrics are absolute: a single persona leak or blocked
+# authorized answer fails the run.
 THRESHOLDS = {
     "hit@5": 0.85,
     "gate_correct": 1.0,
     "wrong_abstention_rate": 0.05,
+    "deny_abstained": 1.0,
+    "allow_answered": 1.0,
 }
 
 
@@ -71,25 +81,59 @@ def run(
 
     for item in ablation.load_golden():
         qid, category = item["id"], item["category"]
+
+        if category == "persona_negative":
+            # Entitlement assertions exercise the REAL persona path
+            # (SET ROLE, vault translation, disclosure log) — a junk vector
+            # can't stand in for it, so sabotage runs skip them.
+            if sabotage:
+                continue
+            from raglab.pipeline import run_query
+
+            denied = run_query(conn, item["question"],
+                               persona=item["persona_deny"], source="eval")
+            allowed = run_query(conn, item["question"],
+                                persona=item["persona_allow"], source="eval")
+            titles = [c["source"]["title"] for c in allowed.get("chunks", [])]
+            allow_hit = float(any(
+                expected in title
+                for expected in item["allow_titles"] for title in titles[:5]
+            ))
+            scores.append((qid, category, "deny_abstained",
+                           float(denied["status"] == "insufficient_evidence"),
+                           {"persona": item["persona_deny"],
+                            "confidence": denied.get("confidence")}))
+            scores.append((qid, category, "allow_answered",
+                           float(allowed["status"] == "ok"),
+                           {"persona": item["persona_allow"],
+                            "confidence": allowed.get("confidence")}))
+            scores.append((qid, category, "allow_hit", allow_hit,
+                           {"expected": item["allow_titles"]}))
+            continue
+
         decision = router.route(item["question"])
+        # The eval runs as admin, which is entitled to the vault: translate
+        # like the pipeline does, so tokenized notes stay reachable by the
+        # identifiers a question naturally uses.
+        question = deid.translate_query(conn, item["question"])
 
         if item.get("unanswerable"):
             expected_gate = item["expected_trigger"] == "scope_gate"
             gated = decision.scope != "in_scope"
             scores.append((qid, category, "gate_correct", float(gated == expected_gate), {}))
             if not gated:
-                vector = junk_vector if sabotage else retrieval.embed_query(item["question"])
-                candidates = retrieval.search(conn, item["question"], vector, decision)
-                reranked = rerank.rerank(item["question"], candidates)
+                vector = junk_vector if sabotage else retrieval.embed_query(question)
+                candidates = retrieval.search(conn, question, vector, decision)
+                reranked = rerank.rerank(question, candidates)
                 abstained, best = rerank.abstention_verdict(reranked)
                 scores.append((qid, category, "abstained", float(abstained),
                                {"best_score": round(best, 4)}))
             continue
 
-        vector = junk_vector if sabotage else retrieval.embed_query(item["question"])
-        candidates = retrieval.search(conn, item["question"], vector, decision)
+        vector = junk_vector if sabotage else retrieval.embed_query(question)
+        candidates = retrieval.search(conn, question, vector, decision)
         reranked = rerank.rerank(
-            item["question"], candidates, top_n=10,
+            question, candidates, top_n=10,
             stratify_years=decision.years,
         )
         abstained, best = rerank.abstention_verdict(reranked)
@@ -135,7 +179,8 @@ def _summarize(run_id: int, scores: list[tuple]) -> RetrievalEvalResult:
         rows = [s for s in scores if s[1] == category]
         result.by_category[category] = {
             m: round(mean(m, rows), 3)
-            for m in ("hit@5", "precision@5", "source_coverage", "gate_correct")
+            for m in ("hit@5", "precision@5", "source_coverage", "gate_correct",
+                      "deny_abstained", "allow_answered", "allow_hit")
             if mean(m, rows) is not None
         }
 
@@ -157,4 +202,13 @@ def _summarize(run_id: int, scores: list[tuple]) -> RetrievalEvalResult:
         result.failures.append(
             f"wrong abstentions {result.overall['wrong_abstention_rate']:.3f}"
         )
+    for metric in ("deny_abstained", "allow_answered"):
+        value = mean(metric, scores)
+        result.overall[metric] = value
+        if value is not None and value < THRESHOLDS[metric]:
+            result.failures.append(
+                "persona leak: an unauthorized persona received content"
+                if metric == "deny_abstained"
+                else "entitled persona was wrongly blocked"
+            )
     return result

@@ -30,12 +30,13 @@ def run_query(
     decision = router.route(query)
     reranked = []
     if decision.scope == "in_scope":
-        # Re-identification is itself an entitlement: only care_team queries
-        # are translated (name -> vault pseudonym), and only via the owner
-        # connection — before the session drops to the persona role, which
+        # Re-identification is itself an entitlement: queries are translated
+        # (name -> vault pseudonym) only for sessions entitled to the vault —
+        # admin (the vault's owner) and care_team by grant — and only via the
+        # owner connection, before the session drops to a persona role, which
         # cannot read the vault.
         search_query = query
-        if persona == "care_team":
+        if persona is None or persona == "care_team":
             from raglab import deid
 
             search_query = deid.translate_query(conn, query)

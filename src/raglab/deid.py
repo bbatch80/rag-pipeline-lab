@@ -97,6 +97,16 @@ def deidentify(conn: psycopg.Connection, text: str, mode: str) -> str:
     return out
 
 
+# Query translation covers LOOKUP identifiers only (who/which record).
+# DATE_TIME and LOCATION are shared vocabulary — a query saying "2026" means
+# the plan year, not some note's tokenized date — so substituting them would
+# corrupt ordinary questions.
+QUERY_TRANSLATE_TYPES = (
+    "PERSON", "US_SSN", "PHONE_NUMBER", "US_DRIVER_LICENSE", "ID",
+    "MEDICAL_LICENSE",
+)
+
+
 def translate_query(conn: psycopg.Connection, query: str) -> str:
     """Authorized re-identification bridge: rewrite known PHI originals in a
     query to their vault pseudonyms so tokenized notes stay searchable by the
@@ -105,7 +115,9 @@ def translate_query(conn: psycopg.Connection, query: str) -> str:
     itself can never read the mapping."""
     rows = conn.execute(
         "SELECT original, pseudonym FROM deid_vault "
-        "ORDER BY length(original) DESC, original, pseudonym"
+        "WHERE entity_type = ANY(%s) "
+        "ORDER BY length(original) DESC, original, pseudonym",
+        (list(QUERY_TRANSLATE_TYPES),),
     ).fetchall()
     out = query
     for original, pseudonym in rows:

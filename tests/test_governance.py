@@ -147,11 +147,11 @@ def test_hnsw_survives_heavy_rls_trimming(db):
     )
 
 
-def test_vault_translation_is_care_team_only(db, monkeypatch):
-    """Tokenized notes are searchable by real identifiers ONLY for the
-    persona entitled to re-identification: care_team queries are rewritten
-    name -> pseudonym via the owner-only vault; other personas search the
-    literal (absent) name."""
+def test_vault_translation_follows_entitlement(db, monkeypatch):
+    """Tokenized notes are searchable by real identifiers ONLY for sessions
+    entitled to the vault (admin as owner, care_team by grant): their queries
+    are rewritten name -> pseudonym; other personas search the literal
+    (absent) name."""
     from raglab import deid
 
     db.execute(
@@ -193,6 +193,8 @@ def test_vault_translation_is_care_team_only(db, monkeypatch):
             pass
 
     run_query(_NoCommit(db), "notes on Quorthon", persona="care_team")
+    assert "[PERSON-9999]" in seen["query"]
+    run_query(_NoCommit(db), "notes on Quorthon")  # admin owns the vault
     assert "[PERSON-9999]" in seen["query"]
     run_query(_NoCommit(db), "notes on Quorthon", persona="employee")
     assert "Quorthon" in seen["query"] and "[PERSON-9999]" not in seen["query"]

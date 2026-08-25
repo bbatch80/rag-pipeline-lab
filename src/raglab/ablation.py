@@ -86,7 +86,13 @@ def run(conn: psycopg.Connection, k: int = HIT_K) -> AblationReport:
         arms={a: ArmResult() for a in ("vector", "bm25", "rrf", "rrf+rerank")}
     )
     for item in load_golden():
+        if item["category"] == "persona_negative":
+            continue  # entitlement assertions live in eval_retrieval; arms run as admin
         decision = router.route(item["question"])
+        # Admin sessions are vault-entitled: translate like the pipeline does.
+        from raglab import deid
+
+        question = deid.translate_query(conn, item["question"])
 
         if item.get("unanswerable"):
             expected_gate = item["expected_trigger"] == "scope_gate"
@@ -94,10 +100,10 @@ def run(conn: psycopg.Connection, k: int = HIT_K) -> AblationReport:
             report.gate_results.append((item["id"], expected_gate, actually_gated))
             if not actually_gated:
                 candidates = retrieval.search(
-                    conn, item["question"],
-                    retrieval.embed_query(item["question"]), decision,
+                    conn, question,
+                    retrieval.embed_query(question), decision,
                 )
-                reranked = rerank.rerank(item["question"], candidates)
+                reranked = rerank.rerank(question, candidates)
                 if reranked:
                     report.unanswerable_best_scores.append(
                         (item["id"], reranked[0].rerank_score)
@@ -107,12 +113,12 @@ def run(conn: psycopg.Connection, k: int = HIT_K) -> AblationReport:
         # Wide fused set so each arm's top-5 is measured un-truncated —
         # otherwise arm metrics shift with fusion composition.
         candidates = retrieval.search(
-            conn, item["question"], retrieval.embed_query(item["question"]),
+            conn, question, retrieval.embed_query(question),
             decision, fused_limit=200,
         )
         orderings = _arm_orderings(candidates)
         funnel_input = sorted(candidates, key=lambda c: -c.rrf_score)[:50]
-        reranked = rerank.rerank(item["question"], funnel_input, top_n=len(funnel_input))
+        reranked = rerank.rerank(question, funnel_input, top_n=len(funnel_input))
         orderings["rrf+rerank"] = reranked
         if reranked:
             report.answerable_best_scores.append(

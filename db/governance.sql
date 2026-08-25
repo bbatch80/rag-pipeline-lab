@@ -75,6 +75,17 @@ CREATE TABLE IF NOT EXISTS disclosure_log (
 );
 
 CREATE INDEX IF NOT EXISTS disclosure_log_asked_idx ON disclosure_log (asked_at);
+
+-- Tokenization vault: original PHI recoverable ONLY here. Owner-only — no
+-- persona grants; this table is the governable secret that makes
+-- pseudonymization reversible. Survives init-db (additive, never dropped).
+CREATE TABLE IF NOT EXISTS deid_vault (
+    original_hash text PRIMARY KEY,
+    entity_type   text NOT NULL,
+    original      text NOT NULL,
+    pseudonym     text NOT NULL,
+    created_at    timestamptz NOT NULL DEFAULT now()
+);
 GRANT SELECT, INSERT ON disclosure_log TO
     persona_public, persona_employee, persona_care_team;
 GRANT USAGE ON SEQUENCE disclosure_log_id_seq TO

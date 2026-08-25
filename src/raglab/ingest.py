@@ -54,16 +54,19 @@ def _contextualize(chunks: list[Chunk], meta: DocumentMeta) -> list[Chunk]:
         return list(pool.map(one, chunks))
 
 
-def processing_recipe(backend_name: str) -> str:
+def processing_recipe(backend_name: str, doc_type: str = "") -> str:
     """The recipe half of a document's identity: what would change the
     stored chunks even when the source bytes don't."""
     from raglab import chunking
 
     contextual_mode = os.environ.get("RAGLAB_CONTEXTUAL", "template")
-    return (
+    recipe = (
         f"{backend_name}|{chunking.HARD_MAX}/{chunking.SOFT_MAX}/"
         f"{chunking.MERGE_UNDER}|{contextual_mode}"
     )
+    if doc_type == "clinical_note":
+        recipe += f"|deid:{os.environ.get('RAGLAB_DEID', 'tokenize')}"
+    return recipe
 
 
 def content_hash(path: Path, recipe: str = "") -> str:
@@ -89,7 +92,9 @@ def ingest_document(
 ) -> str:
     """Returns the action taken: skipped | ingested | reingested | quarantined."""
     source_path = rel_source_path(pdf_path)
-    digest = content_hash(pdf_path, processing_recipe(backend.name))
+    digest = content_hash(
+        pdf_path, processing_recipe(backend.name, meta.doc_type)
+    )
 
     row = conn.execute(
         "SELECT id, content_hash FROM documents WHERE source_path = %s",
@@ -110,6 +115,21 @@ def ingest_document(
                 (source_path, failure.gate, failure.detail),
             )
         return "quarantined"
+
+    # PHI de-identification runs BEFORE context/embedding: protected text
+    # must never enter the embedding space or searchable corpus.
+    deid_mode = os.environ.get("RAGLAB_DEID", "tokenize")
+    if meta.doc_type == "clinical_note" and deid_mode in ("mask", "tokenize"):
+        from raglab import deid
+        from raglab.chunking import Chunk as _Chunk
+
+        chunks = [
+            _Chunk(
+                text=deid.deidentify(conn, c.text, deid_mode),
+                section=c.section, pages=c.pages, categories=c.categories,
+            )
+            for c in chunks
+        ]
 
     # Production default: template context (Phase 4 A/B winner — captures
     # most of LLM-contextual's coverage gain at zero cost from metadata we

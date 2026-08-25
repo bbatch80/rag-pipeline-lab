@@ -25,6 +25,11 @@ dev = [
 docling = [
     "docling>=2.121.0",
 ]
+phi = [
+    "en-core-web-lg",
+    "presidio-analyzer>=2.2.364",
+    "presidio-anonymizer>=2.2.364",
+]
 rerank = [
     "sentence-transformers>=6.0.0",
 ]
@@ -41,3 +46,4 @@ testpaths = ["tests"]
 
 [tool.uv.sources]
 en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
+en-core-web-lg = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" }

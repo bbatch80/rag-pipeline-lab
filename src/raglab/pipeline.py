@@ -30,13 +30,22 @@ def run_query(
     decision = router.route(query)
     reranked = []
     if decision.scope == "in_scope":
+        # Re-identification is itself an entitlement: only care_team queries
+        # are translated (name -> vault pseudonym), and only via the owner
+        # connection — before the session drops to the persona role, which
+        # cannot read the vault.
+        search_query = query
+        if persona == "care_team":
+            from raglab import deid
+
+            search_query = deid.translate_query(conn, query)
         if persona is not None:
             conn.execute(f"SET LOCAL ROLE persona_{persona}")
         candidates = retrieval.search(
-            conn, query, retrieval.embed_query(query), decision
+            conn, search_query, retrieval.embed_query(search_query), decision
         )
         reranked = rerank.rerank(
-            query, candidates, stratify_years=decision.years
+            search_query, candidates, stratify_years=decision.years
         )
         if persona is not None:
             conn.execute("RESET ROLE")

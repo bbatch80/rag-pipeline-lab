@@ -147,6 +147,57 @@ def test_hnsw_survives_heavy_rls_trimming(db):
     )
 
 
+def test_vault_translation_is_care_team_only(db, monkeypatch):
+    """Tokenized notes are searchable by real identifiers ONLY for the
+    persona entitled to re-identification: care_team queries are rewritten
+    name -> pseudonym via the owner-only vault; other personas search the
+    literal (absent) name."""
+    from raglab import deid
+
+    db.execute(
+        "INSERT INTO deid_vault (original_hash, entity_type, original, pseudonym) "
+        "VALUES ('h1', 'PERSON', 'Quorthon', '[PERSON-9999]')"
+    )
+    assert deid.translate_query(db, "asthma patient Quorthon?") == (
+        "asthma patient [PERSON-9999]?"
+    )
+    assert deid.translate_query(db, "the Quorthonian era") == (
+        "the Quorthonian era"
+    ), "substitution must respect word boundaries"
+
+    _seed_tiers(db, embed=True)
+    seen = {}
+
+    def fake_embed(text):
+        seen["query"] = text
+        return "[" + ",".join(["0.5"] * 1536) + "]"
+
+    monkeypatch.setattr("raglab.retrieval.embed_query", fake_embed)
+
+    class _FakeModel:
+        def predict(self, pairs):
+            return [0.9] * len(pairs)
+
+    import raglab.rerank as rr
+
+    monkeypatch.setattr(rr, "_model", _FakeModel())
+
+    class _NoCommit:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def execute(self, *a, **k):
+            return self._conn.execute(*a, **k)
+
+        def commit(self):
+            pass
+
+    run_query(_NoCommit(db), "notes on Quorthon", persona="care_team")
+    assert "[PERSON-9999]" in seen["query"]
+    run_query(_NoCommit(db), "notes on Quorthon", persona="employee")
+    assert "Quorthon" in seen["query"] and "[PERSON-9999]" not in seen["query"]
+
+
 def test_disclosure_record_survives_document_deletion(db, monkeypatch):
     _seed_tiers(db, embed=True)
     monkeypatch.setattr(

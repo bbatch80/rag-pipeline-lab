@@ -274,9 +274,72 @@ def load_synthea_cmd():
     receipt.finish()
 
 
+@main.command("deid-eval")
+def deid_eval_cmd():
+    """Score Presidio detection against the PHI injection manifest."""
+    from raglab import deid
+
+    receipt = Receipt("raglab deid-eval")
+    try:
+        with db.connect() as conn:
+            result = deid.evaluate(conn)
+        receipt.add("run id", result.run_id)
+        for entity_type, recall in result.recall_by_type.items():
+            receipt.add(f"recall {entity_type}", recall)
+        receipt.add("overall recall", result.overall_recall)
+        receipt.add("LEAKAGE RATE", f"{result.leakage_rate:.4f} (entities surviving in indexed text)")
+        for doc, etype, value in result.leaked_examples[:5]:
+            receipt.add("  leaked", f"{doc}: {etype} {value!r}")
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+@main.command("audit")
+@click.option("--document", default=None, help="Which payloads used this doc (title/path substring)?")
+@click.option("--persona", default=None, help="What did this persona see?")
+@click.option("--limit", default=10)
+def audit_cmd(document: str | None, persona: str | None, limit: int):
+    """Disclosure-log reports: who saw what; lineage in both directions."""
+    receipt = Receipt("raglab audit")
+    try:
+        with db.connect() as conn:
+            if document:
+                rows = conn.execute(
+                    "SELECT asked_at, persona, query, payload_id FROM disclosure_log "
+                    "WHERE EXISTS (SELECT 1 FROM unnest(doc_titles) t WHERE t ILIKE %s) "
+                    "ORDER BY id DESC LIMIT %s",
+                    (f"%{document}%", limit),
+                ).fetchall()
+                receipt.add("question", f"which payloads used documents matching {document!r}")
+                for asked, who, query, pid in rows:
+                    receipt.add(f"  {asked:%m-%d %H:%M}", f"{who:10} {str(pid)[:8]}  {query[:48]}")
+                receipt.add("matches", len(rows))
+            elif persona:
+                rows = conn.execute(
+                    "SELECT asked_at, payload_status, query, acl_basis FROM disclosure_log "
+                    "WHERE persona = %s ORDER BY id DESC LIMIT %s",
+                    (persona, limit),
+                ).fetchall()
+                receipt.add("question", f"what did persona {persona!r} see")
+                for asked, status, query, basis in rows:
+                    receipt.add(f"  {asked:%m-%d %H:%M}", f"{status:22} tiers={basis} {query[:40]}")
+                receipt.add("matches", len(rows))
+            else:
+                total, personas = conn.execute(
+                    "SELECT count(*), count(DISTINCT persona) FROM disclosure_log"
+                ).fetchone()
+                receipt.add("disclosures", total)
+                receipt.add("personas", personas)
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
 @main.command("explain")
 @click.argument("query")
-def explain_cmd(query: str):
+@click.option("--persona", default=None, type=click.Choice(["public", "employee", "care_team"]))
+def explain_cmd(query: str, persona: str | None):
     """Full retrieval trace: router -> per-method -> RRF -> rerank -> verdict."""
     from raglab import rerank, retrieval, router
 
@@ -294,9 +357,14 @@ def explain_cmd(query: str):
     click.echo(f"    plan filter: {list(decision.plan_codes) or 'none'} (NULL plan_code passes)")
 
     with db.connect() as conn:
+        if persona:
+            conn.execute(f"SET LOCAL ROLE persona_{persona}")
+            click.echo(f"    RLS: querying as persona_{persona} (engine trims before ranking)")
         candidates = retrieval.search(
             conn, query, retrieval.embed_query(query), decision
         )
+        if persona:
+            conn.execute("RESET ROLE")
 
     def _line(c, extra=""):
         loc = f"{c.doc_title[:38]} | {c.section[:24]}" if c.section else c.doc_title[:64]
@@ -327,7 +395,9 @@ def explain_cmd(query: str):
     click.echo("\n[6] VERDICT")
     click.echo(f"    best rerank score: {best:.4f} vs threshold {rerank.ABSTAIN_THRESHOLD}")
     click.echo(f"    {'ABSTAIN (insufficient evidence)' if abstain else 'ANSWERABLE'}")
-    click.echo("    RLS trim: n/a until Phase 6 (all tiers visible)\n")
+    click.echo(
+        f"    RLS: {'persona_' + persona + ' — invisible tiers never entered retrieval' if persona else 'admin view (all tiers)'}\n"
+    )
 
 
 @main.command("ablation")

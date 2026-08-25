@@ -26,6 +26,19 @@ def test_unknown_query_name_refused_with_catalog():
     assert set(result["known_queries"]) == set(snowlane.NAMED_QUERIES)
 
 
+def test_golden_two_lane_schema():
+    """Offline: two-lane golden entries carry both decomposed halves and a
+    known identity (the live assertions run in test_two_lane_golden.py)."""
+    from raglab.ablation import load_golden
+
+    two_lane = [g for g in load_golden() if g["category"] == "two_lane"]
+    assert len(two_lane) == 3
+    for item in two_lane:
+        assert item["identity"] in IDENTITIES
+        assert item["doc_probe"] and item["doc_anchor"]
+        assert "query_name" in item["member_query"]
+
+
 def test_public_identity_gets_no_member_data(monkeypatch):
     import raglab.mcp_server as server
 

@@ -82,6 +82,9 @@ def run(
     for item in ablation.load_golden():
         qid, category = item["id"], item["category"]
 
+        if category == "two_lane":
+            continue  # needs Snowflake; asserted in tests/test_two_lane_golden.py
+
         if category == "persona_negative":
             # Entitlement assertions exercise the REAL persona path
             # (SET ROLE, vault translation, disclosure log) — a junk vector

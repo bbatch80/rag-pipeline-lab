@@ -86,8 +86,8 @@ def run(conn: psycopg.Connection, k: int = HIT_K) -> AblationReport:
         arms={a: ArmResult() for a in ("vector", "bm25", "rrf", "rrf+rerank")}
     )
     for item in load_golden():
-        if item["category"] == "persona_negative":
-            continue  # entitlement assertions live in eval_retrieval; arms run as admin
+        if item["category"] in ("persona_negative", "two_lane"):
+            continue  # entitlement/two-lane assertions live elsewhere; arms run as admin
         decision = router.route(item["question"])
         # Admin sessions are vault-entitled: translate like the pipeline does.
         from raglab import deid

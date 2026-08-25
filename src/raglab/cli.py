@@ -23,11 +23,12 @@ def init_db():
     """Apply db/schema.sql (drop-and-recreate)."""
     receipt = Receipt("raglab init-db")
     try:
-        sql = config.SCHEMA_PATH.read_text()
         with db.connect() as conn:
-            conn.execute(sql)
+            conn.execute(config.SCHEMA_PATH.read_text())
+            conn.execute(config.GOVERNANCE_PATH.read_text())
         receipt.add("schema", str(config.SCHEMA_PATH))
         receipt.add("tables", "documents, chunks, quarantine (recreated)")
+        receipt.add("governance", "RLS policies + personas + disclosure_log applied")
     except (OSError, psycopg.Error) as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()

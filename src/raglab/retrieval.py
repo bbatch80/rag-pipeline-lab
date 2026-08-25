@@ -119,6 +119,10 @@ def search(
     where, filter_params = _filters(route)
     lexical = _lexical_query(conn, query_text) or "'__nomatch__'"
     conn.execute("SELECT set_config('hnsw.ef_search', %s, true)", (str(EF_SEARCH),))
+    # Under heavy RLS trimming a strict HNSW scan can return fewer than k
+    # visible rows (the post-filter starvation problem); iterative scan keeps
+    # walking the graph until enough VISIBLE results are found.
+    conn.execute("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
     sql = f"""
         WITH vec AS (
             SELECT c.id, ROW_NUMBER() OVER (ORDER BY c.dist) AS rank

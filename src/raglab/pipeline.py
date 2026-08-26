@@ -61,6 +61,8 @@ def run_query(
 
 
 def _disclose(conn, built: dict, reranked, source: str) -> None:
+    import json
+
     chunks = reranked[: len(built.get("chunks", []))]
     hashes = []
     if chunks:
@@ -74,8 +76,9 @@ def _disclose(conn, built: dict, reranked, source: str) -> None:
         """
         INSERT INTO disclosure_log
             (persona, source, query, payload_id, payload_status,
-             chunk_ids, content_hashes, doc_titles, acl_basis, top_score)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             chunk_ids, content_hashes, doc_titles, acl_basis, top_score,
+             payload)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             built["persona"], source, built["query"], built["payload_id"],
@@ -85,5 +88,6 @@ def _disclose(conn, built: dict, reranked, source: str) -> None:
             [c.doc_title for c in chunks],
             sorted({c.acl_tag for c in chunks}),
             built.get("confidence"),
+            json.dumps(built),
         ),
     )

@@ -715,3 +715,27 @@ def query_cmd(prompt: str, persona: str | None):
     with db.connect() as conn:
         built = run_query(conn, prompt, persona=persona, source="interactive")
     click.echo(json.dumps(built, indent=2, default=str))
+
+
+@main.command("payload")
+@click.argument("payload_id")
+def payload_cmd(payload_id: str):
+    """Re-display the exact context payload a consumer received, by the
+    payload_id recorded in its disclosure. 'Who saw what' — verbatim."""
+    import json
+
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT payload, persona, source, asked_at FROM disclosure_log "
+            "WHERE payload_id = %s::uuid",
+            (payload_id,),
+        ).fetchone()
+    if row is None:
+        raise click.ClickException(f"no disclosure with payload_id {payload_id}")
+    payload, persona, source, asked_at = row
+    if payload is None:
+        raise click.ClickException(
+            "disclosure predates payload persistence (metadata only)"
+        )
+    click.echo(f"# persona={persona} source={source} asked_at={asked_at}")
+    click.echo(json.dumps(payload, indent=2, default=str))

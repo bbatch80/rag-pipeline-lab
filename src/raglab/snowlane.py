@@ -223,10 +223,21 @@ NAMED_QUERIES = {
 }
 
 
+# Which result columns each role's masking policies alter (NULLed, hashed,
+# or truncated). Reported per response so a consumer can tell policy-NULL
+# from data-NULL — Synthea leaves e.g. REASON genuinely empty on many rows.
+MASKED_FOR_ROLE = {
+    "CARE_MANAGER": {"BASE_COST", "TOTAL_COST", "TOTAL_CLAIM_COST",
+                     "PAYER_COVERAGE", "AVG_COST"},
+    "ACTUARY": {"SSN", "FIRST_NAME", "LAST_NAME", "BIRTHDATE"},
+}
+
+
 def run_named_query(sf_conn, query_name: str, params: dict) -> dict:
     """Execute a catalog query with bound parameters; returns column names,
-    rows, and the query's documented meaning. Unknown names are refused —
-    the catalog IS the surface area."""
+    rows, the query's documented meaning, and which columns the session
+    role's policies masked. Unknown names are refused — the catalog IS the
+    surface area."""
     if query_name not in NAMED_QUERIES:
         return {
             "status": "unknown_query",
@@ -238,6 +249,7 @@ def run_named_query(sf_conn, query_name: str, params: dict) -> dict:
     bound = {"first_name": None, "limit": 20}
     bound.update({k: v for k, v in params.items() if v is not None})
     cur = sf_conn.cursor()
+    role = cur.execute("SELECT CURRENT_ROLE()").fetchone()[0]
     cur.execute(spec["sql"], bound)
     columns = [d[0] for d in cur.description]
     rows = [
@@ -252,6 +264,9 @@ def run_named_query(sf_conn, query_name: str, params: dict) -> dict:
         "columns": columns,
         "rows": rows,
         "row_count": len(rows),
+        "masked_columns": sorted(
+            MASKED_FOR_ROLE.get(role, set()) & set(columns)
+        ),
     }
 
 

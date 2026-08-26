@@ -76,6 +76,11 @@ CREATE TABLE IF NOT EXISTS disclosure_log (
 
 CREATE INDEX IF NOT EXISTS disclosure_log_asked_idx ON disclosure_log (asked_at);
 
+-- The disclosure record carries the EXACT payload delivered (spec JSON):
+-- "who saw what" means the verbatim context, reproducible by payload_id,
+-- not just which titles.
+ALTER TABLE disclosure_log ADD COLUMN IF NOT EXISTS payload jsonb;
+
 -- Tokenization vault: original PHI recoverable ONLY here. Owner-only — no
 -- persona grants; this table is the governable secret that makes
 -- pseudonymization reversible. Survives init-db (additive, never dropped).

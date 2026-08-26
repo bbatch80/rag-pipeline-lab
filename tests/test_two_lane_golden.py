@@ -59,6 +59,9 @@ def test_masking_composes_with_two_lane_answers():
     row = dict(zip(result["columns"], result["rows"][0]))
     assert row["CLAIM_LINES"] >= 1
     assert row["TOTAL_COST"] is None and row["PAYER_COVERAGE"] is None
+    assert set(result["masked_columns"]) == {"TOTAL_COST", "PAYER_COVERAGE"}, (
+        "the response must distinguish policy-masked columns from data NULLs"
+    )
 
 
 def test_actuary_aggregate_is_deidentified():

@@ -229,12 +229,15 @@ def test_disclosure_record_survives_document_deletion(db, monkeypatch):
                       persona="employee", source="eval")
     assert built["status"] == "ok"
     record = db.execute(
-        "SELECT chunk_ids, doc_titles, acl_basis FROM disclosure_log "
+        "SELECT chunk_ids, doc_titles, acl_basis, payload FROM disclosure_log "
         "WHERE payload_id = %s", (built["payload_id"],)
     ).fetchone()
     assert record is not None and record[0], "disclosure must be recorded"
     assert set(record[2]) <= {"public", "employee"}, (
         "employee persona must never disclose care_team content"
+    )
+    assert record[3] and record[3]["payload_id"] == built["payload_id"], (
+        "the exact delivered payload must be reproducible from the disclosure"
     )
 
     db.execute("DELETE FROM documents")

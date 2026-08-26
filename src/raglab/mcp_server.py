@@ -83,8 +83,9 @@ def query_member_data(
       counts and costs grouped by encounter description (ILIKE pattern,
       e.g. '%asthma%').
 
-    NULL columns in results are policy maskings, not missing data — report
-    them as 'not visible to your role'."""
+    Each result names its masked_columns: values there are policy-masked
+    for your role — report them as 'not visible to your role'. A NULL in
+    any OTHER column is genuinely absent source data, not masking."""
     _, role = IDENTITIES[PERSONA]
     if role is None:
         return {

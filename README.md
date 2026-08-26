@@ -111,11 +111,6 @@ the receipt's exit code. Verified scenarios: single-document surgical sync
 (290 skipped / 1 reingested / 1 embedded), deletion propagation (source gone
 → rows cascade out), full backfill with post-rebuild re-baseline.
 
-Known limitation: Airflow 3.x's task supervisor deadlocks forked task
-processes on macOS (apache/airflow#64874, #65691); on macOS dev machines DAG
-executions run via Airflow's in-process `dags test` runner. Linux and
-containerized deployments use the native executor unaffected.
-
 ## Governance
 
 Two lanes, enforcement in the engine — application code never filters

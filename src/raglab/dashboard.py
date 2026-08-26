@@ -123,10 +123,22 @@ def _trend_svg(points: list[tuple], threshold: float) -> str:
     )
     hit = [p[2] for p in points]
     cov = [p[3] for p in points]
+    # Annotate gate breaches — regressions the eval caught are the story.
+    breaches = "".join(
+        f'<line x1="{x:.1f}" y1="{y(v) - 8:.1f}" x2="{x:.1f}" y2="{y(v) - 26:.1f}" '
+        f'stroke="var(--bad)" stroke-width="1.5"/>'
+        f'<text x="{x:.1f}" y="{y(v) - 31:.1f}" text-anchor="middle" font-size="11" '
+        f'fill="var(--bad)">run {rid}: below gate'
+        f'<title>run {rid} ({label}): hit@5 {v:.3f} &lt; {threshold} — '
+        f'caught by the eval, fixed in the following run</title></text>'
+        for (rid, label, *_), x, v in zip(points, xs, hit)
+        if v is not None and v < threshold
+    )
     return (f'<svg viewBox="0 0 {w} {h}" role="img" '
             f'style="min-width:640px;width:100%">{grid}{thr}'
             f'{line(cov, "var(--indigo)")}{dots(cov, "var(--indigo)")}'
-            f'{line(hit, "var(--teal)")}{dots(hit, "var(--teal)")}{xlabels}</svg>')
+            f'{line(hit, "var(--teal)")}{dots(hit, "var(--teal)")}'
+            f'{breaches}{xlabels}</svg>')
 
 
 def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:

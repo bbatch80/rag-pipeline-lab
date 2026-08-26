@@ -181,6 +181,19 @@ def index_cmd():
                 "SELECT word, ndoc FROM ts_stat('SELECT tsv FROM chunks')"
             )
             conn.execute("CREATE INDEX lexeme_df_word_idx ON lexeme_df (word)")
+            # Recreating the table dropped its grants; personas query it
+            # during retrieval, so re-grant here or the next persona query
+            # fails with permission denied.
+            conn.execute("""
+                DO $$
+                BEGIN
+                    IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'persona_public') THEN
+                        GRANT SELECT ON lexeme_df TO
+                            persona_public, persona_employee, persona_care_team;
+                    END IF;
+                END
+                $$
+            """)
             n_lexemes = conn.execute("SELECT count(*) FROM lexeme_df").fetchone()[0]
             conn.commit()
         receipt.add("index", "chunks_embedding_idx (hnsw, cosine, m=16, ef_construction=64)")

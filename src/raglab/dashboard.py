@@ -177,8 +177,15 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
         "(SELECT max(id) FROM eval_runs WHERE kind = 'deid')"
     ).fetchall())
 
+    # 'abstained' means opposite things on trap vs answerable questions —
+    # split it into the two behaviors instead of averaging them together.
     gen = conn.execute(
-        "SELECT generator, judge, metric, round(avg(value), 3), count(*) "
+        "SELECT generator, judge, "
+        "CASE WHEN metric = 'abstained' AND category = 'unanswerable' "
+        "     THEN 'traps held (must refuse)' "
+        "     WHEN metric = 'abstained' THEN 'wrong refusals (must answer)' "
+        "     ELSE metric END AS metric, "
+        "round(avg(value), 3), count(*) "
         "FROM eval_scores WHERE generator IS NOT NULL GROUP BY 1, 2, 3 ORDER BY 1, 3"
     ).fetchall()
 

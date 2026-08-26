@@ -10,6 +10,10 @@ from raglab import config, db
 from raglab.receipts import Receipt
 
 
+def _clip(text: str, limit: int = 58) -> str:
+    return text if len(text) <= limit else text[:limit].rstrip() + "\u2026"
+
+
 def _redact(url: str) -> str:
     return re.sub(r"//([^:/@]+):[^@]*@", r"//\1:***@", url)
 
@@ -314,7 +318,7 @@ def audit_cmd(document: str | None, persona: str | None, limit: int):
                 ).fetchall()
                 receipt.add("question", f"which payloads used documents matching {document!r}")
                 for asked, who, query, pid in rows:
-                    receipt.add(f"  {asked:%m-%d %H:%M}", f"{who:10} {query[:44]}")
+                    receipt.add(f"  {asked:%m-%d %H:%M}", f"{who:10} {_clip(query)}")
                     receipt.add("    payload_id", str(pid))
                 receipt.add("matches", len(rows))
             elif persona:
@@ -326,7 +330,8 @@ def audit_cmd(document: str | None, persona: str | None, limit: int):
                 ).fetchall()
                 receipt.add("question", f"what did persona {persona!r} see")
                 for asked, status, query, basis, pid in rows:
-                    receipt.add(f"  {asked:%m-%d %H:%M}", f"{status:22} tiers={basis} {query[:40]}")
+                    receipt.add(f"  {asked:%m-%d %H:%M}",
+                                f"{status:22} tiers={','.join(basis)}  {_clip(query)}")
                     receipt.add("    payload_id", str(pid))
                 receipt.add("matches", len(rows))
             else:

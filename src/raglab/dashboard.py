@@ -161,7 +161,7 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
               float(c) if c is not None else None) for r, l, h, c in trend]
 
     deid = dict(conn.execute(
-        "SELECT question_id, value FROM eval_scores WHERE run_id = "
+        "SELECT metric, value FROM eval_scores WHERE run_id = "
         "(SELECT max(id) FROM eval_runs WHERE kind = 'deid')"
     ).fetchall())
 

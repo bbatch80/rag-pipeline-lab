@@ -314,17 +314,20 @@ def audit_cmd(document: str | None, persona: str | None, limit: int):
                 ).fetchall()
                 receipt.add("question", f"which payloads used documents matching {document!r}")
                 for asked, who, query, pid in rows:
-                    receipt.add(f"  {asked:%m-%d %H:%M}", f"{who:10} {str(pid)[:8]}  {query[:48]}")
+                    receipt.add(f"  {asked:%m-%d %H:%M}", f"{who:10} {query[:44]}")
+                    receipt.add("    payload_id", str(pid))
                 receipt.add("matches", len(rows))
             elif persona:
                 rows = conn.execute(
-                    "SELECT asked_at, payload_status, query, acl_basis FROM disclosure_log "
+                    "SELECT asked_at, payload_status, query, acl_basis, payload_id "
+                    "FROM disclosure_log "
                     "WHERE persona = %s ORDER BY id DESC LIMIT %s",
                     (persona, limit),
                 ).fetchall()
                 receipt.add("question", f"what did persona {persona!r} see")
-                for asked, status, query, basis in rows:
+                for asked, status, query, basis, pid in rows:
                     receipt.add(f"  {asked:%m-%d %H:%M}", f"{status:22} tiers={basis} {query[:40]}")
+                    receipt.add("    payload_id", str(pid))
                 receipt.add("matches", len(rows))
             else:
                 total, personas = conn.execute(

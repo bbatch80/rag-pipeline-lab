@@ -52,7 +52,7 @@ def test_masking_composes_with_two_lane_answers():
     try:
         result = snowlane.run_named_query(
             sf, "member_claims_summary",
-            {"last_name": "Dickinson", "first_name": "John"},
+            {"last_name": "Dickinson", "first_name": "Karima"},
         )
     finally:
         sf.close()

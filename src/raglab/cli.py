@@ -554,17 +554,66 @@ def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool):
         receipt.add("corpus", result.corpus_hash[:12])
         for metric, value in result.overall.items():
             if value is not None:
-                receipt.add(metric, f"{value:.3f}")
+                ci = result.overall_ci.get(metric)
+                receipt.add(metric, f"{value:.3f}" + (f"  95% CI [{ci[0]:.3f}, {ci[1]:.3f}]" if ci else ""))
         for category, metrics in sorted(result.by_category.items()):
-            receipt.add(f"  {category}", "  ".join(f"{m}={v}" for m, v in metrics.items()))
+            receipt.add(f"  {category}", _fmt_slice(metrics))
         for slice_name, metrics in sorted(result.by_source.items()):
-            receipt.add(f"  source:{slice_name}", "  ".join(f"{m}={v}" for m, v in metrics.items()))
+            receipt.add(f"  source:{slice_name}", _fmt_slice(metrics))
+        if result.diff_against is not None:
+            if result.diff:
+                for metric, d in result.diff.items():
+                    receipt.add(f"vs run {result.diff_against}: {metric}",
+                                _fmt_diff(d))
+            else:
+                receipt.add(f"vs run {result.diff_against}", "no question flipped")
         for failure in result.failures:
             if gate and not sabotage:
                 receipt.fail(f"THRESHOLD: {failure}")
             else:
                 receipt.add("below threshold", failure)
     except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+def _fmt_slice(metrics: dict) -> str:
+    """hit@5=0.9 [0.70, 0.97]  precision@5=0.32 ...  n=20"""
+    parts = []
+    for m, v in metrics.items():
+        if m.endswith("_ci") or m == "n":
+            continue
+        ci = metrics.get(f"{m}_ci")
+        parts.append(f"{m}={v}" + (f" [{ci[0]:.2f}, {ci[1]:.2f}]" if ci else ""))
+    parts.append(f"n={metrics.get('n', '?')}")
+    return "  ".join(parts)
+
+
+def _fmt_diff(d: dict) -> str:
+    bits = []
+    if d["gained"]:
+        bits.append("gained " + ", ".join(d["gained"]))
+    if d["lost"]:
+        bits.append("LOST " + ", ".join(d["lost"]))
+    return "; ".join(bits) + f"  (n={d['n']})"
+
+
+@main.command("eval-diff")
+@click.argument("before", type=int)
+@click.argument("after", type=int)
+def eval_diff_cmd(before: int, after: int):
+    """Which golden questions flipped between two retrieval eval runs."""
+    from raglab import eval_retrieval
+
+    receipt = Receipt(f"raglab eval-diff {before} {after}")
+    try:
+        with db.connect() as conn:
+            diff = eval_retrieval.diff_runs(conn, before, after)
+        if not diff:
+            receipt.add("result", "no question flipped on any 0/1 metric")
+        for metric, d in diff.items():
+            receipt.add(metric, _fmt_diff(d))
+    except psycopg.Error as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()
 

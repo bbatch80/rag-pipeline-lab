@@ -92,5 +92,6 @@ def test_summary_reports_by_source():
         ("q3", "internal_factual", "hit@5", 1.0, {"source": "kb"}),
     ]
     result = eval_retrieval._summarize(0, scores)
-    assert result.by_source["brochure"] == {"hit@5": 0.5, "n": 2}
-    assert result.by_source["kb"] == {"hit@5": 1.0, "n": 1}
+    brochure, kb = result.by_source["brochure"], result.by_source["kb"]
+    assert (brochure["hit@5"], brochure["n"]) == (0.5, 2) and "hit@5_ci" in brochure
+    assert (kb["hit@5"], kb["n"]) == (1.0, 1)

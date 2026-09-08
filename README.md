@@ -85,6 +85,21 @@ writing to a metrics store; discrimination-checked (a sabotaged retriever
 trips the gate thresholds). Rebuild equivalence verified: wipe + re-ingest
 reproduces baseline metrics exactly.
 
+Every run records the git commit and a corpus hash (digest over the
+documents' content hashes), reports each 0/1 metric with a 95% Wilson
+interval and question count — overall, per question category, and per
+expected source — and diffs itself against the previous run, naming the
+questions that flipped (`raglab eval-diff A B` for any two runs). Per-stage
+latency (embed, search, rerank, total) is recorded per question and
+summarized as p50/p95 against a stated sub-second budget, displayed rather
+than gated. `raglab recall-rls` measures HNSW recall under row-level
+security per persona against an exact scan run as the same persona. The
+gate runs in CI on a self-hosted runner beside the fully indexed database.
+Year-over-year source coverage is ratchet-gated at its reproduced baseline
+(0.688): the prior-year page reaches the candidate pool, but change-worded
+questions score the prior-year brochure's own "changes" section higher at
+rerank; the floor rises when that is fixed.
+
 | experiment | arm | hit@5 | yoy coverage | conclusion |
 |---|---|---:|---:|---|
 | chunk size | small (1200/900/150) | 0.793 | 0.736 | fragments answers; trips gate |
@@ -152,16 +167,18 @@ uv run raglab audit --persona public        # disclosure: what a role saw
 
 ### PHI de-identification (Presidio, before indexing)
 
-Clinical notes are de-identified at ingest — before embedding — so
-protected text never enters the embedding space, the searchable corpus, or
-any model API. Two modes (`RAGLAB_DEID=mask|tokenize`; the mode is part of
+Clinical notes are minimized at ingest — PHI is detected and tokenized
+before embedding — so protected text never enters the embedding space, the
+searchable corpus, or any model API. Measured leakage (below) is non-zero,
+so the corpus is *minimized*, not de-identified under HIPAA Safe Harbor;
+Expert Determination is not claimed. Two modes (`RAGLAB_DEID=mask|tokenize`; the mode is part of
 the document processing recipe, so flipping it re-ingests exactly the
 affected documents). Tokenize mode issues consistent pseudonyms
 (`[PERSON-0002]` is the same patient in every note) backed by an owner-only
 vault table; persona roles cannot read the vault. Queries from
 vault-entitled sessions (admin, care_team) are translated
 name → pseudonym before search, restricted to lookup-identifier entity
-types, so de-identified notes remain searchable by the identifiers
+types, so tokenized notes remain searchable by the identifiers
 clinicians actually use — for entitled roles only.
 
 Detection is scored against a generation-time PHI injection manifest
@@ -200,7 +217,7 @@ tables, policies, load) idempotently in ~25 s. One `SELECT` against
 | CARE_MANAGER | 676,859 | visible | masked (NULL) |
 | ACTUARY | 676,859 | SSN NULL, names → SHA-256, DOB → year | visible |
 
-The actuary's hashes are stable, so de-identified member-level aggregation
+The actuary's hashes are stable, so member-level aggregation without names
 still works (`COUNT(DISTINCT ...)` matches the examiner's). Row scope is a
 row access policy consulting an owner-only entitlement table; sessions pin
 a single role (`USE SECONDARY ROLES NONE`), as a production service
@@ -263,7 +280,25 @@ directions per entitlement wall: the unauthorized persona must return
 expected document, run through the full persona pipeline (RLS, vault
 translation, disclosure). `deny_abstained`, `allow_answered`, and
 retrieval `hit@5` gate CI; the entitlement metrics are thresholded at 1.0 —
-a single leak fails the build. Payload `status`/`confidence` inform the
+a single leak fails the build. The gate job runs on a self-hosted runner
+beside the loaded database (no corpus or keys on hosted runners); `main` is
+protected, and every change lands through a pull request whose checks it
+must pass. Payload `status`/`confidence` inform the
 consumer; grounding is enforced at the generation layer, whose contract
 (answer only from supplied chunks, refuse otherwise) is exercised by
 abstention-trap questions in the generation eval.
+
+## Production mapping
+
+The lab runs on the tools the posting names; the same shape maps onto an
+Azure + Snowflake stack:
+
+| lab | production analog |
+|---|---|
+| pgvector + pg_textsearch (hybrid retrieval, RLS) | Azure AI Search (vector + BM25) with security trimming |
+| Postgres roles / RLS personas | Entra ID app roles resolved server-side |
+| Snowflake row access + masking policies | Snowflake (same) |
+| Airflow DAGs | Azure Data Factory |
+| `data/` on disk | Blob Storage stage |
+| GitHub Actions + self-hosted runner beside the database | Azure DevOps Pipelines + self-hosted agent in the VNet |
+| Release-tagged Compose deploy | Container deploy with an environment approval gate |

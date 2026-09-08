@@ -57,6 +57,9 @@ class Route:
     boundary_response: str | None = None
     years: tuple[int, ...] = ()
     plan_codes: tuple[str, ...] = ()
+    # doc_type keys to search; empty = every vector-lane source the caller
+    # can see. Surfaces and cue families narrow it; RLS decides visibility.
+    sources: tuple[str, ...] = ()
     reasons: tuple[str, ...] = field(default=())
 
 

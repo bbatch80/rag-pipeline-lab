@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 
 import psycopg
 
-from raglab import ablation, config, deid, rerank, retrieval, router
+from raglab import ablation, config, deid, rerank, retrieval, router, sources
 
 EVAL_SCHEMA_PATH = config.REPO_ROOT / "db" / "eval.sql"
 
@@ -49,6 +49,7 @@ THRESHOLDS = {
 class RetrievalEvalResult:
     run_id: int
     by_category: dict = field(default_factory=dict)
+    by_source: dict = field(default_factory=dict)
     overall: dict = field(default_factory=dict)
     failures: list = field(default_factory=list)
     corpus_hash: str = ""
@@ -62,6 +63,22 @@ def _git_sha() -> str:
         ).stdout.strip()
     except OSError:
         return ""
+
+
+def expected_source(item: dict, registry) -> str:
+    """The doc_type(s) a golden item's expected evidence lives in — what the
+    per-source slice reports on. Brochure sources are (plan_code, year);
+    internal sources are repo-relative paths under a source's directory."""
+    types = set()
+    for source in item.get("sources", []):
+        if "plan_code" in source:
+            types.add("brochure")
+        elif "internal" in source:
+            rel = "data/internal/" + source["internal"]
+            for s in registry.all:
+                if s.dir and rel.startswith(s.dir + "/") and s.doc_type:
+                    types.add(s.doc_type)
+    return "+".join(sorted(types)) if types else "none"
 
 
 def corpus_hash(conn: psycopg.Connection) -> str:
@@ -90,6 +107,7 @@ def run(
     ).fetchone()[0]
 
     scores: list[tuple] = []  # (qid, category, metric, value, detail)
+    registry = sources.load(conn)
     junk_vector = "[" + ",".join(["0.01"] * 1536) + "]"
 
     for item in ablation.load_golden():
@@ -173,6 +191,12 @@ def run(
 
     import json as _json
 
+    by_qid = {item["id"]: expected_source(item, registry) for item in ablation.load_golden()}
+    scores = [
+        (qid, cat, metric, value, {**detail, "source": by_qid.get(qid, "none")})
+        for qid, cat, metric, value, detail in scores
+    ]
+
     with conn.cursor() as cur:
         cur.executemany(
             "INSERT INTO eval_scores (run_id, question_id, category, metric, value, detail) "
@@ -201,6 +225,20 @@ def _summarize(run_id: int, scores: list[tuple]) -> RetrievalEvalResult:
                       "deny_abstained", "allow_answered", "allow_hit")
             if mean(m, rows) is not None
         }
+
+    # Per-source slice: which source the expected evidence lives in. Every
+    # retrieval metric, reported by source, so a new source cannot degrade an
+    # old one without a number moving.
+    slices = sorted({d.get("source", "none") for *_, d in scores})
+    for slice_name in slices:
+        rows = [s for s in scores if s[4].get("source", "none") == slice_name]
+        result.by_source[slice_name] = {
+            m: round(mean(m, rows), 3)
+            for m in ("hit@5", "precision@5", "source_coverage", "gate_correct",
+                      "deny_abstained", "allow_answered", "allow_hit")
+            if mean(m, rows) is not None
+        }
+        result.by_source[slice_name]["n"] = len({s[0] for s in rows})
 
     result.overall = {
         "hit@5": mean("hit@5", scores),

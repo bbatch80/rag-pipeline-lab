@@ -51,6 +51,9 @@ jobs:
   # A regression below any threshold in eval_retrieval.THRESHOLDS fails
   # the job, and branch protection makes that block the merge.
   gate:
+    # Never run fork PRs on the self-hosted machine: a fork can edit this
+    # workflow. Same-repo branches and pushes to main only.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: self-hosted
     concurrency:
       group: raglab-gate

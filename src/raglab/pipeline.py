@@ -7,12 +7,14 @@ SET LOCAL ROLE before any search SQL runs. The engine trims rows before
 ranking; this module never filters content in application code.
 """
 
+import json
 import uuid
 
 import psycopg
 
 from raglab import payload as payload_mod
 from raglab import rerank, retrieval, router
+from raglab.timing import Stopwatch
 
 PERSONAS = ("public", "employee", "care_team")
 
@@ -27,7 +29,9 @@ def run_query(
     if persona is not None and persona not in PERSONAS:
         raise ValueError(f"unknown persona {persona!r}; expected one of {PERSONAS}")
 
-    decision = router.route(query)
+    watch = Stopwatch()
+    with watch.stage("route"):
+        decision = router.route(query)
     reranked = []
     if decision.scope == "in_scope":
         # Re-identification is itself an entitlement: queries are translated
@@ -39,30 +43,39 @@ def run_query(
         if persona is None or persona == "care_team":
             from raglab import deid
 
-            search_query = deid.translate_query(conn, query)
+            with watch.stage("translate"):
+                search_query = deid.translate_query(conn, query)
         if persona is not None:
             conn.execute(f"SET LOCAL ROLE persona_{persona}")
-        candidates = retrieval.search(
-            conn, search_query, retrieval.embed_query(search_query), decision
-        )
-        reranked = rerank.rerank(
-            search_query, candidates, stratify_years=decision.years
-        )
+        with watch.stage("embed"):
+            vector = retrieval.embed_query(search_query)
+        with watch.stage("search"):
+            candidates = retrieval.search(conn, search_query, vector, decision)
+        with watch.stage("rerank"):
+            reranked = rerank.rerank(
+                search_query, candidates, stratify_years=decision.years
+            )
         if persona is not None:
             conn.execute("RESET ROLE")
 
-    built = payload_mod.build(query, decision, reranked)
-    built["payload_id"] = str(uuid.uuid4())
-    built["persona"] = persona or "admin"
+    with watch.stage("payload"):
+        built = payload_mod.build(query, decision, reranked)
+        built["payload_id"] = str(uuid.uuid4())
+        built["persona"] = persona or "admin"
 
-    _disclose(conn, built, reranked, source)
+    with watch.stage("disclose"):
+        _disclose(conn, built, reranked, source)
+    # The disclose stage is measured after the row exists; stamp the full
+    # picture onto the same row before the commit that makes it real.
+    conn.execute(
+        "UPDATE disclosure_log SET timings = %s WHERE payload_id = %s",
+        (json.dumps(watch.snapshot()), built["payload_id"]),
+    )
     conn.commit()
     return built
 
 
 def _disclose(conn, built: dict, reranked, source: str) -> None:
-    import json
-
     chunks = reranked[: len(built.get("chunks", []))]
     hashes = []
     if chunks:

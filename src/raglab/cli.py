@@ -494,6 +494,7 @@ def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool):
         with db.connect() as conn:
             result = eval_retrieval.run(conn, config_label=label, sabotage=sabotage)
         receipt.add("run id", result.run_id)
+        receipt.add("corpus", result.corpus_hash[:12])
         for metric, value in result.overall.items():
             if value is not None:
                 receipt.add(metric, f"{value:.3f}")

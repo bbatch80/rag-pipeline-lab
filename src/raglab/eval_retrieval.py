@@ -43,6 +43,13 @@ THRESHOLDS = {
     "wrong_abstention_rate": 0.05,
     "deny_abstained": 1.0,
     "allow_answered": 1.0,
+    # Ratchet: the reproduced baseline, raised whenever a fix lands. Not an
+    # aspiration — a floor, so year-over-year coverage cannot slip unnoticed.
+    # Cause of 0.688: the prior-year page is in the candidate pool; the
+    # reranker prefers the prior-year brochure's "changes" section because
+    # the question wording is change language. Fix planned: per-year,
+    # year-neutral sub-queries (Phase 3), then raise this.
+    "yoy_source_coverage": 0.688,
 }
 
 
@@ -315,6 +322,11 @@ def _summarize(run_id: int, scores: list[tuple]) -> RetrievalEvalResult:
     if (result.overall["wrong_abstention_rate"] or 0) > THRESHOLDS["wrong_abstention_rate"]:
         result.failures.append(
             f"wrong abstentions {result.overall['wrong_abstention_rate']:.3f}"
+        )
+    yoy = result.by_category.get("yoy", {}).get("source_coverage")
+    if yoy is not None and yoy < THRESHOLDS["yoy_source_coverage"]:
+        result.failures.append(
+            f"yoy source_coverage {yoy:.3f} < ratchet {THRESHOLDS['yoy_source_coverage']}"
         )
     for metric in ("deny_abstained", "allow_answered"):
         value = mean(metric, scores)

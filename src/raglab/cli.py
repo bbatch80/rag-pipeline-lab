@@ -459,7 +459,7 @@ def explain_cmd(query: str, persona: str | None, generate: bool):
         click.echo(_line(c, f"{c.rrf_score:.4f} = {v} + {t}  "))
 
     reranked = rerank.rerank(search_query, candidates, stratify_years=decision.years)
-    click.echo("\n[5] RERANK (bge-reranker-base) top 5"
+    click.echo(f"\n[5] RERANK ({rerank.RERANKER}: {rerank.MODEL_NAME}) top 5"
                + (" — year-stratified" if len(decision.years) > 1 else ""))
     for c in reranked[:5]:
         click.echo(_line(c, f"{c.rerank_score:.4f}  "))

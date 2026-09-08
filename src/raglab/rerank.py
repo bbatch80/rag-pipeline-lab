@@ -7,18 +7,28 @@ Model is local (no-paid-API constraint), pre-fetched by
 `huggingface_hub.snapshot_download` as an explicit setup step.
 """
 
+import os
+
 from raglab.retrieval import Candidate
 
-MODEL_NAME = "BAAI/bge-reranker-base"
+# Rerankers under comparison; one ships. Cross-encoder scores are not
+# calibrated across models, so each carries its own abstention threshold,
+# derived from the golden set's answerable/unanswerable score separation
+# (v1 method for bge-base: answerable best scores bottomed at 0.72, the
+# absent-topic question peaked at 0.30 → midpoint 0.5. KNOWN LIMIT:
+# redirect-style unanswerables score high on genuinely relevant chunks and
+# are caught at the generation layer instead).
+# One reranker ships. gte-reranker-modernbert-base (2025, 149M) was measured
+# against it on 2026-09-08 and lost: hit@5 0.931 vs 0.966, coverage 0.787 vs
+# 0.868, an entitled persona wrongly blocked (allow_answered 0.8), rerank
+# p50 1964 vs 1157 ms; its answerable/unanswerable margin was 0.06 vs 0.42.
+RERANKERS = {
+    "bge-base": {"model": "BAAI/bge-reranker-base", "threshold": 0.5},  # 2023, 278M
+}
+RERANKER = os.environ.get("RAGLAB_RERANKER", "bge-base")
+MODEL_NAME = RERANKERS[RERANKER]["model"]
+ABSTAIN_THRESHOLD = RERANKERS[RERANKER]["threshold"]
 TOP_N_OUT = 10
-# Calibrated at the Phase 3 ablation: answerable golden questions' best
-# scores bottomed at 0.72; the Ozempic-style absent-topic question peaked at
-# 0.30. Midpoint 0.5 separates them. KNOWN LIMIT: redirect-style
-# unanswerables (provider-directory question scored 0.81 — the corpus
-# chunk pointing to the directory IS relevant, it just doesn't answer) are
-# not catchable at retrieval level; generation-side groundedness (Phase 4)
-# is the second line of defense.
-ABSTAIN_THRESHOLD = 0.5
 
 _model = None
 

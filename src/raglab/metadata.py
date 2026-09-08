@@ -55,12 +55,11 @@ def derive_document_meta(cell: CorpusCell) -> DocumentMeta:
 
 def chunk_jsonb(doc: DocumentMeta, chunk: Chunk) -> dict:
     """The JSONB payload: descriptive fields. Load-bearing fields
-    (year, plan_code, acl_tag) ride as typed columns instead."""
+    (year, plan_code, acl_tag, doc_type) ride as typed columns instead."""
     return {
         "carrier": doc.carrier,
         "program": doc.program,
         "plan_options": list(doc.plan_options),
-        "doc_type": doc.doc_type,
         "effective_date": doc.effective_date,
         "section": chunk.section,
         "pages": list(chunk.pages),

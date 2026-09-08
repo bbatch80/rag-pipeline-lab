@@ -38,14 +38,14 @@ class FakeClient:
 
 def _seed_chunks(db, n_null: int, n_embedded: int) -> int:
     doc_id = db.execute(
-        "INSERT INTO documents (source_path, title, content_hash) "
-        "VALUES ('t/e.pdf', 'T', 'h') RETURNING id"
+        "INSERT INTO documents (source_path, title, content_hash, source_id) "
+        "VALUES ('t/e.pdf', 'T', 'h', 1) RETURNING id"
     ).fetchone()[0]
     vec = "[" + ",".join(["0.5"] * 1536) + "]"
     for i in range(n_null + n_embedded):
         db.execute(
-            "INSERT INTO chunks (document_id, chunk_index, content, embedding) "
-            "VALUES (%s, %s, %s, %s)",
+            "INSERT INTO chunks (document_id, chunk_index, content, doc_type, embedding) "
+            "VALUES (%s, %s, %s, 'brochure', %s)",
             (doc_id, i, f"chunk {i}", vec if i < n_embedded else None),
         )
     return doc_id

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from raglab.gates import run_gates
+from raglab.gates import GateRules, run_gates
 from raglab.ingest import ingest_document, rel_source_path
 from raglab.metadata import DocumentMeta
 from raglab.parsing.base import Element
@@ -53,7 +53,9 @@ def _write_pdf(tmp_path: Path, content: bytes = b"%PDF-fake-v1") -> Path:
 
 
 def test_gates_reject_degenerate_parse():
-    failures = run_gates(DegenerateBackend().parse(Path("x")), "brochure")
+    brochure_rules = GateRules(min_chunks=50, median_range=(250, 1600),
+                               expected_terms=("out-of-pocket", "deductible"))
+    failures = run_gates(DegenerateBackend().parse(Path("x")), brochure_rules)
     assert failures, "a near-empty parse must trip the gate"
     assert failures[0].gate == "min_chunks"
 

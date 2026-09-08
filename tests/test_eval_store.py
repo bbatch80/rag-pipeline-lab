@@ -8,8 +8,8 @@ def test_corpus_hash_is_stable_and_tracks_documents(db):
     assert empty == eval_retrieval.corpus_hash(db), "same corpus, same digest"
 
     db.execute(
-        "INSERT INTO documents (source_path, title, content_hash) "
-        "VALUES ('x/a.md', 'A', 'hash-a')"
+        "INSERT INTO documents (source_path, title, content_hash, source_id) "
+        "VALUES ('x/a.md', 'A', 'hash-a', 1)"
     )
     one = eval_retrieval.corpus_hash(db)
     assert one != empty, "adding a document changes the digest"

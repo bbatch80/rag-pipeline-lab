@@ -7,6 +7,10 @@ table-level and already applied.
 
 import pytest
 
+# Every document is bound to a source row (migration 002); the tier decides which.
+SOURCE_FOR_TAG = {"public": 1, "employee": 3, "care_team": 7}
+DOC_TYPE_FOR_TAG = {"public": "brochure", "employee": "sop", "care_team": "clinical_note"}
+
 from raglab.pipeline import run_query
 
 
@@ -15,16 +19,16 @@ def _seed_tiers(db, per_tier=3, embed=False):
     vec = "[" + ",".join(["0.5"] * 1536) + "]"
     for tag in ("public", "employee", "care_team"):
         doc_id = db.execute(
-            "INSERT INTO documents (source_path, title, content_hash, acl_tag) "
-            "VALUES (%s, %s, 'h', %s) RETURNING id",
-            (f"t/{tag}.md", f"doc-{tag}", tag),
+            "INSERT INTO documents (source_path, title, content_hash, acl_tag, source_id) "
+            "VALUES (%s, %s, 'h', %s, %s) RETURNING id",
+            (f"t/{tag}.md", f"doc-{tag}", tag, SOURCE_FOR_TAG[tag]),
         ).fetchone()[0]
         doc_ids[tag] = doc_id
         for i in range(per_tier):
             db.execute(
-                "INSERT INTO chunks (document_id, chunk_index, content, acl_tag, year, embedding) "
-                "VALUES (%s, %s, %s, %s, 2026, %s)",
-                (doc_id, i, f"{tag} secret fact {i}", tag,
+                "INSERT INTO chunks (document_id, chunk_index, content, acl_tag, year, doc_type, embedding) "
+                "VALUES (%s, %s, %s, %s, 2026, %s, %s)",
+                (doc_id, i, f"{tag} secret fact {i}", tag, DOC_TYPE_FOR_TAG[tag],
                  vec if embed else None),
             )
     return doc_ids
@@ -100,12 +104,12 @@ def test_hnsw_survives_heavy_rls_trimming(db):
 
     rng = random.Random(7)
     doc_id = db.execute(
-        "INSERT INTO documents (source_path, title, content_hash, acl_tag) "
-        "VALUES ('t/big.md', 'big', 'h', 'public') RETURNING id"
+        "INSERT INTO documents (source_path, title, content_hash, acl_tag, source_id) "
+        "VALUES ('t/big.md', 'big', 'h', 'public', 1) RETURNING id"
     ).fetchone()[0]
     note_doc = db.execute(
-        "INSERT INTO documents (source_path, title, content_hash, acl_tag) "
-        "VALUES ('t/notes.md', 'notes', 'h', 'care_team') RETURNING id"
+        "INSERT INTO documents (source_path, title, content_hash, acl_tag, source_id) "
+        "VALUES ('t/notes.md', 'notes', 'h', 'care_team', 7) RETURNING id"
     ).fetchone()[0]
 
     def vec():
@@ -116,13 +120,13 @@ def test_hnsw_survives_heavy_rls_trimming(db):
 
     with db.cursor() as cur:
         cur.executemany(
-            "INSERT INTO chunks (document_id, chunk_index, content, acl_tag, year, embedding) "
-            "VALUES (%s, %s, 'x', 'employee', 2026, %s::vector)",
+            "INSERT INTO chunks (document_id, chunk_index, content, acl_tag, year, doc_type, embedding) "
+            "VALUES (%s, %s, 'x', 'employee', 2026, 'sop', %s::vector)",
             [(doc_id, i, vec()) for i in range(300)],
         )
         cur.executemany(
-            "INSERT INTO chunks (document_id, chunk_index, content, acl_tag, year, embedding) "
-            "VALUES (%s, %s, 'note', 'care_team', 2026, %s::vector)",
+            "INSERT INTO chunks (document_id, chunk_index, content, acl_tag, year, doc_type, embedding) "
+            "VALUES (%s, %s, 'note', 'care_team', 2026, 'clinical_note', %s::vector)",
             [(note_doc, i, vec()) for i in range(10)],
         )
     db.execute("DROP INDEX IF EXISTS chunks_embedding_idx")

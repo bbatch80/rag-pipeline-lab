@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = REPO_ROOT / "db" / "schema.sql"
 GOVERNANCE_PATH = REPO_ROOT / "db" / "governance.sql"
+MIGRATIONS_DIR = REPO_ROOT / "db" / "migrations"
 RAW_DIR = REPO_ROOT / "data" / "raw"
 
 load_dotenv(REPO_ROOT / ".env")

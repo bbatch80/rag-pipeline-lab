@@ -8,6 +8,8 @@ import pytest
 
 from raglab.synth import churn, internal_docs, notes
 
+POOL = ("kb/*.md", "formulary/*.md")  # what the sources table flags churn-eligible
+
 
 @pytest.fixture
 def synthea_fixture(db, tmp_path):
@@ -101,8 +103,8 @@ def _seeded_pool(tmp_path):
 def test_churn_is_deterministic(tmp_path):
     a = _seeded_pool(tmp_path / "a")
     b = _seeded_pool(tmp_path / "b")
-    actions_a = churn.run(seed=99, rate=0.5, base_dir=a)
-    actions_b = churn.run(seed=99, rate=0.5, base_dir=b)
+    actions_a = churn.run(seed=99, rate=0.5, base_dir=a, pool_globs=POOL)
+    actions_b = churn.run(seed=99, rate=0.5, base_dir=b, pool_globs=POOL)
     assert actions_a == actions_b
     # And the resulting file contents are identical too.
     for action in actions_a:
@@ -113,7 +115,7 @@ def test_churn_is_deterministic(tmp_path):
 def test_churn_never_touches_golden_anchored(tmp_path):
     base = _seeded_pool(tmp_path)
     anchored = {rel: (base / rel).read_text() for rel in internal_docs.GOLDEN_ANCHORED}
-    churn.run(seed=1, rate=1.0, base_dir=base)  # churn the ENTIRE pool
+    churn.run(seed=1, rate=1.0, base_dir=base, pool_globs=POOL)  # churn the ENTIRE pool
     for rel, before in anchored.items():
         assert (base / rel).exists(), f"golden-anchored {rel} was deleted"
         assert (base / rel).read_text() == before, f"golden-anchored {rel} was mutated"
@@ -121,9 +123,9 @@ def test_churn_never_touches_golden_anchored(tmp_path):
 
 def test_churn_changes_hashes(tmp_path):
     base = _seeded_pool(tmp_path)
-    pool = churn.churn_pool(base)
+    pool = churn.churn_pool(base, POOL)
     before = {p: p.read_text() for p in pool}
-    actions = churn.run(seed=5, rate=0.3, base_dir=base)
+    actions = churn.run(seed=5, rate=0.3, base_dir=base, pool_globs=POOL)
     assert actions
     for action in actions:
         path = base / action.relpath

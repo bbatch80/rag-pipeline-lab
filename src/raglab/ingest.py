@@ -14,7 +14,7 @@ from pathlib import Path
 
 import psycopg
 
-from raglab import config
+from raglab import config, sources
 from raglab.chunking import Chunk, chunk_elements
 from raglab.gates import run_gates
 from raglab.metadata import DocumentMeta, chunk_jsonb
@@ -54,9 +54,10 @@ def _contextualize(chunks: list[Chunk], meta: DocumentMeta) -> list[Chunk]:
         return list(pool.map(one, chunks))
 
 
-def processing_recipe(backend_name: str, doc_type: str = "") -> str:
+def processing_recipe(backend_name: str, phi: bool = False) -> str:
     """The recipe half of a document's identity: what would change the
-    stored chunks even when the source bytes don't."""
+    stored chunks even when the source bytes don't. PHI-bearing sources add
+    the de-id mode, so changing it re-ingests exactly those documents."""
     from raglab import chunking
 
     contextual_mode = os.environ.get("RAGLAB_CONTEXTUAL", "template")
@@ -64,7 +65,7 @@ def processing_recipe(backend_name: str, doc_type: str = "") -> str:
         f"{backend_name}|{chunking.HARD_MAX}/{chunking.SOFT_MAX}/"
         f"{chunking.MERGE_UNDER}|{contextual_mode}"
     )
-    if doc_type == "clinical_note":
+    if phi:
         recipe += f"|deid:{os.environ.get('RAGLAB_DEID', 'tokenize')}"
     return recipe
 
@@ -92,9 +93,8 @@ def ingest_document(
 ) -> str:
     """Returns the action taken: skipped | ingested | reingested | quarantined."""
     source_path = rel_source_path(pdf_path)
-    digest = content_hash(
-        pdf_path, processing_recipe(backend.name, meta.doc_type)
-    )
+    source = sources.load(conn).for_doc_type(meta.doc_type)
+    digest = content_hash(pdf_path, processing_recipe(backend.name, source.phi))
 
     row = conn.execute(
         "SELECT id, content_hash FROM documents WHERE source_path = %s",
@@ -105,7 +105,7 @@ def ingest_document(
 
     elements = backend.parse(pdf_path)
     chunks = chunk_elements(elements)
-    failures = run_gates(chunks, meta.doc_type)
+    failures = run_gates(chunks, source.gate_rules())
 
     if failures:
         conn.execute("DELETE FROM quarantine WHERE source_path = %s", (source_path,))
@@ -119,7 +119,7 @@ def ingest_document(
     # PHI de-identification runs BEFORE context/embedding: protected text
     # must never enter the embedding space or searchable corpus.
     deid_mode = os.environ.get("RAGLAB_DEID", "tokenize")
-    if meta.doc_type == "clinical_note" and deid_mode in ("mask", "tokenize"):
+    if source.phi and deid_mode in ("mask", "tokenize"):
         from raglab import deid
         from raglab.chunking import Chunk as _Chunk
 
@@ -154,18 +154,19 @@ def ingest_document(
         conn.execute("DELETE FROM documents WHERE id = %s", (row[0],))
     doc_id = conn.execute(
         """
-        INSERT INTO documents (source_path, title, content_hash, acl_tag)
-        VALUES (%s, %s, %s, %s) RETURNING id
+        INSERT INTO documents (source_path, title, content_hash, acl_tag, source_id)
+        VALUES (%s, %s, %s, %s, %s) RETURNING id
         """,
-        (source_path, meta.title, digest, meta.acl_tag),
+        (source_path, meta.title, digest, meta.acl_tag, source.source_id),
     ).fetchone()[0]
 
     with conn.cursor() as cur:
         cur.executemany(
             """
             INSERT INTO chunks
-                (document_id, chunk_index, content, year, plan_code, acl_tag, metadata)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                (document_id, chunk_index, content, year, plan_code, acl_tag,
+                 doc_type, metadata)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
             [
                 (
@@ -175,6 +176,7 @@ def ingest_document(
                     meta.year,
                     meta.plan_code,
                     meta.acl_tag,
+                    meta.doc_type,
                     json.dumps(chunk_jsonb(meta, chunk)),
                 )
                 for i, chunk in enumerate(chunks)

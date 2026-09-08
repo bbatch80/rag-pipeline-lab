@@ -32,8 +32,9 @@ CREATE TABLE chunks (
     UNIQUE (document_id, chunk_index)
 );
 
--- Full-text search index. No vector index yet: exact scan is the retrieval
--- baseline until the index benchmark selects an operating point.
+-- Full-text search index. The HNSW vector index is built by `raglab index`
+-- (bulk-load-then-index) with pinned parameters; additive changes to this
+-- schema live in db/migrations/ and are applied by `raglab migrate`.
 CREATE INDEX chunks_tsv_idx ON chunks USING gin (tsv);
 CREATE INDEX chunks_document_id_idx ON chunks (document_id);
 CREATE INDEX chunks_year_plan_idx ON chunks (year, plan_code);

@@ -21,8 +21,8 @@ def _candidate(**kw):
 @pytest.fixture
 def tiny_corpus(db):
     doc_id = db.execute(
-        "INSERT INTO documents (source_path, title, content_hash) "
-        "VALUES ('t/rrf.pdf', 'RRF Fixture', 'h') RETURNING id"
+        "INSERT INTO documents (source_path, title, content_hash, source_id) "
+        "VALUES ('t/rrf.pdf', 'RRF Fixture', 'h', 1) RETURNING id"
     ).fetchone()[0]
     # Three chunks with hand-built vectors: chunk A nearest to the query
     # vector, chunk C matches the rare term 'zephyrite'. Vectors vary in
@@ -38,8 +38,8 @@ def tiny_corpus(db):
     ]
     for i, (content, v) in enumerate(contents):
         db.execute(
-            "INSERT INTO chunks (document_id, chunk_index, content, year, embedding) "
-            "VALUES (%s, %s, %s, 2026, %s::vector)",
+            "INSERT INTO chunks (document_id, chunk_index, content, year, doc_type, embedding) "
+            "VALUES (%s, %s, %s, 2026, 'brochure', %s::vector)",
             (doc_id, i, content, v),
         )
     db.execute("DROP TABLE IF EXISTS lexeme_df")

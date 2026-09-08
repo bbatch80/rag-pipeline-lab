@@ -1,6 +1,6 @@
-"""Per-document quality gates, parameterized by document type. A failed gate
-quarantines the document — it is never ingested. Silent zero-element parses
-are the enemy."""
+"""Per-document quality gates. Rules come from the document's `sources` row
+(see raglab.sources); a failed gate quarantines the document — it is never
+ingested. Silent zero-element parses are the enemy."""
 
 from dataclasses import dataclass
 from statistics import median
@@ -15,22 +15,7 @@ class GateRules:
     expected_terms: tuple[str, ...] = ()
 
 
-DOC_TYPE_RULES = {
-    # A benefits brochure that never mentions these did not parse correctly.
-    "brochure": GateRules(
-        min_chunks=50,
-        median_range=(250, 1600),
-        expected_terms=("out-of-pocket", "deductible"),
-    ),
-    "sop": GateRules(min_chunks=1, median_range=(60, 1900)),
-    "bulletin": GateRules(min_chunks=1, median_range=(60, 1900)),
-    "formulary": GateRules(min_chunks=1),
-    "kb": GateRules(min_chunks=1),
-    "clinical_note": GateRules(min_chunks=1, median_range=(60, 1900)),
-    "rates": GateRules(min_chunks=1),
-}
-
-_DEFAULT = GateRules(min_chunks=1)
+DEFAULT_RULES = GateRules(min_chunks=1)
 
 
 @dataclass(frozen=True)
@@ -39,8 +24,7 @@ class GateFailure:
     detail: str
 
 
-def run_gates(chunks: list[Chunk], doc_type: str = "brochure") -> list[GateFailure]:
-    rules = DOC_TYPE_RULES.get(doc_type, _DEFAULT)
+def run_gates(chunks: list[Chunk], rules: GateRules = DEFAULT_RULES) -> list[GateFailure]:
     failures = []
 
     if len(chunks) < rules.min_chunks:

@@ -25,16 +25,52 @@ def main():
 
 @main.command("init-db")
 def init_db():
-    """Apply db/schema.sql (drop-and-recreate)."""
+    """Fresh database: db/schema.sql (drop-and-recreate), governance, then
+    every migration. Existing databases use `raglab migrate` instead."""
+    from raglab import migrations
+
     receipt = Receipt("raglab init-db")
     try:
         with db.connect() as conn:
             conn.execute(config.SCHEMA_PATH.read_text())
             conn.execute(config.GOVERNANCE_PATH.read_text())
+            conn.commit()
+            conn.execute("DELETE FROM schema_migrations") if _table_exists(conn, "schema_migrations") else None
+            conn.execute("DROP TABLE IF EXISTS sources CASCADE")
+            conn.commit()
+            ran = migrations.apply(conn)
         receipt.add("schema", str(config.SCHEMA_PATH))
         receipt.add("tables", "documents, chunks, quarantine (recreated)")
         receipt.add("governance", "RLS policies + personas + disclosure_log applied")
-    except (OSError, psycopg.Error) as exc:
+        receipt.add("migrations", ", ".join(f"{m.version:03d}_{m.name}" for m in ran) or "none")
+    except (OSError, psycopg.Error, ValueError) as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+def _table_exists(conn, name: str) -> bool:
+    return conn.execute("SELECT to_regclass(%s) IS NOT NULL", (name,)).fetchone()[0]
+
+
+@main.command("migrate")
+def migrate_cmd():
+    """Apply pending db/migrations/*.sql, in order, once each. The corpus
+    stays put: every migration is additive."""
+    from raglab import migrations
+
+    receipt = Receipt("raglab migrate")
+    try:
+        with db.connect() as conn:
+            done_before = migrations.applied(conn)
+            ran = migrations.apply(conn)
+            pending = [m for m in migrations.available() if m.version not in done_before]
+        for m in ran:
+            receipt.add("applied", f"{m.version:03d}_{m.name}")
+        if not ran:
+            receipt.add("applied", "nothing pending")
+        receipt.add("schema version", max((m.version for m in migrations.available()), default=0))
+        assert len(pending) == len(ran)
+    except (OSError, psycopg.Error, ValueError) as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()
 
@@ -66,7 +102,7 @@ def download(full: bool):
 @click.option("--full", is_flag=True, help="Ingest the full corpus, not the dev subset.")
 def ingest_cmd(full: bool):
     """Parse, chunk, gate, and load brochures + internal tier into the database."""
-    from raglab import corpus, ingest, internal_corpus
+    from raglab import corpus, ingest, internal_corpus, sources
     from raglab.parsing.markdown_backend import CsvBackend, MarkdownBackend
     from raglab.parsing.unstructured_backend import UnstructuredBackend
     from raglab.metadata import derive_document_meta
@@ -99,7 +135,7 @@ def ingest_cmd(full: bool):
                 one(conn, cell.pdf_path, derive_document_meta(cell), "pdf",
                     f"{cell.spec.ri}/{cell.year}")
 
-            internal_items = internal_corpus.items()
+            internal_items = internal_corpus.items(sources.load(conn))
             for item in internal_items:
                 one(conn, item.path, item.meta, item.backend_kind, item.meta.title)
             if internal_items:
@@ -162,6 +198,12 @@ def embed_cmd():
     receipt.finish()
 
 
+# Pinned explicitly: pgvector's defaults today, but an index rebuilt on
+# another machine or version must produce the same graph parameters.
+HNSW_M = 16
+HNSW_EF_CONSTRUCTION = 64
+
+
 @main.command("index")
 def index_cmd():
     """Drop and rebuild the HNSW index and lexeme DF stats (bulk-load-then-index)."""
@@ -171,7 +213,8 @@ def index_cmd():
             conn.execute("DROP INDEX IF EXISTS chunks_embedding_idx")
             conn.execute(
                 "CREATE INDEX chunks_embedding_idx ON chunks "
-                "USING hnsw (embedding vector_cosine_ops)"
+                "USING hnsw (embedding vector_cosine_ops) "
+                f"WITH (m = {HNSW_M}, ef_construction = {HNSW_EF_CONSTRUCTION})"
             )
             # Postgres FTS has no IDF; the lexical arm compensates by
             # querying rare terms only. This table is its rarity oracle.
@@ -196,7 +239,7 @@ def index_cmd():
             """)
             n_lexemes = conn.execute("SELECT count(*) FROM lexeme_df").fetchone()[0]
             conn.commit()
-        receipt.add("index", "chunks_embedding_idx (hnsw, cosine, m=16, ef_construction=64)")
+        receipt.add("index", f"chunks_embedding_idx (hnsw, cosine, m={HNSW_M}, ef_construction={HNSW_EF_CONSTRUCTION})")
         receipt.add("lexeme_df", f"{n_lexemes} lexemes")
     except psycopg.Error as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
@@ -257,14 +300,18 @@ def synth_cmd(count: int, seed: int):
 @click.option("--rate", default=0.08, help="Fraction of the churnable pool to touch.")
 def churn_cmd(seed: int, rate: float):
     """Mutate/delete a slice of the churnable internal docs (golden-anchored spared)."""
+    from raglab import sources
     from raglab.synth import churn
+    from raglab.synth.internal_docs import INTERNAL_DIR
 
     receipt = Receipt(f"raglab churn --seed {seed}")
     try:
-        actions = churn.run(seed=seed, rate=rate)
+        with db.connect() as conn:
+            globs = churn.pool_globs_for(sources.load(conn))
+        actions = churn.run(seed=seed, rate=rate, base_dir=INTERNAL_DIR, pool_globs=globs)
         for action in actions:
             receipt.add(action.action, action.relpath)
-        receipt.add("pool size", len(churn.churn_pool()))
+        receipt.add("pool size", len(churn.churn_pool(INTERNAL_DIR, globs)))
         if not actions:
             receipt.fail("churn touched nothing — pool empty?")
     except OSError as exc:

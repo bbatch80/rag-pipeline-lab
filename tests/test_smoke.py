@@ -14,8 +14,8 @@ def _random_vector(seed: int) -> str:
 def _insert_document(db, source_path: str) -> int:
     return db.execute(
         """
-        INSERT INTO documents (source_path, title, content_hash)
-        VALUES (%s, %s, %s) RETURNING id
+        INSERT INTO documents (source_path, title, content_hash, source_id)
+        VALUES (%s, %s, %s, 1) RETURNING id
         """,
         (source_path, "Smoke Test Doc", "hash-smoke"),
     ).fetchone()[0]
@@ -26,8 +26,8 @@ def test_vector_ordering(db):
     for i in range(5):
         db.execute(
             """
-            INSERT INTO chunks (document_id, chunk_index, content, embedding)
-            VALUES (%s, %s, %s, %s::vector)
+            INSERT INTO chunks (document_id, chunk_index, content, doc_type, embedding)
+            VALUES (%s, %s, %s, 'brochure', %s::vector)
             """,
             (doc_id, i, f"chunk {i}", _random_vector(seed=i)),
         )
@@ -58,8 +58,8 @@ def test_fulltext_ranking(db):
     for i, content in enumerate(contents):
         db.execute(
             """
-            INSERT INTO chunks (document_id, chunk_index, content)
-            VALUES (%s, %s, %s)
+            INSERT INTO chunks (document_id, chunk_index, content, doc_type)
+            VALUES (%s, %s, %s, 'brochure')
             """,
             (doc_id, i, content),
         )
@@ -83,7 +83,7 @@ def test_fulltext_ranking(db):
 def test_cascade_delete(db):
     doc_id = _insert_document(db, "smoke/cascade.pdf")
     db.execute(
-        "INSERT INTO chunks (document_id, chunk_index, content) VALUES (%s, 0, 'x')",
+        "INSERT INTO chunks (document_id, chunk_index, content, doc_type) VALUES (%s, 0, 'x', 'brochure')",
         (doc_id,),
     )
     db.execute("DELETE FROM documents WHERE id = %s", (doc_id,))

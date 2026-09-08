@@ -545,6 +545,7 @@ def ablation_cmd():
 def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool):
     """Tier-1 deterministic retrieval eval over the golden set (free)."""
     from raglab import eval_retrieval
+    from raglab.timing import BUDGET_P95_MS
 
     receipt = Receipt("raglab eval-retrieval" + (" --sabotage" if sabotage else ""))
     try:
@@ -560,6 +561,9 @@ def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool):
             receipt.add(f"  {category}", _fmt_slice(metrics))
         for slice_name, metrics in sorted(result.by_source.items()):
             receipt.add(f"  source:{slice_name}", _fmt_slice(metrics))
+        for stage, pct in result.latency.items():
+            budget = f"  (budget p95 ≤ {BUDGET_P95_MS} ms, displayed not gated)" if stage == "total" else ""
+            receipt.add(f"latency {stage}", f"p50 {pct['p50']:.0f} ms  p95 {pct['p95']:.0f} ms{budget}")
         if result.diff_against is not None:
             if result.diff:
                 for metric, d in result.diff.items():

@@ -8,6 +8,7 @@ import psycopg
 
 from raglab import config
 from raglab import stats
+from raglab.timing import BUDGET_P95_MS, percentile
 from raglab.eval_retrieval import THRESHOLDS
 
 OUT_PATH = config.REPO_ROOT / "data" / "eval" / "dashboard.html"
@@ -177,6 +178,17 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
         ).fetchall():
             overall[metric] = float(val)
 
+    latency = {}
+    if latest_run:
+        by_stage: dict = {}
+        for metric, value in conn.execute(
+            "SELECT metric, value FROM eval_scores WHERE run_id = %s AND metric LIKE 'latency_%%'",
+            (latest_run[0],)
+        ).fetchall():
+            by_stage.setdefault(metric.removeprefix("latency_"), []).append(float(value))
+        for stage, vals in by_stage.items():  # same nearest-rank percentile as the receipt
+            latency[stage] = (percentile(vals, 50), percentile(vals, 95))
+
     trend = conn.execute(
         "SELECT r.id, r.config_label, "
         "round(avg(s.value) FILTER (WHERE s.metric = 'hit@5'), 3), "
@@ -231,6 +243,10 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
             val = overall.get(key)
             if val is not None:
                 cards.append(_card(label, val, "gate = 1.0", val >= 1.0))
+    if latency.get("total"):
+        p50, p95 = latency["total"]
+        cards.append(_card("latency p95 (ms)", int(p95),
+                           f"budget ≤ {BUDGET_P95_MS} ms · p50 {p50:.0f} · not gated", None))
     if deid:
         cards.append(_card("de-id recall", float(deid.get("overall_recall", 0)),
                            "measured vs manifest", None))
@@ -300,6 +316,10 @@ set. {stamp}</p>
   &nbsp;·&nbsp; hover a point for the run's config</div>
   {_trend_svg(trend, THRESHOLDS['hit@5'])}
 </div>
+
+<p class="note">Latency per stage over the golden set (ms, p50 / p95):
+{' · '.join(f"{s} {p50:.0f} / {p95:.0f}" for s, (p50, p95) in sorted(latency.items())) or 'no latency data yet'}
+— measured on the machine that ran the eval; the Phase 6 VM is the target.</p>
 
 <h2>Latest run — by question category</h2>
 <table><tr><th>category</th><th colspan="2">hit@5</th><th>precision@5</th>

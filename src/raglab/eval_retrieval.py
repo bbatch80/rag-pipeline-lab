@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 import psycopg
 
 from raglab import ablation, config, deid, rerank, retrieval, router, sources, stats
+from raglab.timing import BUDGET_P95_MS, Stopwatch, percentile
 
 EVAL_SCHEMA_PATH = config.REPO_ROOT / "db" / "eval.sql"
 
@@ -53,6 +54,7 @@ class RetrievalEvalResult:
     overall: dict = field(default_factory=dict)
     overall_ci: dict = field(default_factory=dict)  # metric -> (low, high), 95% Wilson
     diff: dict = field(default_factory=dict)        # vs the previous run: metric -> paired_diff
+    latency: dict = field(default_factory=dict)     # stage -> {p50, p95} ms over the golden set
     diff_against: int | None = None
     failures: list = field(default_factory=list)
     corpus_hash: str = ""
@@ -167,13 +169,20 @@ def run(
                                {"best_score": round(best, 4)}))
             continue
 
-        vector = junk_vector if sabotage else retrieval.embed_query(question)
-        candidates = retrieval.search(conn, question, vector, decision)
-        reranked = rerank.rerank(
-            question, candidates, top_n=10,
-            stratify_years=decision.years,
-        )
+        watch = Stopwatch()
+        with watch.stage("embed"):
+            vector = junk_vector if sabotage else retrieval.embed_query(question)
+        with watch.stage("search"):
+            candidates = retrieval.search(conn, question, vector, decision)
+        with watch.stage("rerank"):
+            reranked = rerank.rerank(
+                question, candidates, top_n=10,
+                stratify_years=decision.years,
+            )
         abstained, best = rerank.abstention_verdict(reranked)
+        snap = watch.snapshot()
+        for stage in ("embed", "search", "rerank", "total"):
+            scores.append((qid, category, f"latency_{stage}", snap[stage], {"host": snap["host"]}))
 
         top5 = reranked[:5]
         relevant_flags = [ablation.is_relevant(c, item["sources"]) for c in top5]
@@ -277,6 +286,11 @@ def _summarize(run_id: int, scores: list[tuple]) -> RetrievalEvalResult:
         result.by_source[slice_name] = _slice(
             [s for s in scores if s[4].get("source", "none") == slice_name]
         )
+
+    for stage in ("embed", "search", "rerank", "total"):
+        vals = [v for _, _, m, v, _ in scores if m == f"latency_{stage}"]
+        if vals:
+            result.latency[stage] = {"p50": percentile(vals, 50), "p95": percentile(vals, 95), "n": len(vals)}
 
     result.overall = {
         "hit@5": mean("hit@5", scores),

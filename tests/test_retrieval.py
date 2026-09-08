@@ -4,7 +4,7 @@ relevance matching, rerank/abstention mechanics (fake model — no weights)."""
 import pytest
 
 from raglab import ablation, rerank
-from raglab.retrieval import Candidate, RRF_K, _lexical_query, search
+from raglab.retrieval import Candidate, RRF_K, search
 from raglab.router import Route
 
 
@@ -42,11 +42,6 @@ def tiny_corpus(db):
             "VALUES (%s, %s, %s, 2026, 'brochure', %s::vector)",
             (doc_id, i, content, v),
         )
-    db.execute("DROP TABLE IF EXISTS lexeme_df")
-    db.execute(
-        "CREATE TABLE lexeme_df AS SELECT word, ndoc "
-        "FROM ts_stat('SELECT tsv FROM chunks')"
-    )
     return db, vec
 
 
@@ -67,19 +62,6 @@ def test_rrf_math_matches_hand_computation(tiny_corpus):
     assert results[0].content.startswith("gamma")
 
 
-def test_lexical_query_keeps_only_rare_terms(tiny_corpus):
-    db, _ = tiny_corpus
-    # 'benefit' appears in 2 of 3 chunks (common at this scale is >1%);
-    # 'zephyrite' in 1. Both are candidates; the rare filter keeps zephyrite.
-    q = _lexical_query(db, "benefit zephyrite")
-    assert "zephyrit" in q  # stemmed lexeme
-    assert "benefit" not in q
-
-
-def test_lexical_query_falls_back_when_no_rare_terms(tiny_corpus):
-    db, _ = tiny_corpus
-    q = _lexical_query(db, "benefit text")
-    assert "benefit" in q and "text" in q, "no rare terms -> use all lexemes"
 
 
 def test_is_relevant_brochure_page_offset():

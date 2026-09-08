@@ -30,17 +30,6 @@ GRANT persona_public, persona_employee, persona_care_team TO raglab;
 GRANT SELECT ON documents, chunks TO
     persona_public, persona_employee, persona_care_team;
 
--- lexeme_df is created (and recreated) by `raglab index`, which re-grants;
--- on a fresh database it does not exist yet.
-DO $$
-BEGIN
-    IF to_regclass('lexeme_df') IS NOT NULL THEN
-        GRANT SELECT ON lexeme_df TO
-            persona_public, persona_employee, persona_care_team;
-    END IF;
-END
-$$;
-
 ALTER TABLE chunks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chunks FORCE ROW LEVEL SECURITY;
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;

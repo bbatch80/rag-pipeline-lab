@@ -51,24 +51,27 @@ minimal search effort; the sweep demonstrates methodology, not necessity.
 ## Retrieval funnel ablation
 
 Query → rule-based router (scope gate, year resolution, plan filters) →
-hybrid search (pgvector + Postgres full-text) → reciprocal rank fusion
-(k=60, rank-only, in SQL) → top-50 → cross-encoder reranker
-(BAAI/bge-reranker-base, local). Measured as hit@5 on a 29-question golden
-set with human-verified source labels (`eval/golden.jsonl`); reproduce with
+hybrid search (pgvector + BM25 via pg_textsearch) → reciprocal rank fusion
+(k=60, rank-only, in SQL; the lexical list weighted ×2 for identifier-shaped
+questions) → top-50 → cross-encoder reranker (BAAI/bge-reranker-base, local).
+Measured as hit@5 on the 29 answerable questions of a 43-question golden set
+with human-verified source labels (`eval/golden.jsonl`); reproduce with
 `raglab ablation`, inspect any query with `raglab explain "<query>"`.
 
-| arm | hit@5 |
-|---|---:|
-| vector only | 0.793 |
-| lexical only | 0.207 |
-| RRF fusion | 0.793 |
-| RRF + rerank | **0.931** |
+| arm | hit@5 (v1: Postgres FTS, rare lexemes) | hit@5 (BM25) |
+|---|---:|---:|
+| vector only | 0.897 | 0.897 |
+| lexical only | 0.379 | **0.828** |
+| RRF fusion | 0.690 | **0.862** |
+| RRF + rerank | 0.966 | 0.966 |
 
-Findings: the reranker delivers the decisive lift; fusion ties vector on
-natural-language questions and wins on identifier-style queries (exact
-member IDs, dollar amounts, enrollment codes hit rank 1 via the lexical
-arm — Postgres FTS lacks IDF, so the lexical arm queries rare lexemes only,
-using a document-frequency table rebuilt at index time). The router's scope
+Findings: the reranker delivers the decisive lift. v1's lexical arm was
+Postgres full-text ranking (`ts_rank_cd`, no IDF) restricted to rare lexemes
+as a workaround; replacing it with real BM25 (IDF + length normalization)
+took the lexical arm from 11/29 to 24/29 and the fused list from 20/29 to
+25/29 before reranking, with the end-to-end number unchanged — the reranker
+had been rescuing the old arm's misses. Identifier-style queries (member IDs,
+claim numbers, bulletin codes) hit rank 1 via the lexical arm. The router's scope
 gate resolved 6/6 out-of-domain/out-of-year probes without retrieval.
 Abstention threshold (0.5) separates answerable questions (best rerank
 score ≥ 0.72 across the golden set) from absent-topic questions (0.30);

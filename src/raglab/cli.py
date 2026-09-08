@@ -209,7 +209,7 @@ HNSW_EF_CONSTRUCTION = 64
 
 @main.command("index")
 def index_cmd():
-    """Drop and rebuild the HNSW index and lexeme DF stats (bulk-load-then-index)."""
+    """Drop and rebuild the HNSW index; reindex BM25 (bulk-load-then-index)."""
     receipt = Receipt("raglab index")
     try:
         with db.connect() as conn:
@@ -219,31 +219,11 @@ def index_cmd():
                 "USING hnsw (embedding vector_cosine_ops) "
                 f"WITH (m = {HNSW_M}, ef_construction = {HNSW_EF_CONSTRUCTION})"
             )
-            # Postgres FTS has no IDF; the lexical arm compensates by
-            # querying rare terms only. This table is its rarity oracle.
-            conn.execute("DROP TABLE IF EXISTS lexeme_df")
-            conn.execute(
-                "CREATE TABLE lexeme_df AS "
-                "SELECT word, ndoc FROM ts_stat('SELECT tsv FROM chunks')"
-            )
-            conn.execute("CREATE INDEX lexeme_df_word_idx ON lexeme_df (word)")
-            # Recreating the table dropped its grants; personas query it
-            # during retrieval, so re-grant here or the next persona query
-            # fails with permission denied.
-            conn.execute("""
-                DO $$
-                BEGIN
-                    IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'persona_public') THEN
-                        GRANT SELECT ON lexeme_df TO
-                            persona_public, persona_employee, persona_care_team;
-                    END IF;
-                END
-                $$
-            """)
-            n_lexemes = conn.execute("SELECT count(*) FROM lexeme_df").fetchone()[0]
+            # BM25 (pg_textsearch) is fastest built after a bulk load too.
+            conn.execute("REINDEX INDEX chunks_bm25_idx")
             conn.commit()
         receipt.add("index", f"chunks_embedding_idx (hnsw, cosine, m={HNSW_M}, ef_construction={HNSW_EF_CONSTRUCTION})")
-        receipt.add("lexeme_df", f"{n_lexemes} lexemes")
+        receipt.add("bm25", "chunks_bm25_idx reindexed (pg_textsearch, english)")
     except psycopg.Error as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()
@@ -529,7 +509,7 @@ def ablation_cmd():
         misses = [
             f"{r['id']}:{','.join(a for a in ('vector','bm25','rrf','rrf+rerank') if not r[a])}"
             for r in report.per_question
-            if not all(r[a] for a in ("vector", "bm25", "rrf", "rrf+rerank"))
+            if not all(r[a] for a in ("vector", "lexical", "rrf", "rrf+rerank"))
         ]
         for miss in misses:
             receipt.add("miss", miss)

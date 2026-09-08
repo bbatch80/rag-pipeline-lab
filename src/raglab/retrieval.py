@@ -150,6 +150,9 @@ def _hybrid(
     weighted by lexical_weight), top fused_limit."""
     # Lexical arm: BM25 via pg_textsearch. <@> is the negative BM25 score
     # (lower = better); the index is named so the filtered scan still uses it.
+    # Non-matching chunks score 0, not NULL: keep only real matches (< 0) so
+    # they get no lexical rank — matches sort first, so filtering after LIMIT
+    # never drops a match.
     txt_arm = f"""
             SELECT c.id, ROW_NUMBER() OVER (ORDER BY c.neg_score) AS rank
             FROM (
@@ -158,7 +161,8 @@ def _hybrid(
                 WHERE true{where}
                 ORDER BY neg_score
                 LIMIT %s
-            ) c"""
+            ) c
+            WHERE c.neg_score < 0"""
     sql = f"""
         WITH vec AS (
             SELECT c.id, ROW_NUMBER() OVER (ORDER BY c.dist) AS rank

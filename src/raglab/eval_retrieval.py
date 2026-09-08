@@ -23,6 +23,7 @@ persona pipeline — RLS, vault translation, disclosure — in both directions):
 - allow_hit        — the authorized answer cites the expected document
 """
 
+import hashlib
 import subprocess
 from dataclasses import dataclass, field
 
@@ -50,6 +51,7 @@ class RetrievalEvalResult:
     by_category: dict = field(default_factory=dict)
     overall: dict = field(default_factory=dict)
     failures: list = field(default_factory=list)
+    corpus_hash: str = ""
 
 
 def _git_sha() -> str:
@@ -62,6 +64,16 @@ def _git_sha() -> str:
         return ""
 
 
+def corpus_hash(conn: psycopg.Connection) -> str:
+    """Digest of the corpus as ingested: sha256 over every document's
+    content_hash in source_path order. Changes when any document is added,
+    removed, or re-ingested under a different recipe; stable otherwise."""
+    row = conn.execute(
+        "SELECT string_agg(content_hash, ',' ORDER BY source_path) FROM documents"
+    ).fetchone()
+    return hashlib.sha256((row[0] or "").encode()).hexdigest()
+
+
 def run(
     conn: psycopg.Connection,
     config_label: str = "baseline",
@@ -70,10 +82,11 @@ def run(
     """sabotage=True replaces query vectors with a fixed junk vector — the
     discrimination check: a broken retriever MUST score badly."""
     conn.execute(EVAL_SCHEMA_PATH.read_text())
+    digest = corpus_hash(conn)
     run_id = conn.execute(
-        "INSERT INTO eval_runs (kind, config_label, git_sha) "
-        "VALUES ('retrieval', %s, %s) RETURNING id",
-        (config_label if not sabotage else f"{config_label}-SABOTAGE", _git_sha()),
+        "INSERT INTO eval_runs (kind, config_label, git_sha, corpus_hash) "
+        "VALUES ('retrieval', %s, %s, %s) RETURNING id",
+        (config_label if not sabotage else f"{config_label}-SABOTAGE", _git_sha(), digest),
     ).fetchone()[0]
 
     scores: list[tuple] = []  # (qid, category, metric, value, detail)
@@ -167,7 +180,9 @@ def run(
             [(run_id, q, c, m, v, _json.dumps(d)) for q, c, m, v, d in scores],
         )
     conn.commit()
-    return _summarize(run_id, scores)
+    result = _summarize(run_id, scores)
+    result.corpus_hash = digest
+    return result
 
 
 def _summarize(run_id: int, scores: list[tuple]) -> RetrievalEvalResult:

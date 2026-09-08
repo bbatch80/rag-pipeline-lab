@@ -25,3 +25,8 @@ CREATE TABLE IF NOT EXISTS eval_scores (
 
 CREATE INDEX IF NOT EXISTS eval_scores_run_idx ON eval_scores (run_id);
 CREATE INDEX IF NOT EXISTS eval_scores_metric_idx ON eval_scores (metric);
+
+-- Every run names the corpus it measured: a digest over the documents'
+-- content hashes, so a number can be traced to a corpus version the same
+-- way git_sha traces it to a code version.
+ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS corpus_hash text;

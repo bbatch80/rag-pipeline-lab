@@ -2,6 +2,7 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
@@ -44,3 +45,21 @@ jobs:
           key: docling-models-${{ hashFiles('uv.lock') }}
       - run: test -d ~/.cache/docling/models || uv run docling-tools models download
       - run: uv run pytest tests/test_parser_backends.py -v
+
+  # Retrieval eval gate. Runs on the self-hosted runner beside the real,
+  # fully indexed database (hosted runners start empty and hold no keys).
+  # A regression below any threshold in eval_retrieval.THRESHOLDS fails
+  # the job, and branch protection makes that block the merge.
+  gate:
+    runs-on: self-hosted
+    concurrency:
+      group: raglab-gate
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          python-version: "3.12"
+      - run: uv sync --group rerank
+      - run: uv run raglab status
+      - run: uv run raglab eval-retrieval --gate --label ci

@@ -463,6 +463,13 @@ def explain_cmd(query: str, persona: str | None, generate: bool):
     for c in by_txt[:3]:
         click.echo(_line(c, f"t#{c.text_rank} "))
 
+    by_source: dict = {}
+    for c in candidates:
+        by_source.setdefault(c.doc_type, [0, 0])
+        by_source[c.doc_type][0] += 1
+        by_source[c.doc_type][1] += int(c.floor)
+    click.echo(f"\n[3b] POOL BY SOURCE (floor={retrieval.SOURCE_FLOOR}): " + ", ".join(
+        f"{t}={n}" + (f" (+{f} floor)" if f else "") for t, (n, f) in sorted(by_source.items())))
     click.echo(f"\n[4] RRF FUSION (k={retrieval.RRF_K}) top 5 of {len(candidates)}")
     for c in sorted(candidates, key=lambda x: -x.rrf_score)[:5]:
         v = f"1/(60+{c.vector_rank})" if c.vector_rank else "0"
@@ -550,6 +557,8 @@ def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool):
                 receipt.add(metric, f"{value:.3f}")
         for category, metrics in sorted(result.by_category.items()):
             receipt.add(f"  {category}", "  ".join(f"{m}={v}" for m, v in metrics.items()))
+        for slice_name, metrics in sorted(result.by_source.items()):
+            receipt.add(f"  source:{slice_name}", "  ".join(f"{m}={v}" for m, v in metrics.items()))
         for failure in result.failures:
             if gate and not sabotage:
                 receipt.fail(f"THRESHOLD: {failure}")

@@ -2,6 +2,9 @@
 
 import os
 import re
+import subprocess
+
+from pathlib import Path
 
 import click
 import psycopg
@@ -808,3 +811,60 @@ def payload_cmd(payload_id: str):
         )
     click.echo(f"# persona={persona} source={source} asked_at={asked_at}")
     click.echo(json.dumps(payload, indent=2, default=str))
+
+
+@main.command("backup")
+@click.option("--tag", default="", help="Suffix for the file name, e.g. pre-pr4.")
+def backup_cmd(tag: str):
+    """Dump the whole database to data/backups/ (pg_dump inside the container)."""
+    from raglab import backup
+
+    receipt = Receipt("raglab backup")
+    try:
+        path = backup.create(tag)
+        receipt.add("file", str(path.relative_to(config.REPO_ROOT)))
+        receipt.add("size", f"{path.stat().st_size / 1e6:.1f} MB")
+        receipt.add("tables", ", ".join(backup.inventory(path)))
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", b"") or b""
+        receipt.fail(f"{type(exc).__name__}: {detail.decode().strip() or exc}")
+    receipt.finish()
+
+
+@main.command("backups")
+def backups_cmd():
+    """List backups, newest last."""
+    from raglab import backup
+
+    receipt = Receipt("raglab backups")
+    files = backup.available()
+    for path in files:
+        receipt.add(path.name, f"{path.stat().st_size / 1e6:.1f} MB")
+    if not files:
+        receipt.add("backups", "none yet — run `raglab backup`")
+    receipt.finish()
+
+
+@main.command("restore")
+@click.argument("file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--yes", is_flag=True, help="Required: this replaces the live database.")
+def restore_cmd(file: Path, yes: bool):
+    """Replace the live database with a backup file."""
+    from raglab import backup
+
+    receipt = Receipt(f"raglab restore {file.name}")
+    if not yes:
+        receipt.fail("refusing without --yes: restore drops and replaces every table")
+        receipt.finish()
+        return
+    try:
+        backup.restore(file)
+        with db.connect() as conn:
+            docs, chunks = conn.execute(
+                "SELECT (SELECT count(*) FROM documents), (SELECT count(*) FROM chunks)"
+            ).fetchone()
+        receipt.add("restored", f"{docs} documents, {chunks} chunks")
+    except (OSError, subprocess.CalledProcessError, psycopg.Error) as exc:
+        detail = getattr(exc, "stderr", b"") or b""
+        receipt.fail(f"{type(exc).__name__}: {detail.decode().strip() or exc}")
+    receipt.finish()

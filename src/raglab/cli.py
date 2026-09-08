@@ -37,6 +37,7 @@ def init_db():
         with db.connect() as conn:
             conn.execute(config.SCHEMA_PATH.read_text())
             conn.execute(config.GOVERNANCE_PATH.read_text())
+            conn.execute((config.REPO_ROOT / "db" / "eval.sql").read_text())  # additive
             conn.commit()
             conn.execute("DELETE FROM schema_migrations") if _table_exists(conn, "schema_migrations") else None
             conn.execute("DROP TABLE IF EXISTS sources CASCADE")
@@ -45,6 +46,7 @@ def init_db():
         receipt.add("schema", str(config.SCHEMA_PATH))
         receipt.add("tables", "documents, chunks, quarantine (recreated)")
         receipt.add("governance", "RLS policies + personas + disclosure_log applied")
+        receipt.add("eval store", "eval_runs, eval_scores (additive)")
         receipt.add("migrations", ", ".join(f"{m.version:03d}_{m.name}" for m in ran) or "none")
     except (OSError, psycopg.Error, ValueError) as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")

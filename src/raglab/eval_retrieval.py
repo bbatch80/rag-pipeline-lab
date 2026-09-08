@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 
 import psycopg
 
-from raglab import ablation, config, deid, rerank, retrieval, router, sources
+from raglab import ablation, config, deid, rerank, retrieval, router, sources, stats
 
 EVAL_SCHEMA_PATH = config.REPO_ROOT / "db" / "eval.sql"
 
@@ -51,6 +51,9 @@ class RetrievalEvalResult:
     by_category: dict = field(default_factory=dict)
     by_source: dict = field(default_factory=dict)
     overall: dict = field(default_factory=dict)
+    overall_ci: dict = field(default_factory=dict)  # metric -> (low, high), 95% Wilson
+    diff: dict = field(default_factory=dict)        # vs the previous run: metric -> paired_diff
+    diff_against: int | None = None
     failures: list = field(default_factory=list)
     corpus_hash: str = ""
 
@@ -206,7 +209,53 @@ def run(
     conn.commit()
     result = _summarize(run_id, scores)
     result.corpus_hash = digest
+    if not sabotage:
+        previous = conn.execute(
+            "SELECT max(id) FROM eval_runs WHERE kind = 'retrieval' "
+            "AND config_label NOT LIKE '%%SABOTAGE%%' AND id < %s", (run_id,)
+        ).fetchone()[0]
+        if previous is not None:
+            result.diff_against = previous
+            result.diff = diff_runs(conn, previous, run_id)
     return result
+
+
+def diff_runs(conn: psycopg.Connection, before: int, after: int) -> dict:
+    """Which questions flipped, per 0/1 metric, between two eval runs. The
+    number that moved is never the story; the questions that flipped are."""
+    out = {}
+    for metric in sorted(stats.BINARY_METRICS):
+        rows = conn.execute(
+            "SELECT run_id, question_id, value FROM eval_scores "
+            "WHERE metric = %s AND run_id IN (%s, %s)", (metric, before, after)
+        ).fetchall()
+        a = {q: float(v) for r, q, v in rows if r == before}
+        b = {q: float(v) for r, q, v in rows if r == after}
+        if a or b:
+            d = stats.paired_diff(a, b)
+            if d["gained"] or d["lost"]:
+                out[metric] = d
+    return out
+
+
+_SLICE_METRICS = ("hit@5", "precision@5", "source_coverage", "gate_correct",
+                  "deny_abstained", "allow_answered", "allow_hit")
+
+
+def _slice(rows: list[tuple]) -> dict:
+    """Metrics for one slice of scores: mean, and for 0/1 metrics a 95%
+    Wilson interval as `<metric>_ci`; `n` = distinct questions."""
+    out = {}
+    for metric in _SLICE_METRICS:
+        vals = [v for _, _, m, v, _ in rows if m == metric]
+        if not vals:
+            continue
+        out[metric] = round(sum(vals) / len(vals), 3)
+        if metric in stats.BINARY_METRICS:
+            low, high = stats.wilson(int(round(sum(vals))), len(vals))
+            out[f"{metric}_ci"] = (round(low, 3), round(high, 3))
+    out["n"] = len({q for q, *_ in rows})
+    return out
 
 
 def _summarize(run_id: int, scores: list[tuple]) -> RetrievalEvalResult:
@@ -218,27 +267,16 @@ def _summarize(run_id: int, scores: list[tuple]) -> RetrievalEvalResult:
 
     categories = sorted({c for _, c, _, _, _ in scores})
     for category in categories:
-        rows = [s for s in scores if s[1] == category]
-        result.by_category[category] = {
-            m: round(mean(m, rows), 3)
-            for m in ("hit@5", "precision@5", "source_coverage", "gate_correct",
-                      "deny_abstained", "allow_answered", "allow_hit")
-            if mean(m, rows) is not None
-        }
+        result.by_category[category] = _slice([s for s in scores if s[1] == category])
 
     # Per-source slice: which source the expected evidence lives in. Every
     # retrieval metric, reported by source, so a new source cannot degrade an
     # old one without a number moving.
     slices = sorted({d.get("source", "none") for *_, d in scores})
     for slice_name in slices:
-        rows = [s for s in scores if s[4].get("source", "none") == slice_name]
-        result.by_source[slice_name] = {
-            m: round(mean(m, rows), 3)
-            for m in ("hit@5", "precision@5", "source_coverage", "gate_correct",
-                      "deny_abstained", "allow_answered", "allow_hit")
-            if mean(m, rows) is not None
-        }
-        result.by_source[slice_name]["n"] = len({s[0] for s in rows})
+        result.by_source[slice_name] = _slice(
+            [s for s in scores if s[4].get("source", "none") == slice_name]
+        )
 
     result.overall = {
         "hit@5": mean("hit@5", scores),
@@ -247,6 +285,12 @@ def _summarize(run_id: int, scores: list[tuple]) -> RetrievalEvalResult:
         "gate_correct": mean("gate_correct", scores),
         "wrong_abstention_rate": mean("wrong_abstention", scores),
     }
+    for metric in ("hit@5", "gate_correct"):
+        vals = [v for _, _, m, v, _ in scores if m == metric]
+        if vals:
+            result.overall_ci[metric] = tuple(
+                round(x, 3) for x in stats.wilson(int(round(sum(vals))), len(vals))
+            )
 
     if result.overall["hit@5"] is not None and result.overall["hit@5"] < THRESHOLDS["hit@5"]:
         result.failures.append(

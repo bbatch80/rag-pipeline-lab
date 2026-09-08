@@ -7,6 +7,7 @@ from pathlib import Path
 import psycopg
 
 from raglab import config
+from raglab import stats
 from raglab.eval_retrieval import THRESHOLDS
 
 OUT_PATH = config.REPO_ROOT / "data" / "eval" / "dashboard.html"
@@ -59,7 +60,8 @@ td:first-child, th:first-child { text-align: left; }
 .bar i { position: absolute; inset: 0 auto 0 0; border-radius: 4px;
   background: var(--teal); }
 .bar.low i { background: var(--bad); }
-td.num { width: 4.2rem; }
+td.num { width: 5.4rem; }
+.ci { font-size: .72rem; color: var(--muted, #777); white-space: nowrap; }
 details { margin-top: .8rem; }
 summary { cursor: pointer; color: var(--muted); font-size: .82rem; }
 .note { color: var(--muted); font-size: .78rem; margin-top: .4rem; }
@@ -148,13 +150,27 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
         "ORDER BY id DESC LIMIT 1"
     ).fetchone()
 
-    overall, by_cat = {}, {}
+    overall, by_cat, by_source, counts = {}, {}, {}, {}
     if latest_run:
-        for cat, metric, val in conn.execute(
-            "SELECT category, metric, round(avg(value), 3) FROM eval_scores "
-            "WHERE run_id = %s GROUP BY 1, 2", (latest_run[0],)
+        for cat, metric, val, n, hits in conn.execute(
+            "SELECT category, metric, round(avg(value), 3), count(*), sum(value) "
+            "FROM eval_scores WHERE run_id = %s GROUP BY 1, 2", (latest_run[0],)
         ).fetchall():
             by_cat.setdefault(cat, {})[metric] = float(val)
+            counts[("cat", cat, metric)] = (int(n), int(round(float(hits))))
+        for src, metric, val, n, hits in conn.execute(
+            "SELECT coalesce(detail->>'source', 'none'), metric, round(avg(value), 3), "
+            "count(*), sum(value) FROM eval_scores WHERE run_id = %s GROUP BY 1, 2",
+            (latest_run[0],)
+        ).fetchall():
+            by_source.setdefault(src, {})[metric] = float(val)
+            counts[("src", src, metric)] = (int(n), int(round(float(hits))))
+        hit_n = conn.execute(
+            "SELECT count(*), sum(value) FROM eval_scores WHERE run_id = %s AND metric = 'hit@5'",
+            (latest_run[0],)
+        ).fetchone()
+        if hit_n and hit_n[0]:
+            overall["hit@5_ci"] = stats.wilson(int(round(float(hit_n[1]))), int(hit_n[0]))
         for metric, val in conn.execute(
             "SELECT metric, round(avg(value), 3) FROM eval_scores "
             "WHERE run_id = %s GROUP BY 1", (latest_run[0],)
@@ -200,8 +216,9 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
     cards = []
     if overall:
         hit = overall.get("hit@5")
-        cards.append(_card("hit@5", hit, f"gate ≥ {THRESHOLDS['hit@5']}",
-                           hit is not None and hit >= THRESHOLDS["hit@5"]))
+        ci = overall.get("hit@5_ci")
+        rule = f"gate ≥ {THRESHOLDS['hit@5']}" + (f" · 95% CI {ci[0]:.2f}–{ci[1]:.2f}" if ci else "")
+        cards.append(_card("hit@5", hit, rule, hit is not None and hit >= THRESHOLDS["hit@5"]))
         gate = overall.get("gate_correct")
         cards.append(_card("scope gate", gate, "gate = 1.0",
                            gate is not None and gate >= 1.0))
@@ -223,17 +240,29 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
     # ---- per-category table -------------------------------------------
     metrics_order = ["hit@5", "precision@5", "source_coverage", "gate_correct",
                      "deny_abstained", "allow_answered", "allow_hit"]
-    cat_rows = []
-    for cat in sorted(by_cat):
-        cells = [f"<td>{cat}</td>"]
-        for m in metrics_order:
-            v = by_cat[cat].get(m)
-            cells.append(
-                "<td>–</td>" if v is None else
-                f'<td class="num">{v:.3f}</td><td>{_pct_bar(v)}</td>'
-                if m == "hit@5" else f"<td>{v:.3f}</td>"
-            )
-        cat_rows.append("<tr>" + "".join(cells) + "</tr>")
+    def _slice_rows(kind: str, table: dict) -> list[str]:
+        rows_html = []
+        for name in sorted(table):
+            cells = [f"<td>{name}</td>"]
+            for m in metrics_order:
+                v = table[name].get(m)
+                if v is None:
+                    cells.append("<td>–</td>")
+                    continue
+                if m == "hit@5":
+                    n, hits = counts.get((kind, name, m), (0, 0))
+                    low, high = stats.wilson(hits, n) if n else (0.0, 1.0)
+                    cells.append(
+                        f'<td class="num">{v:.3f}<br><span class="ci">{low:.2f}–{high:.2f} (n={n})</span></td>'
+                        f"<td>{_pct_bar(v)}</td>"
+                    )
+                else:
+                    cells.append(f"<td>{v:.3f}</td>")
+            rows_html.append("<tr>" + "".join(cells) + "</tr>")
+        return rows_html
+
+    cat_rows = _slice_rows("cat", by_cat)
+    source_rows = _slice_rows("src", by_source)
 
     gen_rows = "".join(
         f"<tr><td>{g}</td><td>{j}</td><td>{m}</td><td>{v:.3f}</td><td>{n}</td></tr>"
@@ -277,7 +306,16 @@ set. {stamp}</p>
 <th>coverage</th><th>gate</th><th>deny</th><th>allow</th><th>allow_hit</th></tr>
 {''.join(cat_rows)}</table>
 <p class="note">unanswerable is scored on the gate; persona_negative on
-deny/allow — dashes are metrics that don't apply to a category.</p>
+deny/allow — dashes are metrics that don't apply to a category. Under each
+hit@5: 95% Wilson interval and question count — a slice under ~8 questions
+is low-power, not hidden.</p>
+
+<h2>Latest run — by expected source</h2>
+<table><tr><th>source</th><th colspan="2">hit@5</th><th>precision@5</th>
+<th>coverage</th><th>gate</th><th>deny</th><th>allow</th><th>allow_hit</th></tr>
+{''.join(source_rows)}</table>
+<p class="note">The source(s) a question's expected evidence lives in. A new
+source cannot degrade an old one without a number moving here.</p>
 
 <h2>PHI de-identification (latest measured run)</h2>
 <table><tr><th>entity type</th><th colspan="2">detection recall</th></tr>

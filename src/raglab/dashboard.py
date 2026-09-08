@@ -189,6 +189,14 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
         for stage, vals in by_stage.items():  # same nearest-rank percentile as the receipt
             latency[stage] = (percentile(vals, 50), percentile(vals, 95))
 
+    rls = conn.execute(
+        "SELECT category, max(value) FILTER (WHERE metric = 'recall_mean'), "
+        "max(value) FILTER (WHERE metric = 'recall_min'), "
+        "max(value) FILTER (WHERE metric = 'underfilled'), max(detail->>'visible'), max(detail->>'total') "
+        "FROM eval_scores WHERE run_id = (SELECT max(id) FROM eval_runs WHERE kind = 'recall_rls') "
+        "GROUP BY category ORDER BY category"
+    ).fetchall()
+
     trend = conn.execute(
         "SELECT r.id, r.config_label, "
         "round(avg(s.value) FILTER (WHERE s.metric = 'hit@5'), 3), "
@@ -320,6 +328,9 @@ set. {stamp}</p>
 <p class="note">Latency per stage over the golden set (ms, p50 / p95):
 {' · '.join(f"{s} {p50:.0f} / {p95:.0f}" for s, (p50, p95) in sorted(latency.items())) or 'no latency data yet'}
 — measured on the machine that ran the eval; the Phase 6 VM is the target.</p>
+
+<p class="note">Vector recall under row-level security, per persona (latest measurement, recall@k vs exact scan as the same persona):
+{' · '.join(f"{c} sees {v}/{t}: mean {float(m):.3f}, min {float(mn):.3f}, underfilled {int(float(u))}" for c, m, mn, u, v, t in rls) or 'not measured yet'}</p>
 
 <h2>Latest run — by question category</h2>
 <table><tr><th>category</th><th colspan="2">hit@5</th><th>precision@5</th>

@@ -1,5 +1,6 @@
 """raglab command-line interface."""
 
+import json
 import os
 import re
 import subprocess
@@ -582,6 +583,48 @@ def _fmt_diff(d: dict) -> str:
     if d["lost"]:
         bits.append("LOST " + ", ".join(d["lost"]))
     return "; ".join(bits) + f"  (n={d['n']})"
+
+
+@main.command("recall-rls")
+@click.option("--queries", default=100, help="Sampled chunk vectors used as queries.")
+@click.option("--k", default=50, help="Neighbors per query (the retrieval pool size).")
+def recall_rls_cmd(queries: int, k: int):
+    """Vector recall under row-level security, per persona, vs exact scan.
+    Recorded as an eval run (kind recall_rls) so the dashboard can show it."""
+    from raglab import benchmark, eval_retrieval
+    from raglab.pipeline import PERSONAS
+
+    receipt = Receipt("raglab recall-rls")
+    try:
+        with db.connect() as conn:
+            tiers = benchmark.recall_under_rls(conn, PERSONAS, n_queries=queries, k=k)
+            conn.execute(eval_retrieval.EVAL_SCHEMA_PATH.read_text())
+            run_id = conn.execute(
+                "INSERT INTO eval_runs (kind, config_label, git_sha, corpus_hash) "
+                "VALUES ('recall_rls', %s, %s, %s) RETURNING id",
+                (f"k={k} ef=40", eval_retrieval._git_sha(), eval_retrieval.corpus_hash(conn)),
+            ).fetchone()[0]
+            with conn.cursor() as cur:
+                cur.executemany(
+                    "INSERT INTO eval_scores (run_id, question_id, category, metric, value, detail) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    [(run_id, "all", t.persona, m, v, json.dumps({"visible": t.visible, "total": t.total, "k": t.k}))
+                     for t in tiers
+                     for m, v in (("recall_mean", t.recall), ("recall_min", t.min_recall),
+                                  ("underfilled", t.underfilled), ("median_ms", t.median_ms))],
+                )
+            conn.commit()
+        receipt.add("run id", run_id)
+        for t in tiers:
+            receipt.add(
+                f"{t.persona:9s}",
+                f"sees {t.visible}/{t.total} ({t.visible / max(1, t.total):.1%})  "
+                f"recall@{t.k} mean {t.recall:.3f} min {t.min_recall:.3f}  "
+                f"underfilled {t.underfilled}/{t.n_queries}  median {t.median_ms:.1f} ms",
+            )
+    except (psycopg.Error, ValueError) as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
 
 
 @main.command("eval-diff")

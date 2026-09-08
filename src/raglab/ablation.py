@@ -78,12 +78,12 @@ def _arm_orderings(candidates: list[retrieval.Candidate]) -> dict:
         key=lambda c: c.text_rank,
     )
     by_rrf = sorted(candidates, key=lambda c: -c.rrf_score)
-    return {"vector": by_vec, "bm25": by_txt, "rrf": by_rrf}
+    return {"vector": by_vec, "lexical": by_txt, "rrf": by_rrf}
 
 
 def run(conn: psycopg.Connection, k: int = HIT_K) -> AblationReport:
     report = AblationReport(
-        arms={a: ArmResult() for a in ("vector", "bm25", "rrf", "rrf+rerank")}
+        arms={a: ArmResult() for a in ("vector", "lexical", "rrf", "rrf+rerank")}
     )
     for item in load_golden():
         if item["category"] in ("persona_negative", "two_lane"):

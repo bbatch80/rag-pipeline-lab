@@ -67,10 +67,10 @@ def test_fulltext_ranking(db):
     rows = db.execute(
         """
         SELECT chunk_index,
-               ts_rank(tsv, websearch_to_tsquery('english', 'deductible')) AS rank
+               -(content <@> to_bm25query('deductible', 'chunks_bm25_idx')) AS rank
         FROM chunks
         WHERE document_id = %s
-          AND tsv @@ websearch_to_tsquery('english', 'deductible')
+          AND -(content <@> to_bm25query('deductible', 'chunks_bm25_idx')) > 0
         ORDER BY rank DESC
         """,
         (doc_id,),

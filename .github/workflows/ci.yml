@@ -8,22 +8,18 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      db:
-        image: pgvector/pgvector:pg17
-        env:
-          POSTGRES_USER: raglab
-          POSTGRES_PASSWORD: raglab
-          POSTGRES_DB: raglab
-        ports:
-          - 5433:5432
-        options: >-
-          --health-cmd "pg_isready -U raglab -d raglab"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 15
     steps:
       - uses: actions/checkout@v5
+      # The database image carries pg_textsearch, so it is built here rather
+      # than pulled as a service container.
+      - run: docker build -t raglab-db:pg17 db
+      - run: |
+          docker run -d --name raglab-db -p 5433:5432 \
+            -e POSTGRES_USER=raglab -e POSTGRES_PASSWORD=raglab -e POSTGRES_DB=raglab \
+            raglab-db:pg17
+          for i in $(seq 1 30); do
+            docker exec raglab-db pg_isready -U raglab -d raglab && break; sleep 2
+          done
       - uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: "3.12"

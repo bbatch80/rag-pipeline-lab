@@ -1,4 +1,5 @@
-"""Hybrid retrieval: vector + full-text fused by reciprocal rank fusion.
+"""Hybrid retrieval: vector + BM25 (pg_textsearch) fused by reciprocal rank
+fusion.
 
 RRF fuses on rank only — score(d) = sum(1 / (K + rank_i(d))) — which
 sidesteps score calibration entirely: cosine distances and BM25 scores are
@@ -7,6 +8,8 @@ is the feature, so it is not a tuning knob.
 """
 
 from dataclasses import dataclass, field
+
+import re
 
 import psycopg
 
@@ -21,6 +24,11 @@ RRF_K = 60
 # lost its rank-5 hit to an SOP scored 0.999). Switched on as a measured
 # A/B when the first large source lands (Phase 1, call notes).
 SOURCE_FLOOR = 0
+# Identifier-shaped questions (member IDs, claim numbers, bulletin codes —
+# 7+ chars with 3+ digits, so "30-day" doesn't count) are exact-match
+# questions: the lexical list gets this weight in RRF, the vector list 1.
+ID_SHAPED = re.compile(r"\b(?=(?:[A-Za-z-]*\d){3})[A-Za-z0-9-]{7,}\b")
+LEXICAL_WEIGHT_ID = 2.0
 PER_METHOD_LIMIT = 100
 FUSED_LIMIT = 50
 EF_SEARCH = 40  # Phase 2 benchmark operating point
@@ -44,47 +52,6 @@ class Candidate:
     content_hash: str = ""
     doc_type: str = ""
     floor: bool = False  # admitted by the per-source floor, not the global pool
-
-
-# A lexeme is "informative" if it appears in fewer than this fraction of
-# chunks. Compensates for Postgres FTS lacking IDF: querying rare terms only
-# stops common-word density from drowning exact-identifier matches. 1% is
-# tight on purpose — moderately-common words ('id', 'deductible') belong to
-# the vector arm; the lexical arm exists for near-unique identifiers.
-RARE_DF_FRACTION = 0.01
-
-
-def _lexical_query(conn: psycopg.Connection, query_text: str) -> str:
-    """OR-of-rare-lexemes tsquery string; falls back to all lexemes when the
-    query has no rare terms (or DF stats are missing)."""
-    lexemes = [
-        r[0]
-        for r in conn.execute(
-            "SELECT unnest(tsvector_to_array(to_tsvector('english', %s)))",
-            (query_text,),
-        ).fetchall()
-    ]
-    if not lexemes:
-        return ""
-    stats_exist = conn.execute(
-        "SELECT to_regclass('lexeme_df')"
-    ).fetchone()[0]
-    if stats_exist:
-        total = conn.execute("SELECT count(*) FROM chunks").fetchone()[0] or 1
-        rows = conn.execute(
-            "SELECT word FROM lexeme_df WHERE word = ANY(%s) AND ndoc <= %s",
-            (lexemes, max(1, int(total * RARE_DF_FRACTION))),
-        ).fetchall()
-        rare = [r[0] for r in rows]
-        # Terms absent from the stats table never occur in the corpus at
-        # all - maximally rare, keep them (typos aside, they cost nothing).
-        unseen = [l for l in lexemes if l not in {r[0] for r in conn.execute(
-            "SELECT word FROM lexeme_df WHERE word = ANY(%s)", (lexemes,)
-        ).fetchall()}]
-        chosen = rare + unseen
-        if chosen:
-            lexemes = chosen
-    return " | ".join(f"'{l}'" for l in dict.fromkeys(lexemes))
 
 
 def _filters(route: Route) -> tuple[str, list]:
@@ -131,13 +98,14 @@ def search(
         return merged
 
     where, filter_params = _filters(route)
-    lexical = _lexical_query(conn, query_text) or "'__nomatch__'"
+    lexical = query_text
+    lexical_weight = LEXICAL_WEIGHT_ID if ID_SHAPED.search(query_text) else 1.0
     conn.execute("SELECT set_config('hnsw.ef_search', %s, true)", (str(EF_SEARCH),))
     # Under heavy RLS trimming a strict HNSW scan can return fewer than k
     # visible rows (the post-filter starvation problem); iterative scan keeps
     # walking the graph until enough VISIBLE results are found.
     conn.execute("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
-    pool = _hybrid(conn, lexical, query_vector, where, filter_params, fused_limit)
+    pool = _hybrid(conn, lexical, query_vector, where, filter_params, fused_limit, lexical_weight)
 
     # Per-source floor: any visible source with fewer than SOURCE_FLOOR
     # candidates in the global pool contributes its own best few.
@@ -151,6 +119,7 @@ def search(
         extra = _hybrid(
             conn, lexical, query_vector,
             where + " AND c.doc_type = %s", filter_params + [doc_type], SOURCE_FLOOR,
+            lexical_weight,
         )
         for c in extra:
             if c.chunk_id not in seen:
@@ -175,9 +144,25 @@ def _floor_sources(conn: psycopg.Connection, route: Route) -> list[str]:
 
 def _hybrid(
     conn: psycopg.Connection, lexical: str, query_vector: str,
-    where: str, filter_params: list, fused_limit: int,
+    where: str, filter_params: list, fused_limit: int, lexical_weight: float = 1.0,
 ) -> list[Candidate]:
-    """One hybrid query: vector arm + lexical arm, RRF-fused, top fused_limit."""
+    """One hybrid query: vector arm + lexical arm, RRF-fused (lexical list
+    weighted by lexical_weight), top fused_limit."""
+    # Lexical arm: BM25 via pg_textsearch. <@> is the negative BM25 score
+    # (lower = better); the index is named so the filtered scan still uses it.
+    # Non-matching chunks score 0, not NULL: keep only real matches (< 0) so
+    # they get no lexical rank — matches sort first, so filtering after LIMIT
+    # never drops a match.
+    txt_arm = f"""
+            SELECT c.id, ROW_NUMBER() OVER (ORDER BY c.neg_score) AS rank
+            FROM (
+                SELECT c.id, c.content <@> to_bm25query(%s, 'chunks_bm25_idx') AS neg_score
+                FROM chunks c
+                WHERE true{where}
+                ORDER BY neg_score
+                LIMIT %s
+            ) c
+            WHERE c.neg_score < 0"""
     sql = f"""
         WITH vec AS (
             SELECT c.id, ROW_NUMBER() OVER (ORDER BY c.dist) AS rank
@@ -188,24 +173,12 @@ def _hybrid(
                 LIMIT %s
             ) c
         ),
-        txt AS (
-            -- OR semantics over rare lexemes (see _lexical_query): AND-of-all
-            -- terms returns zero rows for verbose questions, and without IDF
-            -- common-word density drowns exact identifiers.
-            SELECT c.id, ROW_NUMBER() OVER (ORDER BY c.rank_score DESC) AS rank
-            FROM (
-                SELECT c.id,
-                       ts_rank_cd(c.tsv, %s::tsquery) AS rank_score
-                FROM chunks c
-                WHERE c.tsv @@ %s::tsquery{where}
-                ORDER BY rank_score DESC
-                LIMIT %s
-            ) c
+        txt AS ({txt_arm}
         ),
         fused AS (
             SELECT COALESCE(v.id, t.id) AS id,
                    COALESCE(1.0 / (%s + v.rank), 0) +
-                   COALESCE(1.0 / (%s + t.rank), 0) AS score,
+                   %s * COALESCE(1.0 / (%s + t.rank), 0) AS score,
                    v.rank AS vector_rank,
                    t.rank AS text_rank
             FROM vec v FULL OUTER JOIN txt t ON v.id = t.id
@@ -224,8 +197,8 @@ def _hybrid(
     """
     params = (
         [query_vector] + filter_params + [PER_METHOD_LIMIT]
-        + [lexical, lexical] + filter_params + [PER_METHOD_LIMIT]
-        + [RRF_K, RRF_K, fused_limit]
+        + [lexical] + filter_params + [PER_METHOD_LIMIT]
+        + [RRF_K, lexical_weight, RRF_K, fused_limit]
     )
     rows = conn.execute(sql, params).fetchall()
     return [

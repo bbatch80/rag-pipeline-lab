@@ -1,6 +1,7 @@
 services:
   db:
-    image: pgvector/pgvector:pg17
+    build: ./db
+    image: raglab-db:pg17
     container_name: raglab-db
     ports:
       - "127.0.0.1:5433:5432"

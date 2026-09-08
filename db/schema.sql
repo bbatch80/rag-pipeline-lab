@@ -28,14 +28,13 @@ CREATE TABLE chunks (
     acl_tag     text    NOT NULL DEFAULT 'public',
     metadata    jsonb   NOT NULL DEFAULT '{}'::jsonb,
     embedding   vector(1536),
-    tsv         tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
     UNIQUE (document_id, chunk_index)
 );
 
--- Full-text search index. The HNSW vector index is built by `raglab index`
+-- The BM25 index (pg_textsearch) is created by migration 004 and the HNSW
+-- vector index is built by `raglab index`
 -- (bulk-load-then-index) with pinned parameters; additive changes to this
 -- schema live in db/migrations/ and are applied by `raglab migrate`.
-CREATE INDEX chunks_tsv_idx ON chunks USING gin (tsv);
 CREATE INDEX chunks_document_id_idx ON chunks (document_id);
 CREATE INDEX chunks_year_plan_idx ON chunks (year, plan_code);
 CREATE INDEX chunks_acl_tag_idx ON chunks (acl_tag);

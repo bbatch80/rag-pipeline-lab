@@ -29,7 +29,6 @@ def test_floor_keeps_a_crowded_out_source_in_the_pool(db, monkeypatch):
             [(brochure, i, f"brochure text {i}", "brochure", _vec(0.01 * i)) for i in range(60)]
             + [(sop, i, f"procedure text {i}", "sop", _vec(5.0 + i)) for i in range(3)],
         )
-    db.execute("DROP TABLE IF EXISTS lexeme_df")
     route = router.Route(scope="in_scope", years=(2026,))
     pool = retrieval.search(db, "zzzz", _vec(0.0), route)
 
@@ -51,7 +50,6 @@ def test_route_sources_narrows_the_search(db):
         "INSERT INTO chunks (document_id, chunk_index, content, year, doc_type, embedding) "
         "VALUES (%s, 0, 'x', 2026, 'brochure', %s::vector)", (doc, _vec(0.0)),
     )
-    db.execute("DROP TABLE IF EXISTS lexeme_df")
     only_sops = router.Route(scope="in_scope", years=(2026,), sources=("sop",))
     assert retrieval.search(db, "zzzz", _vec(0.0), only_sops) == []
     everything = router.Route(scope="in_scope", years=(2026,))
@@ -80,7 +78,6 @@ def test_floor_off_leaves_the_pool_untouched(db, monkeypatch):
         "INSERT INTO chunks (document_id, chunk_index, content, year, doc_type, embedding) "
         "VALUES (%s, 0, 'x', 2026, 'brochure', %s::vector)", (doc, _vec(0.0)),
     )
-    db.execute("DROP TABLE IF EXISTS lexeme_df")
     pool = retrieval.search(db, "zzzz", _vec(0.0), router.Route(scope="in_scope", years=(2026,)))
     assert len(pool) == 1 and not pool[0].floor
 

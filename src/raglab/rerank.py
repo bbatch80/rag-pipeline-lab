@@ -42,6 +42,28 @@ def _get_model():
     return _model
 
 
+# What the cross-encoder reads (A/B, RAGLAB_RERANK_TEXT):
+#   index — the whole search copy, template prefix and source header included
+#   body  — the search copy minus the template prefix line ("This chunk is
+#           from …") and, for call notes, minus the note header line (call
+#           id, date, rep, reason, member, identity verification): metadata
+#           the lexical and vector arms use, noise to a relevance judge.
+RERANK_TEXT = os.environ.get("RAGLAB_RERANK_TEXT", "index")
+_HEADER_SOURCES = ("call_note",)
+
+
+def rerank_text(c: Candidate) -> str:
+    text = c.index_text or c.content
+    if RERANK_TEXT != "body":
+        return text
+    lines = text.split("\n")
+    if lines and lines[0].startswith("This chunk is from"):
+        lines = lines[1:]
+    if c.doc_type in _HEADER_SOURCES and lines and lines[0].lstrip().startswith("CALL NOTE"):
+        lines = lines[1:]
+    return "\n".join(lines).strip() or text
+
+
 def rerank(
     query: str, candidates: list[Candidate], top_n: int = TOP_N_OUT,
     stratify_years: tuple[int, ...] = (),
@@ -66,7 +88,7 @@ def rerank(
     # Score the search copy (shorthand expanded, boilerplate suppressed,
     # identifiers canonical) — a cross-encoder reads plain language, not rep
     # shorthand. The display copy is what the payload cites.
-    pairs = [(by_year.get(c.year, query), c.index_text or c.content) for c in candidates]
+    pairs = [(by_year.get(c.year, query), rerank_text(c)) for c in candidates]
     # sentence-transformers >= 3 applies sigmoid activation in predict();
     # scores arrive in 0..1 already.
     scores = model.predict(pairs)

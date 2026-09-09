@@ -438,7 +438,7 @@ def explain_cmd(qid: str):
             receipt.add(f"expected {name}", f"pool rank {e['pool_rank']}, reranked to position {e['rerank_position']} (score {e['score']:.3f})")
             receipt.add("  scored text", (e["scored_text"] or "").replace("\n", " | ")[:300])
         abstained, best = ex.verdict
-        receipt.add("verdict", f"{'ABSTAIN' if abstained else 'answer'} (best {best:.3f}, threshold {rerank_threshold()})")
+        receipt.add("verdict", f"{'ABSTAIN' if abstained else 'answer'} (best {best:.3f}; thresholds prose {rerank_threshold()}, records {rerank_by_source()})")
         for i, t in enumerate(ex.top[:5]):
             receipt.add(f"  top {i}", f"{t['title']}  {t['score']:.3f}  {t['text'][:90].replace(chr(10), ' ')}")
     except Exception as exc:
@@ -450,6 +450,12 @@ def rerank_threshold() -> float:
     from raglab import rerank
 
     return rerank.ABSTAIN_THRESHOLD
+
+
+def rerank_by_source() -> dict:
+    from raglab import rerank
+
+    return rerank.ABSTAIN_BY_SOURCE
 
 
 @main.command("audit")
@@ -573,7 +579,7 @@ def explain_cmd(query: str, persona: str | None, generate: bool):
 
     abstain, best = rerank.abstention_verdict(reranked)
     click.echo("\n[6] VERDICT")
-    click.echo(f"    best rerank score: {best:.4f} vs threshold {rerank.ABSTAIN_THRESHOLD}")
+    click.echo(f"    best rerank score: {best:.4f} vs threshold {rerank.ABSTAIN_THRESHOLD} (records: {rerank.ABSTAIN_BY_SOURCE})")
     click.echo(f"    {'ABSTAIN (insufficient evidence)' if abstain else 'ANSWERABLE'}")
     click.echo(
         f"    RLS: {'persona_' + persona + ' — invisible tiers never entered retrieval' if persona else 'admin view (all tiers)'}\n"

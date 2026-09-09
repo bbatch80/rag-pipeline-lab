@@ -91,6 +91,10 @@ claim numbers, bulletin codes) hit rank 1 via the lexical arm. The router's scop
 gate resolved 6/6 out-of-domain/out-of-year probes without retrieval.
 Abstention threshold (0.5) separates answerable questions (best rerank
 score ≥ 0.72 across the golden set) from absent-topic questions (0.30);
+records get their own threshold (call notes 0.1): a terse, de-identified
+note scores lower in absolute terms even when it is the answer — on the
+call-note slice correct notes score 0.16–0.99 and unrelated notes ≈ 0.01 —
+so the payload abstains only when no candidate clears its source's bar;
 redirect-style questions score high on genuinely-relevant-but-non-answering
 chunks and are handled at the generation layer instead.
 

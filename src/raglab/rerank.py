@@ -23,11 +23,25 @@ from raglab.retrieval import Candidate
 # 0.868, an entitled persona wrongly blocked (allow_answered 0.8), rerank
 # p50 1964 vs 1157 ms; its answerable/unanswerable margin was 0.06 vs 0.42.
 RERANKERS = {
-    "bge-base": {"model": "BAAI/bge-reranker-base", "threshold": 0.5},  # 2023, 278M
+    "bge-base": {
+        "model": "BAAI/bge-reranker-base",  # 2023, 278M
+        "threshold": 0.5,  # prose sources (calibrated on brochures, Phase 0)
+        # Records: a terse, de-identified note scores lower in absolute
+        # terms even when it is the answer. Calibrated on the call-note
+        # golden slice (2026-09-09, 10 items): correct notes 0.16–0.99,
+        # unrelated notes ≈ 0.00–0.01; a threshold of 0.1 sits under every
+        # answered item with margin and above the noise floor.
+        "thresholds": {"call_note": 0.1},
+    },
 }
 RERANKER = os.environ.get("RAGLAB_RERANKER", "bge-base")
 MODEL_NAME = RERANKERS[RERANKER]["model"]
 ABSTAIN_THRESHOLD = RERANKERS[RERANKER]["threshold"]
+ABSTAIN_BY_SOURCE = RERANKERS[RERANKER].get("thresholds", {})
+
+
+def threshold_for(doc_type: str) -> float:
+    return ABSTAIN_BY_SOURCE.get(doc_type, ABSTAIN_THRESHOLD)
 TOP_N_OUT = 10
 
 _model = None
@@ -144,9 +158,11 @@ def rerank(
 
 
 def abstention_verdict(reranked: list[Candidate]) -> tuple[bool, float]:
-    """(should_abstain, best_score). Callers decide what to do with it;
-    Phase 7 maps it to insufficient_evidence."""
+    """(should_abstain, best_score). Abstain when no candidate clears its
+    own source's threshold (threshold_for). Callers decide what to do with
+    it; the payload maps it to insufficient_evidence."""
     if not reranked:
         return True, 0.0
     best = reranked[0].rerank_score or 0.0
-    return best < ABSTAIN_THRESHOLD, best
+    cleared = any((c.rerank_score or 0.0) >= threshold_for(c.doc_type) for c in reranked)
+    return not cleared, best

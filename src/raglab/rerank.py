@@ -63,7 +63,10 @@ def rerank(
     from raglab import router as router_mod
 
     by_year = router_mod.year_queries(query, stratify_years)
-    pairs = [(by_year.get(c.year, query), c.content) for c in candidates]
+    # Score the search copy (shorthand expanded, boilerplate suppressed,
+    # identifiers canonical) — a cross-encoder reads plain language, not rep
+    # shorthand. The display copy is what the payload cites.
+    pairs = [(by_year.get(c.year, query), c.index_text or c.content) for c in candidates]
     # sentence-transformers >= 3 applies sigmoid activation in predict();
     # scores arrive in 0..1 already.
     scores = model.predict(pairs)

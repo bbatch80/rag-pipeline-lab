@@ -589,15 +589,20 @@ def ablation_cmd():
 @click.option("--label", default="baseline", help="config_label recorded with the run.")
 @click.option("--gate", is_flag=True, help="Exit non-zero if thresholds are breached.")
 @click.option("--sabotage", is_flag=True, help="Discrimination check: junk query vectors.")
-def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool):
+@click.option("--category", "categories", multiple=True,
+              help="Only these golden categories (iteration aid; partial runs never gate).")
+def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool, categories: tuple[str, ...]):
     """Tier-1 deterministic retrieval eval over the golden set (free)."""
+    if categories and gate:
+        raise click.UsageError("--gate needs the whole golden set; drop --category")
     from raglab import eval_retrieval
     from raglab.timing import BUDGET_P95_MS
 
     receipt = Receipt("raglab eval-retrieval" + (" --sabotage" if sabotage else ""))
     try:
         with db.connect() as conn:
-            result = eval_retrieval.run(conn, config_label=label, sabotage=sabotage)
+            result = eval_retrieval.run(conn, config_label=label, sabotage=sabotage,
+                                        categories=tuple(categories))
         receipt.add("run id", result.run_id)
         receipt.add("corpus", result.corpus_hash[:12])
         for metric, value in result.overall.items():

@@ -114,8 +114,12 @@ def run(
     conn: psycopg.Connection,
     config_label: str = "baseline",
     sabotage: bool = False,
+    categories: tuple[str, ...] = (),
 ) -> RetrievalEvalResult:
-    """sabotage=True breaks BOTH retrieval arms — a fixed junk vector and a
+    """categories: run only those golden categories (iteration aid; the
+    run is labelled partial and never gates a merge).
+
+    sabotage=True breaks BOTH retrieval arms — a fixed junk vector and a
     nonsense lexical query — while the reranker still sees the real
     question. The discrimination check: a broken retriever MUST score badly.
     (Vector-only sabotage stopped discriminating once BM25 landed: the
@@ -125,7 +129,8 @@ def run(
     run_id = conn.execute(
         "INSERT INTO eval_runs (kind, config_label, git_sha, corpus_hash) "
         "VALUES ('retrieval', %s, %s, %s) RETURNING id",
-        (config_label if not sabotage else f"{config_label}-SABOTAGE", _git_sha(), digest),
+        ((config_label if not sabotage else f"{config_label}-SABOTAGE")
+         + (f"-partial:{','.join(categories)}" if categories else ""), _git_sha(), digest),
     ).fetchone()[0]
 
     scores: list[tuple] = []  # (qid, category, metric, value, detail)
@@ -135,6 +140,8 @@ def run(
 
     for item in ablation.load_golden():
         qid, category = item["id"], item["category"]
+        if categories and category not in categories:
+            continue
 
         if category == "two_lane":
             continue  # needs Snowflake; asserted in tests/test_two_lane_golden.py

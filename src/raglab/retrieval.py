@@ -48,14 +48,23 @@ LEXICAL_MERGE = os.environ.get("RAGLAB_LEXICAL_MERGE", "rank")
 # (10k call notes restating members' questions) cannot crowd brochure pages
 # out before reranking. Cost: reranker input = fused_limit × visible sources.
 POOLS = os.environ.get("RAGLAB_POOLS", "per_source")
-_ID_TOKEN = re.compile(r"\b(?:MRN\s*[- ]?\s*\d{7}|M\s*[- ]?\s*\d{3}\s*[- ]?\s*\d{3}\s*[- ]?\s*\d{3})\b", re.I)
+_ID_TOKEN = re.compile(
+    r"\b(?:MRN\s*[- ]?\s*\d{7}|M\s*[- ]?\s*\d{3}\s*[- ]?\s*\d{3}\s*[- ]?\s*\d{3}"
+    r"|CLM[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{4})\b", re.I)
+# identifier kind -> (table, column) that maps it to a person key
+_ID_LOOKUP = {
+    "member_id": ("synthea.patients", "member_id"),
+    "mrn": ("synthea.patients", "mrn"),
+    "claim_id": ("synthea.call_log", "claim_id"),  # a claim belongs to one member
+}
 
 
 def resolve_member(conn: psycopg.Connection, member_id: str | None, query_text: str = "") -> str | None:
     """The person key of the member context: the structured member ID the
-    surface supplied, else a member ID or MRN typed in the question. None
-    when there is no member context. The question is the RAW question —
-    translation replaces identifiers with pseudonyms."""
+    surface supplied, else an identifier the caller holds typed in the
+    question — a member ID, an MRN, or a claim ID (a claim belongs to one
+    member). None when there is no member context. The question is the RAW
+    question — translation replaces identifiers with pseudonyms."""
     from raglab import identifiers
 
     candidates: list[tuple[str, str]] = []
@@ -66,13 +75,15 @@ def resolve_member(conn: psycopg.Connection, member_id: str | None, query_text: 
         candidates.append(("member_id", canon))
     for token in _ID_TOKEN.findall(query_text or ""):
         compact = re.sub(r"[\s-]", "", token)
-        for kind in ("member_id", "mrn"):
+        for kind in ("member_id", "mrn", "claim_id"):
             canon = identifiers.canonicalize(kind, compact)
             if canon:
                 candidates.append((kind, canon))
     for kind, canon in candidates:
+        table, column = _ID_LOOKUP[kind]
+        person = "id" if table == "synthea.patients" else "patient"
         row = conn.execute(
-            f"SELECT id FROM synthea.patients WHERE {kind} = %s", (canon,)
+            f"SELECT {person} FROM {table} WHERE {column} = %s", (canon,)
         ).fetchone()
         if row:
             return str(row[0])
@@ -106,6 +117,7 @@ class Candidate:
     rrf_score: float
     rerank_score: float | None = None
     content_hash: str = ""
+    index_text: str = ""  # the search copy: what every ranking stage reads
     doc_type: str = ""
     floor: bool = False  # admitted by the per-source floor, not the global pool
 
@@ -309,7 +321,7 @@ def _hybrid(
                c.plan_code, c.year, c.acl_tag,
                c.metadata->'pages',
                f.vector_rank, f.text_rank, f.score,
-               d.content_hash, c.doc_type
+               d.content_hash, c.doc_type, c.index_text
         FROM fused f
         JOIN chunks c ON c.id = f.id
         JOIN documents d ON d.id = c.document_id
@@ -328,6 +340,7 @@ def _hybrid(
             source_path=r[4], plan_code=r[5], year=r[6], acl_tag=r[7],
             pages=r[8] or [], vector_rank=r[9], text_rank=r[10],
             rrf_score=float(r[11]), content_hash=r[12], doc_type=r[13] or "",
+            index_text=r[14] or "",
         )
         for r in rows
     ]

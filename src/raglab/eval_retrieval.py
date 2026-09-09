@@ -108,8 +108,11 @@ def run(
     config_label: str = "baseline",
     sabotage: bool = False,
 ) -> RetrievalEvalResult:
-    """sabotage=True replaces query vectors with a fixed junk vector — the
-    discrimination check: a broken retriever MUST score badly."""
+    """sabotage=True breaks BOTH retrieval arms — a fixed junk vector and a
+    nonsense lexical query — while the reranker still sees the real
+    question. The discrimination check: a broken retriever MUST score badly.
+    (Vector-only sabotage stopped discriminating once BM25 landed: the
+    lexical arm alone finds 24/29 and the reranker sorts them.)"""
     conn.execute(EVAL_SCHEMA_PATH.read_text())
     digest = corpus_hash(conn)
     run_id = conn.execute(
@@ -121,6 +124,7 @@ def run(
     scores: list[tuple] = []  # (qid, category, metric, value, detail)
     registry = sources.load(conn)
     junk_vector = "[" + ",".join(["0.01"] * 1536) + "]"
+    junk_text = "zzqx zzqv zzqw"  # matches no chunk: the lexical arm returns nothing
 
     for item in ablation.load_golden():
         qid, category = item["id"], item["category"]
@@ -169,7 +173,7 @@ def run(
             scores.append((qid, category, "gate_correct", float(gated == expected_gate), {}))
             if not gated:
                 vector = junk_vector if sabotage else retrieval.embed_query(question)
-                candidates = retrieval.search(conn, question, vector, decision)
+                candidates = retrieval.search(conn, junk_text if sabotage else question, vector, decision)
                 reranked = rerank.rerank(question, candidates)
                 abstained, best = rerank.abstention_verdict(reranked)
                 scores.append((qid, category, "abstained", float(abstained),
@@ -180,7 +184,7 @@ def run(
         with watch.stage("embed"):
             vector = junk_vector if sabotage else retrieval.embed_query(question)
         with watch.stage("search"):
-            candidates = retrieval.search(conn, question, vector, decision)
+            candidates = retrieval.search(conn, junk_text if sabotage else question, vector, decision)
         with watch.stage("rerank"):
             reranked = rerank.rerank(
                 question, candidates, top_n=10,

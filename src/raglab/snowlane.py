@@ -53,8 +53,14 @@ EXPORTS = {
         "SELECT id, patient, start::date, encounterclass, code, description, "
         "reasondescription, base_encounter_cost, total_claim_cost, "
         "payer_coverage, " + LOB_EXPR.format(col="patient")
-        + " FROM synthea.encounters"
+        + ", provider, organization FROM synthea.encounters"
     ),
+    "organizations": "SELECT id, name, address, city, state, zip, phone, npi FROM synthea.organizations",
+    "providers": (
+        "SELECT id, organization, name, gender, speciality, address, city, state, zip, npi "
+        "FROM synthea.providers"
+    ),
+    "provider_network": "SELECT organization, plan_code, in_network FROM synthea.provider_network",
 }
 
 
@@ -213,7 +219,7 @@ NAMED_QUERIES = {
         "params": {"member_id": type(None), "last_name": type(None), "limit": int},
         "sql": """
             SELECT MEMBER_ID, FIRST_NAME, LAST_NAME, SERVICE_DATE, ENCOUNTER_CLASS,
-                   DESCRIPTION, REASON, TOTAL_CLAIM_COST, PAYER_COVERAGE
+                   DESCRIPTION, REASON, PROVIDER_NAME, ORGANIZATION, TOTAL_CLAIM_COST, PAYER_COVERAGE
             FROM CLAIM_DETAIL
             WHERE (%(member_id)s IS NOT NULL AND MEMBER_ID = %(member_id)s)
                OR (%(member_id)s IS NULL AND UPPER(LAST_NAME) = UPPER(%(last_name)s))
@@ -289,6 +295,48 @@ NAMED_QUERIES = {
             LIMIT %(limit)s
         """,
     },
+    "provider_lookup": {
+        "doc": ("Provider directory lookup by NPI or by name (substring): provider, "
+                "specialty, organization, address, phone. No member data."),
+        "params": {"npi": type(None), "name": type(None)},
+        "sql": """
+            SELECT P.NPI, P.NAME AS PROVIDER_NAME, P.SPECIALITY, O.NAME AS ORGANIZATION,
+                   O.NPI AS ORGANIZATION_NPI, P.ADDRESS, P.CITY, P.STATE, P.ZIP, O.PHONE
+            FROM PROVIDERS P JOIN ORGANIZATIONS O ON O.ID = P.ORGANIZATION_ID
+            WHERE (%(npi)s IS NOT NULL AND P.NPI = %(npi)s)
+               OR (%(npi)s IS NULL AND UPPER(P.NAME) LIKE '%%' || UPPER(%(name)s) || '%%')
+            ORDER BY P.NAME
+            LIMIT 20
+        """,
+    },
+    "provider_network_status": {
+        "doc": ("Whether a provider (by NPI) participates in a plan (by plan code): "
+                "the organization's contract status, inherited by its providers."),
+        "params": {"npi": str, "plan_code": str},
+        "sql": """
+            SELECT P.NPI, P.NAME AS PROVIDER_NAME, O.NAME AS ORGANIZATION, N.PLAN_CODE, N.IN_NETWORK
+            FROM PROVIDERS P
+            JOIN ORGANIZATIONS O ON O.ID = P.ORGANIZATION_ID
+            JOIN PROVIDER_NETWORK N ON N.ORGANIZATION_ID = O.ID
+            WHERE P.NPI = %(npi)s AND N.PLAN_CODE = %(plan_code)s
+        """,
+    },
+    "providers_by_specialty": {
+        "doc": ("In-network providers for a plan, optionally of a specialty and near a ZIP "
+                "prefix (first three digits): name, organization, city, ZIP. (Synthea's "
+                "roster carries one specialty, GENERAL PRACTICE — stated simplification.)"),
+        "params": {"speciality": type(None), "plan_code": str, "zip_prefix": type(None), "limit": int},
+        "sql": """
+            SELECT P.NPI, P.NAME AS PROVIDER_NAME, P.SPECIALITY, O.NAME AS ORGANIZATION, P.CITY, P.ZIP
+            FROM PROVIDERS P
+            JOIN ORGANIZATIONS O ON O.ID = P.ORGANIZATION_ID
+            JOIN PROVIDER_NETWORK N ON N.ORGANIZATION_ID = O.ID AND N.PLAN_CODE = %(plan_code)s
+            WHERE (%(speciality)s IS NULL OR UPPER(P.SPECIALITY) = UPPER(%(speciality)s)) AND N.IN_NETWORK
+              AND (%(zip_prefix)s IS NULL OR P.ZIP LIKE %(zip_prefix)s || '%%')
+            ORDER BY P.ZIP, P.NAME
+            LIMIT %(limit)s
+        """,
+    },
     "cost_by_condition": {
         "doc": ("Aggregate across members: claim-line count, average and "
                 "total cost, grouped by encounter description matching the "
@@ -333,7 +381,8 @@ def run_named_query(sf_conn, query_name: str, params: dict) -> dict:
         }
     spec = NAMED_QUERIES[query_name]
     bound = {"member_id": None, "last_name": None, "first_name": None, "limit": 20,
-             "claim_id": None, "case_id": None}
+             "claim_id": None, "case_id": None, "npi": None, "name": None, "plan_code": None,
+             "speciality": None, "zip_prefix": None}
     bound.update({k: v for k, v in params.items() if v is not None})
     cur = sf_conn.cursor()
     role = cur.execute("SELECT CURRENT_ROLE()").fetchone()[0]

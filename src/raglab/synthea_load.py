@@ -26,7 +26,16 @@ TABLES = {
         "encounters.csv",
         ["id", "start", "stop", "patient", "encounterclass", "code",
          "description", "base_encounter_cost", "total_claim_cost",
-         "payer_coverage", "reasoncode", "reasondescription"],
+         "payer_coverage", "reasoncode", "reasondescription",
+         "organization", "provider"],
+    ),
+    "organizations": (
+        "organizations.csv",
+        ["id", "name", "address", "city", "state", "zip", "phone", "npi"],
+    ),
+    "providers": (
+        "providers.csv",
+        ["id", "organization", "name", "gender", "speciality", "address", "city", "state", "zip", "npi"],
     ),
     "conditions": (
         "conditions.csv",

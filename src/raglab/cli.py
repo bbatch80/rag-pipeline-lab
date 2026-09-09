@@ -405,6 +405,27 @@ def churn_cmd(seed: int, rate: float):
     receipt.finish()
 
 
+@main.command("load-roster")
+def load_roster_cmd():
+    """Provider roster: organizations + providers from Synthea, the encounter
+    → provider/organization links (backfilled in place), and network status
+    per organization × plan (seeded; providers inherit)."""
+    from raglab import roster
+
+    receipt = Receipt("raglab load-roster")
+    try:
+        with db.connect() as conn:
+            r = roster.load(conn)
+            conn.commit()
+        receipt.add("organizations", r.organizations)
+        receipt.add("providers", r.providers)
+        receipt.add("encounters linked", r.encounters_linked)
+        receipt.add("network rows", f"{r.network_rows} (organization × plan), in-network share {r.in_network_share}")
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
 @main.command("load-synthea")
 def load_synthea_cmd():
     """Load Synthea CSV exports into the synthea schema (drop-and-recreate)."""

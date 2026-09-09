@@ -142,6 +142,8 @@ def run(
         qid, category = item["id"], item["category"]
         if categories and category not in categories:
             continue
+        if category == "named_query":  # warehouse-only assertions live in tests/test_named_queries.py
+            continue
 
         if category == "two_lane":
             continue  # needs Snowflake; asserted in tests/test_two_lane_golden.py

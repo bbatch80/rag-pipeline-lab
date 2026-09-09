@@ -183,10 +183,28 @@ citation came from. Measured and rejected on the way: removing the resolved
 identifier from the ranking query (the reranker's strongest cue on these
 terse, tokenized records — call-note abstentions 0.1 → 0.4).
 
+**Provider roster.** Synthea's 1,145 organizations and 1,145 providers
+(NPI, specialty, address) load into both lanes, and every claim line now
+carries its provider and organization. Network participation is synthesized
+per *organization* × plan — contracts are signed by organizations, not
+clinicians, so a provider inherits its organization's status — about 90% in
+network, deterministic from a seed. Named queries: lookup by NPI or name,
+network status for a plan, participating providers near a ZIP. With the
+roster in place the adjudication overlay became roster-aware: an
+out-of-network denial requires a provider whose organization is actually
+out of contract for the member's plan that year (1,591 of 1,759 such
+denials had sat on in-network providers before the rule; now none). The
+general rule: a synthesized fact is random only where the platform holds no
+fact to check it against. Stated simplifications: Synthea's roster carries
+a single specialty and one provider per organization; no contract or
+directory-verification dates.
+
 Warehouse lane: PATIENTS, CLAIM_LINES, ENROLLMENT (one row per member per
-plan year), CALL_LOG, CLAIM_ADJUDICATION, APPEALS — reachable only through
-named, parameterized queries under Snowflake row-access and masking
-policies.
+plan year), CALL_LOG, CLAIM_ADJUDICATION, APPEALS, ORGANIZATIONS, PROVIDERS,
+PROVIDER_NETWORK — reachable only through named, parameterized queries
+under Snowflake row-access and masking policies. Roster and enrollment
+questions have their own golden slice (`named_query`), scored against the
+warehouse under the identity's role rather than by the retrieval eval.
 
 ## Evaluation experiments
 

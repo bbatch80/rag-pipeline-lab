@@ -11,9 +11,16 @@ ALTER TABLE sources ADD COLUMN IF NOT EXISTS member_scoped boolean NOT NULL DEFA
 ALTER TABLE sources ADD COLUMN IF NOT EXISTS event boolean NOT NULL DEFAULT false;
 UPDATE sources SET member_scoped = true, event = true WHERE key = 'call_notes';
 
--- Call notes carry the year of the call, not the year they were ingested.
-UPDATE chunks c SET year = EXTRACT(YEAR FROM l.call_date)::int
-FROM documents d, synthea.call_log l
-WHERE c.document_id = d.id AND c.doc_type = 'call_note'
-  AND l.call_id = replace(d.title, 'call_', '')
-  AND c.year IS DISTINCT FROM EXTRACT(YEAR FROM l.call_date)::int;
+-- Call notes carry the year of the call, not the year they were ingested
+-- (guarded — no synthea schema in CI; new ingests read the year from the
+-- manifest).
+DO $$
+BEGIN
+    IF to_regclass('synthea.call_log') IS NOT NULL THEN
+        UPDATE chunks c SET year = EXTRACT(YEAR FROM l.call_date)::int
+        FROM documents d, synthea.call_log l
+        WHERE c.document_id = d.id AND c.doc_type = 'call_note'
+          AND l.call_id = replace(d.title, 'call_', '')
+          AND c.year IS DISTINCT FROM EXTRACT(YEAR FROM l.call_date)::int;
+    END IF;
+END $$;

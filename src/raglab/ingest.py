@@ -54,7 +54,7 @@ def _contextualize(chunks: list[Chunk], meta: DocumentMeta) -> list[Chunk]:
         return list(pool.map(one, chunks))
 
 
-def processing_recipe(backend_name: str, phi: bool = False) -> str:
+def processing_recipe(backend_name: str, phi: bool = False, normalized: bool = False) -> str:
     """The recipe half of a document's identity: what would change the
     stored chunks even when the source bytes don't. PHI-bearing sources add
     the de-id mode, so changing it re-ingests exactly those documents."""
@@ -67,15 +67,21 @@ def processing_recipe(backend_name: str, phi: bool = False) -> str:
     )
     if phi:
         recipe += f"|deid:{os.environ.get('RAGLAB_DEID', 'tokenize')}"
+    if normalized:  # dictionary version + boilerplate threshold: a change re-ingests the source
+        from raglab import indexcopy
+
+        recipe += f"|{indexcopy.RECIPE}"
     return recipe
 
 
 def index_copy(text: str, source) -> str:
     """The search copy of a chunk (embedded + BM25-indexed) derived from the
-    display copy. Identity for every source today; call notes (Phase 1) add
-    identifier normalization, abbreviation expansion, and boilerplate
-    suppression here — the display copy is never touched."""
-    return text
+    display copy. Identity for most sources; normalized sources (call notes)
+    get identifier normalization, abbreviation expansion, and boilerplate
+    suppression — the display copy is never touched. See raglab.indexcopy."""
+    from raglab import indexcopy
+
+    return indexcopy.normalize(text, source)
 
 
 def content_hash(path: Path, recipe: str = "") -> str:
@@ -101,8 +107,12 @@ def ingest_document(
 ) -> str:
     """Returns the action taken: skipped | ingested | reingested | quarantined."""
     source_path = rel_source_path(pdf_path)
+    from raglab import indexcopy
+
     source = sources.load(conn).for_doc_type(meta.doc_type)
-    digest = content_hash(pdf_path, processing_recipe(backend.name, source.phi))
+    digest = content_hash(
+        pdf_path, processing_recipe(backend.name, source.phi, indexcopy.is_normalized(source))
+    )
 
     row = conn.execute(
         "SELECT id, content_hash FROM documents WHERE source_path = %s",
@@ -168,6 +178,10 @@ def ingest_document(
         ]
 
     if row is not None:
+        if source.chunk_profile == "record":
+            from raglab import dedup
+
+            dedup.forget(source.key, row[0])
         conn.execute("DELETE FROM documents WHERE id = %s", (row[0],))
     doc_id = conn.execute(
         """
@@ -176,6 +190,17 @@ def ingest_document(
         """,
         (source_path, meta.title, digest, meta.acl_tag, source.source_id, meta.member_key),
     ).fetchone()[0]
+
+    # Record sources: a whole-document near-duplicate points at its original
+    # and carries no chunks (never retrieved; still on disk and auditable).
+    if source.chunk_profile == "record":
+        from raglab import dedup
+
+        original = dedup.check_and_add(source.key, doc_id, "\n".join(c.text for c in chunks))
+        if original is not None:
+            conn.execute("UPDATE documents SET duplicate_of = %s WHERE id = %s", (original, doc_id))
+            conn.execute("DELETE FROM quarantine WHERE source_path = %s", (source_path,))
+            return "duplicate"
 
     with conn.cursor() as cur:
         cur.executemany(

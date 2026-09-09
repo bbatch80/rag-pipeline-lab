@@ -43,13 +43,15 @@ THRESHOLDS = {
     "wrong_abstention_rate": 0.05,
     "deny_abstained": 1.0,
     "allow_answered": 1.0,
-    # Ratchet: the reproduced baseline, raised whenever a fix lands. Not an
-    # aspiration — a floor, so year-over-year coverage cannot slip unnoticed.
-    # Cause of 0.688: the prior-year page is in the candidate pool; the
-    # reranker prefers the prior-year brochure's "changes" section because
-    # the question wording is change language. Fix planned: per-year,
-    # year-neutral sub-queries (Phase 3), then raise this.
-    "yoy_source_coverage": 0.688,
+    # Ratchet: a floor raised whenever a fix lands, so year-over-year
+    # coverage cannot slip unnoticed. History: 0.688 in v1 (the golden set
+    # listed one page per year; the reranker preferred "changes" sections);
+    # 2026-09-09: each year's label accepts every page that states that
+    # year's value, and prior years are searched with a year-neutral form of
+    # the question (router.year_queries) → measured 1.0 on 8 questions. The
+    # floor sits one half-miss below (7.5/8) so a single borderline page is
+    # a finding, not a red build.
+    "yoy_source_coverage": 0.9,
 }
 
 
@@ -173,7 +175,8 @@ def run(
             scores.append((qid, category, "gate_correct", float(gated == expected_gate), {}))
             if not gated:
                 vector = junk_vector if sabotage else retrieval.embed_query(question)
-                candidates = retrieval.search(conn, junk_text if sabotage else question, vector, decision)
+                candidates = retrieval.search(conn, junk_text if sabotage else question, vector, decision,
+                                              embed=(lambda t: junk_vector) if sabotage else None)
                 reranked = rerank.rerank(question, candidates)
                 abstained, best = rerank.abstention_verdict(reranked)
                 scores.append((qid, category, "abstained", float(abstained),
@@ -184,7 +187,8 @@ def run(
         with watch.stage("embed"):
             vector = junk_vector if sabotage else retrieval.embed_query(question)
         with watch.stage("search"):
-            candidates = retrieval.search(conn, junk_text if sabotage else question, vector, decision)
+            candidates = retrieval.search(conn, junk_text if sabotage else question, vector, decision,
+                                              embed=(lambda t: junk_vector) if sabotage else None)
         with watch.stage("rerank"):
             reranked = rerank.rerank(
                 question, candidates, top_n=10,

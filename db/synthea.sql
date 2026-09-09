@@ -8,6 +8,7 @@ DROP TABLE IF EXISTS synthea.claims;
 DROP TABLE IF EXISTS synthea.medications;
 DROP TABLE IF EXISTS synthea.conditions;
 DROP TABLE IF EXISTS synthea.encounters;
+DROP TABLE IF EXISTS synthea.call_log;
 DROP TABLE IF EXISTS synthea.enrollment;
 DROP TABLE IF EXISTS synthea.patients;
 
@@ -28,6 +29,20 @@ CREATE TABLE synthea.patients (
     zip        text,
     member_id  text UNIQUE,   -- natural key, derived (raglab identifiers)
     mrn        text UNIQUE
+);
+
+-- Call-center interaction records (fields; the note text is a vector-lane
+-- document). Written by `raglab synth calls`.
+CREATE TABLE synthea.call_log (
+    call_id      text PRIMARY KEY,
+    patient      text REFERENCES synthea.patients (id),
+    member_id    text NOT NULL,
+    call_date    date NOT NULL,
+    rep_id       text NOT NULL,
+    reason_code  text NOT NULL,
+    disposition  text NOT NULL,
+    claim_id     text,
+    duration_sec integer NOT NULL
 );
 
 -- One row per member per plan year: the member's FEHB/PSHB enrollment.

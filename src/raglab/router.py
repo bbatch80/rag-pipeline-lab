@@ -12,6 +12,7 @@ Policies:
   are strict.
 """
 
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -133,3 +134,40 @@ def route(query: str) -> Route:
         plan_codes=tuple(plans),
         reasons=tuple(reasons),
     )
+
+
+# Change language only — never function words ("in" would tear "in-network"
+# apart at the hyphen). Dangling "from … to …" is handled with the years.
+_CHANGE_WORDS = re.compile(
+    r"\b(how did|how does|did|has|have|change[ds]?|changing|compared?(?: to| with)?|compare[ds]?|"
+    r"difference(?: between)?|differ(?:s|ed)?|vs\.?|versus|increase[ds]?|decrease[ds]?|year over year|yoy)\b",
+    re.IGNORECASE,
+)
+_YEAR_PHRASE = re.compile(r"\b(?:from|to|between|and|in|for|since|vs\.?|versus)\s+(?:19|20)\d{2}\b", re.IGNORECASE)
+_YEAR = re.compile(r"\b(19|20)\d{2}\b")
+
+
+def year_neutral(query: str, year: int) -> str:
+    """The per-year form of a change question: the subject without change
+    language or year references, plus this year — "How did the High Option
+    specialist copay change from 2025 to 2026?" → "High Option specialist
+    copay 2025". A prior-year benefit table then competes on its subject
+    instead of losing to the brochure's own "changes this year" section."""
+    text = _YEAR_PHRASE.sub(" ", query)   # "from 2025", "to 2026", "in 2021"
+    text = _YEAR.sub(" ", text)           # any bare year left
+    text = _CHANGE_WORDS.sub(" ", text)
+    text = re.sub(r"[?]", "", text)
+    text = re.sub(r"\s+", " ", text).strip(" ,.-")
+    return f"{text} {year}"
+
+
+def year_queries(query: str, years: tuple[int, ...]) -> dict[int, str]:
+    """Per-year queries for multi-year (change) routes; empty otherwise.
+    The LATEST year keeps the original question: its answer is the
+    brochure's own "changes this year" section, which the change wording
+    finds. Prior years get the year-neutral form, so their benefit tables
+    compete on the subject."""
+    if len(years) < 2 or os.environ.get("RAGLAB_YEAR_NEUTRAL", "on") == "off":
+        return {}
+    latest = max(years)
+    return {y: (query if y == latest else year_neutral(query, y)) for y in years}

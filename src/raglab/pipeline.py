@@ -52,12 +52,15 @@ def run_query(
                 search_query = deid.translate_query(conn, query)
             else:  # identifiers only: a key the caller typed is not re-identification
                 search_query = deid.translate_query(conn, query, deid.IDENTIFIER_TYPES)
+        # Embedding happens before the role switch: the cache table is the
+        # owner's, and a vector does not depend on who is asking.
+        with watch.stage("embed"):
+            vector = retrieval.embed_cached(conn, search_query)
         if persona is not None:
             conn.execute(f"SET LOCAL ROLE persona_{persona}")
-        with watch.stage("embed"):
-            vector = retrieval.embed_query(search_query)
         with watch.stage("search"):
-            candidates = retrieval.search(conn, search_query, vector, decision, member_key=member_key)
+            candidates = retrieval.search(conn, search_query, vector, decision, member_key=member_key,
+                                          embed=lambda t: retrieval.embed_cached(conn, t))
         with watch.stage("rerank"):
             reranked = rerank.rerank(
                 search_query, candidates, stratify_years=decision.years

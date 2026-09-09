@@ -1,6 +1,10 @@
 """The discrimination check breaks both retrieval arms, not just the vector."""
 
+import pytest
+
 from raglab import eval_retrieval, retrieval
+
+pytestmark = pytest.mark.slow
 
 
 def test_sabotage_breaks_both_arms(db, monkeypatch):

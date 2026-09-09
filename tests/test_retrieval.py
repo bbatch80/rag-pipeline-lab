@@ -158,3 +158,28 @@ def test_resolve_member_prefers_structured_context(db):
     assert retrieval.resolve_member(db, None, "what did Karima Dickinson call about?") is None
     with pytest.raises(ValueError):
         retrieval.resolve_member(db, "M123", "")
+
+
+def test_embed_cache_answers_repeat_questions(db, monkeypatch):
+    """The second embedding of the same text is served from the table; a
+    different text calls the embedder again."""
+    from raglab import retrieval
+    from raglab.eval_retrieval import EVAL_SCHEMA_PATH
+
+    db.execute(EVAL_SCHEMA_PATH.read_text())
+    calls = []
+    monkeypatch.setattr(retrieval, "embed_query", lambda t: calls.append(t) or f"[vec:{t}]")
+    monkeypatch.setattr(retrieval, "EMBED_CACHE", True)
+    assert retrieval.embed_cached(db, "q one") == "[vec:q one]"
+    assert retrieval.embed_cached(db, "q one") == "[vec:q one]"
+    assert retrieval.embed_cached(db, "q two") == "[vec:q two]"
+    assert calls == ["q one", "q two"]
+
+
+def test_claim_id_resolves_to_its_member(db):
+    from raglab import retrieval
+
+    call_id, patient, claim = db.execute(
+        "SELECT call_id, patient, claim_id FROM synthea.call_log WHERE claim_id IS NOT NULL LIMIT 1"
+    ).fetchone()
+    assert retrieval.resolve_member(db, None, f"What happened with claim {claim}?") == str(patient)

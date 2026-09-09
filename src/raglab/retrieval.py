@@ -354,3 +354,36 @@ def embed_query(text: str) -> str:
 
     response = OpenAI().embeddings.create(model=MODEL, input=text)
     return _to_vector_literal(response.data[0].embedding)
+
+
+EMBED_CACHE = os.environ.get("RAGLAB_EMBED_CACHE", "on") != "off"
+
+
+def embed_cached(conn: psycopg.Connection, text: str) -> str:
+    """embed_query through the query_embeddings table (db/eval.sql). A miss
+    calls the API and stores the vector; the table may not exist yet (a
+    fresh database before any eval), in which case this is embed_query."""
+    import hashlib
+
+    from raglab.embed import MODEL
+
+    if not EMBED_CACHE:
+        return embed_query(text)
+    key = hashlib.sha256(text.encode()).hexdigest()
+    try:
+        with conn.transaction():
+            row = conn.execute(
+                "SELECT embedding FROM query_embeddings WHERE model = %s AND text_hash = %s",
+                (MODEL, key),
+            ).fetchone()
+    except psycopg.Error:
+        return embed_query(text)
+    if row:
+        return row[0]
+    vector = embed_query(text)
+    with conn.transaction():
+        conn.execute(
+            "INSERT INTO query_embeddings (model, text_hash, embedding) VALUES (%s, %s, %s) "
+            "ON CONFLICT DO NOTHING", (MODEL, key, vector),
+        )
+    return vector

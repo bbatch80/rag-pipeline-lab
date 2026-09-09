@@ -93,3 +93,36 @@ def test_evaluate_is_type_correct_and_per_source(db, tmp_path, monkeypatch):
     assert r["recall_by_type"]["date"] == 1.0
     assert r["leakage_rate"] == pytest.approx(1 / 3, abs=1e-3)
     assert any("leakage" in f for f in result.failures)
+
+
+def test_non_phi_spans_are_released():
+    """Over-redaction control: domain vocabulary flagged as a name or place,
+    and date-like spans that are not specific dates, protect nothing and are
+    released; real names, places, and dated elements stay."""
+    from raglab.deid import is_phi_span
+
+    released = [("PERSON", "advd"), ("PERSON", "APPEAL_INFO mbr"), ("LOCATION", "PA"),
+                ("PERSON", "card req"), ("PERSON", "Jan"), ("DATE_TIME", "2025"),
+                ("DATE_TIME", "30 day"), ("DATE_TIME", "last week"), ("DATE_TIME", "Outpatient")]
+    kept = [("PERSON", "Tristan Tillman"), ("PERSON", "Mueller"), ("LOCATION", "Kansas City"),
+            ("DATE_TIME", "Aug 31 2026"), ("DATE_TIME", "Sep 19 1985"), ("DATE_TIME", "08/31/26"),
+            ("DATE_TIME", "Jan 2026"), ("DATE_TIME", "2026-08-31"), ("MEMBER_ID", "M822099594")]
+    assert not any(is_phi_span(t, s) for t, s in released), [s for t, s in released if is_phi_span(t, s)]
+    assert all(is_phi_span(t, s) for t, s in kept), [s for t, s in kept if not is_phi_span(t, s)]
+
+
+def test_resolve_overlaps_releases_non_phi_when_given_text():
+    from presidio_analyzer import RecognizerResult
+
+    from raglab.deid import resolve_overlaps
+
+    text = "mbr advd PA required; DOB Sep 19 1985; window 30 day"
+    results = [
+        RecognizerResult("PERSON", text.index("advd"), text.index("advd") + 4, 0.85),
+        RecognizerResult("LOCATION", text.index("PA"), text.index("PA") + 2, 0.85),
+        RecognizerResult("DATE_TIME", text.index("Sep"), text.index("1985") + 4, 0.6),
+        RecognizerResult("DATE_TIME", text.index("30 day"), text.index("30 day") + 6, 0.6),
+    ]
+    assert {r.entity_type for r in resolve_overlaps(results)} == {"PERSON", "LOCATION", "DATE_TIME"}
+    kept = resolve_overlaps(results, text)
+    assert [text[r.start:r.end] for r in kept] == ["Sep 19 1985"]

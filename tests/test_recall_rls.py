@@ -1,7 +1,10 @@
 """Vector recall under RLS is measured per persona against an exact scan run
 as the same persona, on a synthetic corpus where care_team sees ~3% of rows."""
 
+import pytest
 import random
+
+pytestmark = pytest.mark.slow
 
 from raglab import benchmark
 

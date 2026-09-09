@@ -215,9 +215,9 @@ def run(
             gated = decision.scope != "in_scope"
             scores.append((qid, category, "gate_correct", float(gated == expected_gate), {}))
             if not gated:
-                vector = junk_vector if sabotage else retrieval.embed_query(question)
+                vector = junk_vector if sabotage else retrieval.embed_cached(conn, question)
                 candidates = retrieval.search(conn, junk_text if sabotage else question, vector, decision,
-                                              embed=(lambda t: junk_vector) if sabotage else None,
+                                              embed=(lambda t: junk_vector) if sabotage else (lambda t: retrieval.embed_cached(conn, t)),
                                               member_key=member_key)
                 reranked = rerank.rerank(question, candidates)
                 abstained, best = rerank.abstention_verdict(reranked)
@@ -227,10 +227,10 @@ def run(
 
         watch = Stopwatch()
         with watch.stage("embed"):
-            vector = junk_vector if sabotage else retrieval.embed_query(question)
+            vector = junk_vector if sabotage else retrieval.embed_cached(conn, question)
         with watch.stage("search"):
             candidates = retrieval.search(conn, junk_text if sabotage else question, vector, decision,
-                                              embed=(lambda t: junk_vector) if sabotage else None,
+                                              embed=(lambda t: junk_vector) if sabotage else (lambda t: retrieval.embed_cached(conn, t)),
                                               member_key=member_key)
         with watch.stage("rerank"):
             reranked = rerank.rerank(

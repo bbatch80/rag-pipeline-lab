@@ -400,6 +400,9 @@ def deid_eval_cmd(sample: int | None, gate: bool):
                 receipt.add(f"  recall {entity_type}{flag}", recall)
             receipt.add("  overall recall", r["overall_recall"])
             receipt.add("  LEAKAGE RATE", f"{r['leakage_rate']:.4f} (surface or canonical value surviving in indexed text)")
+            receipt.add("  over-redaction", f"{r['over_redaction_rate']:.4f} of {r['n_applied']} replacements protect nothing (not gated)")
+            for etype, span, n in r["over_examples"][:5]:
+                receipt.add("    over-redacted", f"{etype} {span!r} ×{n}")
             for src, doc, etype, value in r["examples"][:3]:
                 receipt.add("    leaked", f"{doc}: {etype} {value!r}")
         receipt.add("gate", f"structured recall >= {deid.DEID_THRESHOLDS['structured_recall']} (*), leakage < {deid.DEID_THRESHOLDS['leakage_rate']}, per source")
@@ -408,6 +411,45 @@ def deid_eval_cmd(sample: int | None, gate: bool):
     except Exception as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()
+
+
+@main.command("explain-golden")
+@click.argument("qid")
+def explain_cmd(qid: str):
+    """Why a golden question hits or misses: pool membership, reranker
+    position and score, and the text the reranker scored."""
+    from raglab import explain as explain_mod
+
+    receipt = Receipt(f"raglab explain-golden {qid}")
+    try:
+        with db.connect() as conn:
+            ex = explain_mod.explain(conn, qid)
+        receipt.add("question", ex.question)
+        if ex.translated != ex.question:
+            receipt.add("translated", ex.translated)
+        receipt.add("member context", ex.member_key or "none")
+        receipt.add("route", f"{ex.route['scope']} years={ex.route['years']} plans={ex.route['plan_codes']} sources={ex.route['sources'] or 'all'}")
+        receipt.add("pool", f"{ex.pool_size} candidates  " + "  ".join(f"{k}={v}" for k, v in sorted(ex.pool_by_source.items())))
+        for e in ex.expected:
+            name = e["spec"].get("internal") or e["spec"].get("title") or str(e["spec"])
+            if not e["in_pool"]:
+                receipt.add(f"expected {name}", "NOT IN POOL (retrieval miss: neither arm surfaced it)")
+                continue
+            receipt.add(f"expected {name}", f"pool rank {e['pool_rank']}, reranked to position {e['rerank_position']} (score {e['score']:.3f})")
+            receipt.add("  scored text", (e["scored_text"] or "").replace("\n", " | ")[:300])
+        abstained, best = ex.verdict
+        receipt.add("verdict", f"{'ABSTAIN' if abstained else 'answer'} (best {best:.3f}, threshold {rerank_threshold()})")
+        for i, t in enumerate(ex.top[:5]):
+            receipt.add(f"  top {i}", f"{t['title']}  {t['score']:.3f}  {t['text'][:90].replace(chr(10), ' ')}")
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+def rerank_threshold() -> float:
+    from raglab import rerank
+
+    return rerank.ABSTAIN_THRESHOLD
 
 
 @main.command("audit")

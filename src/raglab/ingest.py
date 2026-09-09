@@ -66,7 +66,9 @@ def processing_recipe(backend_name: str, phi: bool = False, normalized: bool = F
         f"{chunking.MERGE_UNDER}|{contextual_mode}"
     )
     if phi:
-        recipe += f"|deid:{os.environ.get('RAGLAB_DEID', 'tokenize')}"
+        from raglab import deid
+
+        recipe += f"|deid:{os.environ.get('RAGLAB_DEID', 'tokenize')}:{deid.VERSION}"
     if normalized:  # dictionary version + boilerplate threshold: a change re-ingests the source
         from raglab import indexcopy
 

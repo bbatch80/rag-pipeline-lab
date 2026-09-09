@@ -44,23 +44,32 @@ def _get_model():
 
 # What the cross-encoder reads (A/B, RAGLAB_RERANK_TEXT):
 #   index — the whole search copy, template prefix and source header included
-#   body  — the search copy minus the template prefix line ("This chunk is
-#           from …") and, for call notes, minus the note header line (call
-#           id, date, rep, reason, member, identity verification): metadata
-#           the lexical and vector arms use, noise to a relevance judge.
-RERANK_TEXT = os.environ.get("RAGLAB_RERANK_TEXT", "index")
+#   header — for call notes, minus the note header line (call id, date,
+#           rep, reason, member, identity verification): metadata the
+#           lexical and vector arms use, noise to a relevance judge
+#   body  — header, and minus the template prefix line ("This chunk is
+#           from …") for every source
+#   max   — index AND the header-less body for call notes, higher score wins
+RERANK_TEXT = os.environ.get("RAGLAB_RERANK_TEXT", "max")
 _HEADER_SOURCES = ("call_note",)
+
+
+def record_body(c: Candidate) -> str:
+    """A record's search copy without its header line."""
+    text = c.index_text or c.content
+    lines = [l for l in text.split("\n") if not l.lstrip().startswith("CALL NOTE")]
+    return "\n".join(lines).strip() or text
 
 
 def rerank_text(c: Candidate) -> str:
     text = c.index_text or c.content
-    if RERANK_TEXT != "body":
+    if RERANK_TEXT not in ("body", "header"):
         return text
     lines = text.split("\n")
-    if lines and lines[0].startswith("This chunk is from"):
+    if RERANK_TEXT == "body" and lines and lines[0].startswith("This chunk is from"):
         lines = lines[1:]
-    if c.doc_type in _HEADER_SOURCES and lines and lines[0].lstrip().startswith("CALL NOTE"):
-        lines = lines[1:]
+    if c.doc_type in _HEADER_SOURCES:
+        lines = [l for l in lines if not l.lstrip().startswith("CALL NOTE")]
     return "\n".join(lines).strip() or text
 
 
@@ -91,9 +100,22 @@ def rerank(
     pairs = [(by_year.get(c.year, query), rerank_text(c)) for c in candidates]
     # sentence-transformers >= 3 applies sigmoid activation in predict();
     # scores arrive in 0..1 already.
-    scores = model.predict(pairs)
+    scores = [float(x) for x in model.predict(pairs)]
+    if RERANK_TEXT == "max":
+        # Records (call notes) are scored twice — the whole search copy and
+        # the body without the note header — and take the higher. The
+        # header's member/reason tokens carry an identifier-shaped question;
+        # for a question with no identifier the same header buries a
+        # near-verbatim body (0.99 body-only vs 0.01 with it). Cost: a
+        # second pair per call note in the pool (a handful under a member
+        # context).
+        idx = [i for i, c in enumerate(candidates) if c.doc_type in _HEADER_SOURCES]
+        if idx:
+            bodies = [(pairs[i][0], record_body(candidates[i])) for i in idx]
+            for i, score in zip(idx, model.predict(bodies), strict=True):
+                scores[i] = max(scores[i], float(score))
     for candidate, score in zip(candidates, scores, strict=True):
-        candidate.rerank_score = float(score)
+        candidate.rerank_score = score
     ordered = sorted(candidates, key=lambda c: c.rerank_score, reverse=True)
 
     if len(stratify_years) < 2:

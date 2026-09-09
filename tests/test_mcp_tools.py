@@ -51,6 +51,7 @@ def test_public_identity_gets_no_member_data(monkeypatch):
     not os.environ.get("SNOWFLAKE_ACCOUNT"),
     reason="no Snowflake credentials (verified locally, CI is zero-secret)",
 )
+@pytest.mark.slow
 def test_named_query_runs_under_examiner_role():
     sf = snowlane.connect(role="CLAIMS_EXAMINER")
     try:

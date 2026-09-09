@@ -97,6 +97,7 @@ def test_revoke_changes_visibility_without_reindex(db):
     )
 
 
+@pytest.mark.slow
 def test_hnsw_survives_heavy_rls_trimming(db):
     """Starvation check: a persona seeing ~3% of rows must still get k
     results from an index scan (iterative scan walks past invisible rows)."""

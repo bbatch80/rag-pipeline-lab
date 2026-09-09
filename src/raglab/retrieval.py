@@ -50,36 +50,57 @@ LEXICAL_MERGE = os.environ.get("RAGLAB_LEXICAL_MERGE", "rank")
 POOLS = os.environ.get("RAGLAB_POOLS", "per_source")
 _ID_TOKEN = re.compile(
     r"\b(?:MRN\s*[- ]?\s*\d{7}|M\s*[- ]?\s*\d{3}\s*[- ]?\s*\d{3}\s*[- ]?\s*\d{3}"
-    r"|CLM[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{4})\b", re.I)
+    r"|CLM[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{4}|APL[\s-]?\d{7})\b", re.I)
 # identifier kind -> (table, column) that maps it to a person key
 _ID_LOOKUP = {
     "member_id": ("synthea.patients", "member_id"),
     "mrn": ("synthea.patients", "mrn"),
     "claim_id": ("synthea.call_log", "claim_id"),  # a claim belongs to one member
+    "case_id": ("synthea.appeals", "case_id"),     # so does an appeal case
 }
 
 
-def resolve_member(conn: psycopg.Connection, member_id: str | None, query_text: str = "") -> str | None:
-    """The person key of the member context: the structured member ID the
-    surface supplied, else an identifier the caller holds typed in the
-    question — a member ID, an MRN, or a claim ID (a claim belongs to one
-    member). None when there is no member context. The question is the RAW
-    question — translation replaces identifiers with pseudonyms."""
+@dataclass
+class Context:
+    """What the identifiers in a question (or the surface's structured
+    member) resolve to. Identifiers are CONTEXT, not search words: they
+    become filters on chunk metadata, and the ranker sees the question
+    without them."""
+    member_key: str | None = None
+    record: dict = field(default_factory=dict)  # metadata field -> value (case_id, claim_id)
+    query: str = ""  # the question with resolved identifiers removed
+
+
+STRIP_IDS = os.environ.get("RAGLAB_STRIP_IDS", "off") == "on"  # measured 2026-09-09: stripping loses the ranker its strongest signal
+# identifier kind -> the chunk-metadata field it filters on (member ids and
+# MRNs resolve to the member key, a typed column)
+_RECORD_FIELD = {"claim_id": "claim_id", "case_id": "case_id"}
+
+
+def resolve_context(conn: psycopg.Connection, member_id: str | None, query_text: str = "") -> Context:
+    """The structured member ID the surface supplied, plus every identifier
+    the caller typed — member ID, MRN, claim ID, appeal case ID (each
+    belongs to one member) — validated by shape and check digit, looked up
+    in the record tables, and removed from the ranking query. The question
+    is the RAW question: translation replaces identifiers with pseudonyms."""
     from raglab import identifiers
 
-    candidates: list[tuple[str, str]] = []
+    ctx = Context(query=query_text or "")
+    candidates: list[tuple[str, str, str | None]] = []  # (kind, canonical, surface)
     if member_id:
         canon = identifiers.canonicalize("member_id", member_id)
         if canon is None:
             raise ValueError(f"not a valid member ID: {member_id!r}")
-        candidates.append(("member_id", canon))
-    for token in _ID_TOKEN.findall(query_text or ""):
-        compact = re.sub(r"[\s-]", "", token)
-        for kind in ("member_id", "mrn", "claim_id"):
+        candidates.append(("member_id", canon, None))
+    for m in _ID_TOKEN.finditer(query_text or ""):
+        compact = re.sub(r"[\s-]", "", m.group(0))
+        for kind in ("member_id", "mrn", "claim_id", "case_id"):
             canon = identifiers.canonicalize(kind, compact)
             if canon:
-                candidates.append((kind, canon))
-    for kind, canon in candidates:
+                candidates.append((kind, canon, m.group(0)))
+                break
+    stripped = ctx.query
+    for kind, canon, surface in candidates:
         table, column = _ID_LOOKUP[kind]
         person = "id" if table == "synthea.patients" else "patient"
         try:
@@ -87,11 +108,27 @@ def resolve_member(conn: psycopg.Connection, member_id: str | None, query_text: 
                 row = conn.execute(
                     f"SELECT {person} FROM {table} WHERE {column} = %s", (canon,)
                 ).fetchone()
-        except psycopg.errors.UndefinedTable:  # no synthea schema (CI): no member context
-            return None
-        if row:
-            return str(row[0])
-    return None
+        except psycopg.errors.UndefinedTable:  # no synthea schema (CI): no context
+            return ctx
+        if not row:
+            continue
+        ctx.member_key = ctx.member_key or str(row[0])
+        if kind in _RECORD_FIELD:
+            ctx.record.setdefault(_RECORD_FIELD[kind], canon)
+        if surface:
+            stripped = stripped.replace(surface, " ", 1)
+    ends_q = stripped.rstrip().endswith("?")
+    stripped = re.sub(r"\s+", " ", stripped).strip(" ,.;:?") + ("?" if ends_q else "")
+    # A question that was only an identifier keeps its original text.
+    # RAGLAB_STRIP_IDS=off keeps identifiers in the ranking query (A/B).
+    if STRIP_IDS:
+        ctx.query = stripped if len(re.findall(r"[A-Za-z]{2,}", stripped)) >= 2 else ctx.query
+    return ctx
+
+
+def resolve_member(conn: psycopg.Connection, member_id: str | None, query_text: str = "") -> str | None:
+    """The person key of the member context (see resolve_context)."""
+    return resolve_context(conn, member_id, query_text).member_key
 
 
 def _source_flags(conn: psycopg.Connection) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -122,13 +159,21 @@ class Candidate:
     rerank_score: float | None = None
     content_hash: str = ""
     index_text: str = ""  # the search copy: what every ranking stage reads
+    record: dict = field(default_factory=dict)  # the record's fields (chunk metadata)
     doc_type: str = ""
     floor: bool = False  # admitted by the per-source floor, not the global pool
 
 
 def _filters(route: Route, member_key: str | None = None,
-             member_scoped: tuple[str, ...] = (), events: tuple[str, ...] = ()) -> tuple[str, list]:
+             member_scoped: tuple[str, ...] = (), events: tuple[str, ...] = (),
+             record: dict | None = None) -> tuple[str, list]:
     clauses, params = [], []
+    # Record context: a case or claim id in the question narrows member-
+    # scoped sources to the chunks whose metadata carries that key.
+    for field_name, value in (record or {}).items():
+        if member_scoped:
+            clauses.append("(c.doc_type <> ALL(%s) OR c.metadata->'record'->>%s = %s)")
+            params += [list(member_scoped), field_name, value]
     if route.years:
         # An edition filter: event sources (a call has a date, not an
         # edition) pass regardless of year.
@@ -160,9 +205,11 @@ def search(
     fused_limit: int = FUSED_LIMIT,
     embed=None,
     member_key: str | None = None,
+    record: dict | None = None,
 ) -> list[Candidate]:
-    """`member_key` is the member context (retrieval.resolve_member): member-
-    scoped sources are filtered to it, or skipped when it is None.
+    """`member_key` / `record` are the context (retrieval.resolve_context):
+    member-scoped sources are filtered to the member, or skipped when there
+    is none, and to the record when a case or claim id was given.
 
     Multi-year routes search each year separately and merge — one blended
     ranking lets the dominant year crowd the other's chunks out of the pool
@@ -186,7 +233,7 @@ def search(
             sub = search(
                 conn, sub_text, embed(sub_text),
                 replace(route, years=(year,)), fused_limit=per_year, embed=embed,
-                member_key=member_key,
+                member_key=member_key, record=record,
             )
             for candidate in sub:
                 if candidate.chunk_id not in seen:
@@ -195,7 +242,7 @@ def search(
         return merged
 
     member_scoped, events = _source_flags(conn)
-    where, filter_params = _filters(route, member_key, member_scoped, events)
+    where, filter_params = _filters(route, member_key, member_scoped, events, record)
     lexical = query_text
     lexical_weight = LEXICAL_WEIGHT_ID if ID_SHAPED.search(query_text) else 1.0
     lexical_sources = route.sources or _ingested_sources(conn)
@@ -325,7 +372,7 @@ def _hybrid(
                c.plan_code, c.year, c.acl_tag,
                c.metadata->'pages',
                f.vector_rank, f.text_rank, f.score,
-               d.content_hash, c.doc_type, c.index_text
+               d.content_hash, c.doc_type, c.index_text, c.metadata->'record'
         FROM fused f
         JOIN chunks c ON c.id = f.id
         JOIN documents d ON d.id = c.document_id
@@ -344,7 +391,7 @@ def _hybrid(
             source_path=r[4], plan_code=r[5], year=r[6], acl_tag=r[7],
             pages=r[8] or [], vector_rank=r[9], text_rank=r[10],
             rrf_score=float(r[11]), content_hash=r[12], doc_type=r[13] or "",
-            index_text=r[14] or "",
+            index_text=r[14] or "", record=r[15] or {},
         )
         for r in rows
     ]

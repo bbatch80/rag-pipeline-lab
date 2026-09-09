@@ -32,7 +32,7 @@ def test_golden_two_lane_schema():
     from raglab.ablation import load_golden
 
     two_lane = [g for g in load_golden() if g["category"] == "two_lane"]
-    assert len(two_lane) == 5
+    assert len(two_lane) == 7
     for item in two_lane:
         assert item["identity"] in IDENTITIES
         assert item["doc_probe"] and item["doc_anchor"]

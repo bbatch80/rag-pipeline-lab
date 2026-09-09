@@ -204,11 +204,12 @@ def run(
         decision = router.route(item["question"])
         # Member context, like the pipeline: the item's member_id field (the
         # member a rep would have open) or an identifier in the question.
-        member_key = retrieval.resolve_member(conn, item.get("member_id"), item["question"])
+        ctx = retrieval.resolve_context(conn, item.get("member_id"), item["question"])
+        member_key, record = ctx.member_key, ctx.record
         # The eval runs as admin, which is entitled to the vault: translate
-        # like the pipeline does, so tokenized notes stay reachable by the
-        # identifiers a question naturally uses.
-        question = deid.translate_query(conn, item["question"])
+        # like the pipeline does (names -> pseudonyms); resolved identifiers
+        # are already context, not search words.
+        question = deid.translate_query(conn, ctx.query)
 
         if item.get("unanswerable"):
             expected_gate = item["expected_trigger"] == "scope_gate"
@@ -218,7 +219,7 @@ def run(
                 vector = junk_vector if sabotage else retrieval.embed_cached(conn, question)
                 candidates = retrieval.search(conn, junk_text if sabotage else question, vector, decision,
                                               embed=(lambda t: junk_vector) if sabotage else (lambda t: retrieval.embed_cached(conn, t)),
-                                              member_key=member_key)
+                                              member_key=member_key, record=record)
                 reranked = rerank.rerank(question, candidates)
                 abstained, best = rerank.abstention_verdict(reranked)
                 scores.append((qid, category, "abstained", float(abstained),
@@ -231,7 +232,7 @@ def run(
         with watch.stage("search"):
             candidates = retrieval.search(conn, junk_text if sabotage else question, vector, decision,
                                               embed=(lambda t: junk_vector) if sabotage else (lambda t: retrieval.embed_cached(conn, t)),
-                                              member_key=member_key)
+                                              member_key=member_key, record=record)
         with watch.stage("rerank"):
             reranked = rerank.rerank(
                 question, candidates, top_n=10,

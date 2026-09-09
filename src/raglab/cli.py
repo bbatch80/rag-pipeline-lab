@@ -216,6 +216,28 @@ HNSW_M = 16
 HNSW_EF_CONSTRUCTION = 64
 
 
+@main.command("rebuild-search-copy")
+@click.option("--source", "sources_", multiple=True, help="Source key(s); default every ingested vector source.")
+def rebuild_search_copy_cmd(sources_: tuple[str, ...]):
+    """Recompute the search copy (index_text) from stored content + record
+    metadata and clear embeddings of changed chunks — for derived-copy
+    changes (dictionary, boilerplate, record header) without re-parsing or
+    re-de-identifying. Follow with `raglab embed` and `raglab index`."""
+    from raglab import ingest, sources
+
+    receipt = Receipt("raglab rebuild-search-copy" + "".join(f" --source {s}" for s in sources_))
+    try:
+        with db.connect() as conn:
+            stats = ingest.rebuild_search_copy(conn, sources.load(conn), tuple(sources_))
+            conn.commit()
+        for key, s in stats.items():
+            receipt.add(key, f"{s['rebuilt']} of {s['chunks']} chunks rebuilt (embeddings cleared)")
+        receipt.add("next", "raglab embed && raglab index")
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
 @main.command("index")
 def index_cmd():
     """Drop and rebuild the HNSW index; reindex BM25 (bulk-load-then-index)."""
@@ -307,6 +329,29 @@ def synth_calls_cmd(members: int, calls: int, seed: int):
         for k, v in stats.items():
             receipt.add(k, v)
         receipt.add("PHI manifest", str(journeys.MANIFEST_PATH.relative_to(config.REPO_ROOT)))
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+@synth_group.command("appeals")
+@click.option("--cases", default=300, help="Appeal cases (drawn from APPEAL_INFO calls on denied claims).")
+@click.option("--letters", default=40, help="Determination letters rendered as PDF.")
+@click.option("--seed", default=42, help="Generation seed.")
+def synth_appeals_cmd(cases: int, letters: int, seed: int):
+    """Claim adjudication overlay + appeal cases (+ appeal_evidence) as an
+    additive pass over the merged call log; appeal documents and their PHI manifest."""
+    from raglab.synth import appeals
+
+    receipt = Receipt("raglab synth appeals")
+    try:
+        with db.connect() as conn:
+            stats = appeals.generate(conn, cases=cases, letters=letters, seed=seed)
+            conn.commit()
+        for k, v in stats.items():
+            receipt.add(k, v)
+        receipt.add("letters rendered", appeals.render_letters())
+        receipt.add("PHI manifest", str(appeals.MANIFEST_PATH.relative_to(config.REPO_ROOT)))
     except Exception as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()
@@ -428,6 +473,7 @@ def explain_cmd(qid: str):
         if ex.translated != ex.question:
             receipt.add("translated", ex.translated)
         receipt.add("member context", ex.member_key or "none")
+        receipt.add("record context", ex.route.get("record") or "none")
         receipt.add("route", f"{ex.route['scope']} years={ex.route['years']} plans={ex.route['plan_codes']} sources={ex.route['sources'] or 'all'}")
         receipt.add("pool", f"{ex.pool_size} candidates  " + "  ".join(f"{k}={v}" for k, v in sorted(ex.pool_by_source.items())))
         for e in ex.expected:

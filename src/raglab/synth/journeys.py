@@ -222,6 +222,9 @@ def generate(conn: psycopg.Connection, members: int = 1500, target_calls: int = 
             (calls_dir / f"call_{note.call_id}.md").write_text(note.text() + "\n")
             rec = {"doc": f"call_{note.call_id}.md", "patient_id": note.patient, "template": note.reason,
                    "year": note.when.year,
+                   # the CRM row's required fields: chunk metadata, never extracted from the text
+                   "call_id": note.call_id, "member_id": note.member_id, "call_date": note.when.isoformat(), "reason_code": note.reason,
+                   "rep_id": note.rep, "disposition": note.disposition, "claim_id": note.claim_id,
                    "entities": [{"type": e.type, "value": e.value, "canonical": e.canonical} for e in note.entities]}
             if note.duplicate_of:
                 rec["duplicate_of"] = note.duplicate_of

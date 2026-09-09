@@ -38,7 +38,9 @@ def manifest_meta(source: Source) -> dict[str, dict]:
     for line in path.read_text().splitlines():
         if line.strip():
             rec = json.loads(line)
-            out[Path(rec["doc"]).stem] = {"patient_id": rec.get("patient_id"), "year": rec.get("year")}
+            record = {k: v for k, v in rec.items()
+                      if k not in ("doc", "patient_id", "template", "year", "entities", "duplicate_of")}
+            out[Path(rec["doc"]).stem] = {"patient_id": rec.get("patient_id"), "year": rec.get("year"), "record": record}
     return out
 
 
@@ -77,6 +79,7 @@ def items(registry: Registry) -> list[InternalItem]:
                     titles.get(rel, path.stem), source.doc_type, source.acl_tag,
                     year=m.get("year") or 2026,
                     member_key=m.get("patient_id"),
+                    record=m.get("record") or {},
                 ),
                 backend_kind=kind,
             ))

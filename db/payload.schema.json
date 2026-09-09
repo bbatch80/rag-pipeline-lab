@@ -45,6 +45,10 @@
               "content_hash": {
                 "type": "string",
                 "description": "Source document fingerprint (bytes + processing recipe): lineage to the exact version retrieved."
+              },
+              "record": {
+                "type": "object",
+                "description": "For member records: the record system's required fields (case id, claim id, call id, dates, codes) — metadata, never extracted from text."
               }
             }
           },

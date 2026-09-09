@@ -34,6 +34,16 @@ uv run raglab explain-golden C6                      # did the expected chunk re
 Query embeddings are cached by exact text (`query_embeddings`), so repeat
 eval runs and repeat questions do not call the embedding API.
 
+Three layers of change, three costs. Source bytes, parser, or de-id: the
+processing recipe changes and the affected documents re-ingest in full
+(parse, chunk, de-identify, embed — about 15 minutes for the call notes).
+A *derived* copy — the search copy's dictionary, boilerplate threshold, or
+record header — is rebuilt from the stored de-identified content and record
+metadata with `raglab rebuild-search-copy`, which clears the embedding of
+only the chunks whose copy changed; `raglab embed && raglab index` finish
+it in about three minutes. Metadata alone is refreshed in place by the
+ingest's skip path.
+
 The Docling parser backend is optional locally: `uv sync --group docling`,
 then `uv run docling-tools models download` (one-time, explicit model fetch).
 
@@ -117,8 +127,9 @@ about one person: call notes) are searched only inside a *member context*
 and filtered to that member. The context is a structured field the calling
 surface supplies — the member a rep has open, as a payer's desktop does —
 or, as a convenience, a member ID, MRN, or claim ID typed in the question
-(a claim belongs to one member). Names never resolve to a member: identity
-at a payer is ID plus date of birth. With no member context, member-scoped
+(a claim belongs to one member). A claim ID or an appeal case ID
+counts because each belongs to one member. Names never resolve to a member:
+identity at a payer is ID plus date of birth. With no member context, member-scoped
 sources are not searched at all, so a question about one member cannot
 surface another member's records (gated at 1.0 in CI). **Event** sources
 carry the date of the event (a call's year, read from the call record, not
@@ -132,9 +143,49 @@ copy: identifiers canonicalized, shorthand expanded from a curated
 dictionary, and sentences that appear in more than 2% of notes dropped as
 boilerplate (frequency finds the macros; nothing knows the macro list).
 Near-duplicates (MinHash, Jaccard ≥ 0.8 with the header line excluded) point
-at their original and carry no chunks. Warehouse lane: PATIENTS, CLAIM_LINES,
-ENROLLMENT (one row per member per plan year), CALL_LOG — reachable only
-through named, parameterized queries under Snowflake row-access and masking
+at their original and carry no chunks.
+
+**Appeals and claim adjudication** are an additive pass over those merged
+records rather than a regeneration of the storylines: every claim line from
+2024 on gets an adjudication (about 9% denied, with a skewed reason mix),
+and where a call note already told the member what happened to a claim the
+overlay agrees with it. **300 appeal cases** are drawn from calls in which
+the member disputed a denial of their own claim (the ~2% planted wrong-claim
+citations never become appeals): a member statement, the denial rationale
+citing the brochure section and, for clinical denials, a medical policy id,
+a clinical summary citing the member's clinical note when one is on file,
+and a determination — inline, or as one of **40 determination letters
+rendered as PDF**. Filing sits within the six-month window and decisions
+within thirty days, as FEHB brochure Section 8 describes. Every case writes
+what it cites (call note, clinical note, policy, letter) to an
+`appeal_evidence` table; nothing reads it yet — Phase 2's relational
+entitlement (a clinical note visible to the appeals tier only while an
+appeal cites it) enforces over it. Stated simplification: claim ids derive
+from encounter ids into a nine-digit space, and eight of 127,498 collide —
+one claim number, two lines.
+
+**Record metadata.** A call note or an appeal is a row in a record system
+before it is a document, and that row has required fields: call id, member,
+date, reason code, rep, claim discussed; case id, member, claim, filing and
+decision dates, type, denial reason, decision, reviewer, policy. Every chunk
+of such a document carries those fields as metadata, read from the record
+(the manifest here), never extracted from the text. They do two jobs. An
+identifier in a question — member id, MRN, claim id, case id, recognized by
+shape and check digit, no model — resolves to a filter on that metadata, so
+"why was appeal APL-1020254 overturned" narrows to that case's chunks
+before ranking. And the record's keys are written as one header line into
+every chunk's search copy, as the vault's pseudonyms, so a section chunk
+ranks on its content *and* on whose record it is: without that line only the
+header section held the identifiers and the determination section scored
+0.002 against an identifier-shaped question; with it, 0.97. The display
+copy is untouched, and the payload's `source.record` names the record a
+citation came from. Measured and rejected on the way: removing the resolved
+identifier from the ranking query (the reranker's strongest cue on these
+terse, tokenized records — call-note abstentions 0.1 → 0.4).
+
+Warehouse lane: PATIENTS, CLAIM_LINES, ENROLLMENT (one row per member per
+plan year), CALL_LOG, CLAIM_ADJUDICATION, APPEALS — reachable only through
+named, parameterized queries under Snowflake row-access and masking
 policies.
 
 ## Evaluation experiments

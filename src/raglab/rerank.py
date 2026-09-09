@@ -31,7 +31,7 @@ RERANKERS = {
         # golden slice (2026-09-09, 10 items): correct notes 0.16–0.99,
         # unrelated notes ≈ 0.00–0.01; a threshold of 0.1 sits under every
         # answered item with margin and above the noise floor.
-        "thresholds": {"call_note": 0.1},
+        "thresholds": {"call_note": 0.1, "appeal": 0.1},  # records: same bar (appeal chunks carry the record header)
     },
 }
 RERANKER = os.environ.get("RAGLAB_RERANKER", "bge-base")
@@ -65,13 +65,14 @@ def _get_model():
 #           from …") for every source
 #   max   — index AND the header-less body for call notes, higher score wins
 RERANK_TEXT = os.environ.get("RAGLAB_RERANK_TEXT", "max")
-_HEADER_SOURCES = ("call_note",)
+_HEADER_SOURCES = ("call_note", "appeal")
+_HEADER_PREFIXES = ("record:", "CALL NOTE", "Appeal case", "Case ", "GEHA APPEALS DETERMINATION", "Case:", "Member:")
 
 
 def record_body(c: Candidate) -> str:
     """A record's search copy without its header line."""
     text = c.index_text or c.content
-    lines = [l for l in text.split("\n") if not l.lstrip().startswith("CALL NOTE")]
+    lines = [l for l in text.split("\n") if not l.lstrip().startswith(_HEADER_PREFIXES)]
     return "\n".join(lines).strip() or text
 
 
@@ -83,7 +84,7 @@ def rerank_text(c: Candidate) -> str:
     if RERANK_TEXT == "body" and lines and lines[0].startswith("This chunk is from"):
         lines = lines[1:]
     if c.doc_type in _HEADER_SOURCES:
-        lines = [l for l in lines if not l.lstrip().startswith("CALL NOTE")]
+        lines = [l for l in lines if not l.lstrip().startswith(_HEADER_PREFIXES)]
     return "\n".join(lines).strip() or text
 
 

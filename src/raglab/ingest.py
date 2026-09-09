@@ -54,7 +54,11 @@ def _contextualize(chunks: list[Chunk], meta: DocumentMeta) -> list[Chunk]:
         return list(pool.map(one, chunks))
 
 
-def processing_recipe(backend_name: str, phi: bool = False, normalized: bool = False) -> str:
+RECORD_HEADER = "rec:v1"  # search-copy header carrying the record's keys (member records)
+
+
+def processing_recipe(backend_name: str, phi: bool = False, normalized: bool = False,
+                      record: bool = False) -> str:
     """The recipe half of a document's identity: what would change the
     stored chunks even when the source bytes don't. PHI-bearing sources add
     the de-id mode, so changing it re-ingests exactly those documents."""
@@ -73,7 +77,83 @@ def processing_recipe(backend_name: str, phi: bool = False, normalized: bool = F
         from raglab import indexcopy
 
         recipe += f"|{indexcopy.RECIPE}"
+    if record:  # the record's keys ride in every chunk's search copy
+        recipe += f"|{RECORD_HEADER}"
     return recipe
+
+
+_RECORD_KEYS = (("case_id", "CASE_ID", "case"), ("member_id", "MEMBER_ID", "member"),
+                ("claim_id", "CLAIM_ID", "claim"), ("call_id", None, "call"))
+
+
+def record_header(conn, record: dict, deid_mode: str) -> str:
+    """One line for the search copy of every chunk of a member record: the
+    record's keys, as the vault's pseudonyms (the same tokens a translated
+    question carries). A section chunk then ranks on its content AND on
+    whose record it is — without it, only the header section holds the
+    identifiers and every other section scores near zero against an
+    identifier-shaped question. Metadata (routing) and this line (ranking)
+    come from the record row, never from the text. The display copy is
+    untouched."""
+    parts = []
+    for key, entity, label in _RECORD_KEYS:
+        value = record.get(key)
+        if not value:
+            continue
+        if entity and deid_mode in ("mask", "tokenize"):
+            from raglab import deid
+
+            value = f"[{entity}]" if deid_mode == "mask" else deid._pseudonym(conn, entity, value)
+        parts.append(f"{label} {value}")
+    return ("record: " + "  ".join(parts)) if parts else ""
+
+
+def rebuild_search_copy(conn, registry, source_keys: tuple[str, ...] = ()) -> dict:
+    """Recompute every chunk's search copy (index_text) from what is already
+    stored — the de-identified content and the record metadata — and clear
+    the embedding of every chunk whose copy changed, so `raglab embed`
+    re-embeds only those. This is the tool for a change to a DERIVED copy
+    (dictionary version, boilerplate threshold, record header): the parse
+    and de-id steps produced the same content last time and are not run
+    again. Source bytes, parser or de-id changes still go through the
+    processing recipe (a full re-ingest)."""
+    from raglab.internal_corpus import manifest_meta
+
+    deid_mode = os.environ.get("RAGLAB_DEID", "tokenize")
+    stats = {}
+    for source in registry.all:
+        if source.lane not in ("vector", "both") or source.status != "ingested":
+            continue
+        if source_keys and source.key not in source_keys:
+            continue
+        metas = manifest_meta(source)
+        changed = 0
+        rows = conn.execute(
+            "SELECT c.id, c.content, c.index_text, d.title FROM chunks c JOIN documents d ON d.id = c.document_id "
+            "WHERE d.source_id = %s", (source.source_id,)
+        ).fetchall()
+        for chunk_id, content, current, title in rows:
+            m = metas.get(title, {})
+            meta = DocumentMeta(carrier="", plan_code=None, plan_options=(), program="", year=0,
+                                doc_type=source.doc_type or "", acl_tag=source.acl_tag, effective_date="",
+                                title=title, record=m.get("record") or {})
+            header = search_copy_header(conn, source, meta, deid_mode)
+            new = (header + "\n" if header else "") + index_copy(content, source)
+            if new != current:
+                conn.execute("UPDATE chunks SET index_text = %s, embedding = NULL WHERE id = %s", (new, chunk_id))
+                changed += 1
+        stats[source.key] = {"chunks": len(rows), "rebuilt": changed}
+    return stats
+
+
+def search_copy_header(conn, source, meta: DocumentMeta, deid_mode: str) -> str:
+    """The record header for a chunk's search copy — only for records chunked
+    by section. A one-chunk record (call notes) already carries its keys in
+    its own text; adding them again only dilutes it (measured: a borderline
+    call note fell from 0.195 to 0.067)."""
+    if not meta.record or source.chunk_profile == "record":
+        return ""
+    return record_header(conn, meta.record, deid_mode)
 
 
 def index_copy(text: str, source) -> str:
@@ -113,7 +193,7 @@ def ingest_document(
 
     source = sources.load(conn).for_doc_type(meta.doc_type)
     digest = content_hash(
-        pdf_path, processing_recipe(backend.name, source.phi, indexcopy.is_normalized(source))
+        pdf_path, processing_recipe(backend.name, source.phi, indexcopy.is_normalized(source), bool(meta.record))
     )
 
     row = conn.execute(
@@ -129,6 +209,12 @@ def ingest_document(
             conn.execute(
                 "UPDATE chunks SET member_key = %s WHERE document_id = %s AND member_key IS DISTINCT FROM %s",
                 (meta.member_key, row[0], meta.member_key),
+            )
+        if meta.record:  # the record's fields ride as chunk metadata; refresh without re-ingesting
+            conn.execute(
+                "UPDATE chunks SET metadata = metadata || jsonb_build_object('record', %s::jsonb) "
+                "WHERE document_id = %s AND metadata->'record' IS DISTINCT FROM %s::jsonb",
+                (json.dumps(meta.record), row[0], json.dumps(meta.record)),
             )
         return "skipped"
 
@@ -204,6 +290,7 @@ def ingest_document(
             conn.execute("DELETE FROM quarantine WHERE source_path = %s", (source_path,))
             return "duplicate"
 
+    header = search_copy_header(conn, source, meta, deid_mode)
     with conn.cursor() as cur:
         cur.executemany(
             """
@@ -217,7 +304,7 @@ def ingest_document(
                     doc_id,
                     i,
                     chunk.text,
-                    index_copy(chunk.text, source),
+                    (header + "\n" if header else "") + index_copy(chunk.text, source),
                     meta.year,
                     meta.plan_code,
                     meta.acl_tag,

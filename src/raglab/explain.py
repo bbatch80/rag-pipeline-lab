@@ -33,11 +33,12 @@ def explain(conn: psycopg.Connection, qid: str, top_n: int = 10) -> Explanation:
         raise KeyError(f"no golden item {qid!r}")
     item = items[qid]
     question = item.get("doc_probe") or item["question"]
-    member_key = retrieval.resolve_member(conn, item.get("member_id"), question)
-    translated = deid.translate_query(conn, question)
+    ctx = retrieval.resolve_context(conn, item.get("member_id"), question)
+    member_key = ctx.member_key
+    translated = deid.translate_query(conn, ctx.query)
     route = router.route(question)
     vector = retrieval.embed_cached(conn, translated)
-    pool = retrieval.search(conn, translated, vector, route, member_key=member_key,
+    pool = retrieval.search(conn, translated, vector, route, member_key=member_key, record=ctx.record,
                             embed=lambda t: retrieval.embed_cached(conn, t))
     ranked = rerank.rerank(translated, pool, top_n=len(pool) or 1, stratify_years=route.years)
     position = {c.chunk_id: i for i, c in enumerate(ranked)}
@@ -65,7 +66,8 @@ def explain(conn: psycopg.Connection, qid: str, top_n: int = 10) -> Explanation:
             "section": c.section, "text": rerank.rerank_text(c)[:160]} for c in ranked[:top_n]]
     return Explanation(
         qid=qid, question=question, translated=translated, member_key=member_key,
-        route={"scope": route.scope, "years": route.years, "plan_codes": route.plan_codes, "sources": route.sources},
+        route={"scope": route.scope, "years": route.years, "plan_codes": route.plan_codes, "sources": route.sources,
+               "record": ctx.record},
         pool_size=len(pool), pool_by_source=by_source, expected=expected, top=top,
         verdict=rerank.abstention_verdict(ranked[:top_n]),
     )

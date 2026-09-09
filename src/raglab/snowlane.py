@@ -40,6 +40,15 @@ EXPORTS = {
         "SELECT patient, member_id, year, line_of_business, plan_code, plan_option, "
         "tier, enrollment_code FROM synthea.enrollment"
     ),
+    "claim_adjudication": (
+        "SELECT claim_id, encounter, patient, member_id, status, decision_date, denial_reason, "
+        "policy_id, " + LOB_EXPR.format(col="patient") + " FROM synthea.claim_adjudication"
+    ),
+    "appeals": (
+        "SELECT case_id, patient, member_id, encounter, claim_id, call_id, filed_date, appeal_type, "
+        "denial_reason, decision, decided_date, reviewer, policy_id, "
+        + LOB_EXPR.format(col="patient") + " FROM synthea.appeals"
+    ),
     "claim_lines": (
         "SELECT id, patient, start::date, encounterclass, code, description, "
         "reasondescription, base_encounter_cost, total_claim_cost, "
@@ -236,6 +245,50 @@ NAMED_QUERIES = {
             ORDER BY YEAR
         """,
     },
+    "claim_adjudication": {
+        "doc": ("The adjudication of one claim line: status (paid | denied | pending), "
+                "decision date, denial reason, and the medical policy applied, if any."),
+        "params": {"claim_id": str},
+        "sql": """
+            SELECT CLAIM_ID, MEMBER_ID, STATUS, DECISION_DATE, DENIAL_REASON, POLICY_ID
+            FROM CLAIM_ADJUDICATION
+            WHERE CLAIM_ID = %(claim_id)s
+        """,
+    },
+    "member_denials": {
+        "doc": ("The member's denied claim lines, newest decision first: claim, decision "
+                "date, denial reason, policy applied."),
+        "params": {"member_id": str, "limit": int},
+        "sql": """
+            SELECT CLAIM_ID, DECISION_DATE, DENIAL_REASON, POLICY_ID
+            FROM CLAIM_ADJUDICATION
+            WHERE MEMBER_ID = %(member_id)s AND STATUS = 'denied'
+            ORDER BY DECISION_DATE DESC
+            LIMIT %(limit)s
+        """,
+    },
+    "appeal_case": {
+        "doc": ("One appeal case by case ID: member, claim, the call it followed, filing "
+                "and decision dates, type, denial reason, decision, reviewer, policy."),
+        "params": {"case_id": str},
+        "sql": """
+            SELECT CASE_ID, MEMBER_ID, CLAIM_ID, CALL_ID, FILED_DATE, APPEAL_TYPE,
+                   DENIAL_REASON, DECISION, DECIDED_DATE, REVIEWER, POLICY_ID
+            FROM APPEALS
+            WHERE CASE_ID = %(case_id)s
+        """,
+    },
+    "member_appeals": {
+        "doc": "The member's appeal cases, newest filing first.",
+        "params": {"member_id": str, "limit": int},
+        "sql": """
+            SELECT CASE_ID, CLAIM_ID, FILED_DATE, APPEAL_TYPE, DENIAL_REASON, DECISION, DECIDED_DATE
+            FROM APPEALS
+            WHERE MEMBER_ID = %(member_id)s
+            ORDER BY FILED_DATE DESC
+            LIMIT %(limit)s
+        """,
+    },
     "cost_by_condition": {
         "doc": ("Aggregate across members: claim-line count, average and "
                 "total cost, grouped by encounter description matching the "
@@ -262,7 +315,7 @@ NAMED_QUERIES = {
 MASKED_FOR_ROLE = {
     "CARE_MANAGER": {"BASE_COST", "TOTAL_COST", "TOTAL_CLAIM_COST",
                      "PAYER_COVERAGE", "AVG_COST"},
-    "ACTUARY": {"SSN", "FIRST_NAME", "LAST_NAME", "BIRTHDATE", "MEMBER_ID", "MRN", "CLAIM_ID"},
+    "ACTUARY": {"SSN", "FIRST_NAME", "LAST_NAME", "BIRTHDATE", "MEMBER_ID", "MRN", "CLAIM_ID", "CASE_ID"},
 }
 
 
@@ -279,7 +332,8 @@ def run_named_query(sf_conn, query_name: str, params: dict) -> dict:
             },
         }
     spec = NAMED_QUERIES[query_name]
-    bound = {"member_id": None, "last_name": None, "first_name": None, "limit": 20}
+    bound = {"member_id": None, "last_name": None, "first_name": None, "limit": 20,
+             "claim_id": None, "case_id": None}
     bound.update({k: v for k, v in params.items() if v is not None})
     cur = sf_conn.cursor()
     role = cur.execute("SELECT CURRENT_ROLE()").fetchone()[0]

@@ -200,3 +200,51 @@ def test_claim_id_resolves_to_its_member(db):
         "SELECT call_id, patient, claim_id FROM synthea.call_log WHERE claim_id IS NOT NULL LIMIT 1"
     ).fetchone()
     assert retrieval.resolve_member(db, None, f"What happened with claim {claim}?") == str(patient)
+
+
+def test_case_id_resolves_to_its_member(db):
+    from raglab import retrieval
+
+    if not _has_roster(db):
+        pytest.skip("needs the synthea appeals table (not in CI's fresh database)")
+    row = db.execute("SELECT case_id, patient FROM synthea.appeals LIMIT 1").fetchone()
+    if row is None:
+        pytest.skip("no appeals generated")
+    assert retrieval.resolve_member(db, None, f"What was the basis of appeal {row[0]}?") == str(row[1])
+
+
+def test_context_turns_identifiers_into_filters(db):
+    """Identifiers are context: resolved to the member and the record, and
+    removed from the ranking query."""
+    from raglab import retrieval
+
+    if not _has_roster(db):
+        pytest.skip("needs the synthea roster (not in CI's fresh database)")
+    case, patient, claim = db.execute("SELECT case_id, patient, claim_id FROM synthea.appeals LIMIT 1").fetchone()
+    question = f"Why was appeal {case} overturned, and which policy applied?"
+    ctx = retrieval.resolve_context(db, None, question)
+    assert ctx.member_key == str(patient) and ctx.record == {"case_id": case}
+    assert ctx.query == question, "the ranking query keeps the identifier (measured: stripping loses the ranker's cue)"
+    ctx = retrieval.resolve_context(db, None, f"What happened with claim {claim}?")
+    assert ctx.record == {"claim_id": claim}
+
+
+def test_context_can_strip_identifiers_for_the_ab(db, monkeypatch):
+    from raglab import retrieval
+
+    if not _has_roster(db):
+        pytest.skip("needs the synthea roster (not in CI's fresh database)")
+    case = db.execute("SELECT case_id FROM synthea.appeals LIMIT 1").fetchone()[0]
+    monkeypatch.setattr(retrieval, "STRIP_IDS", True)
+    ctx = retrieval.resolve_context(db, None, f"Why was appeal {case} overturned, and which policy applied?")
+    assert case not in ctx.query and "overturned" in ctx.query and ctx.query.endswith("?")
+    assert retrieval.resolve_context(db, None, case).query == case  # an identifier alone keeps its text
+
+
+def test_filters_record_context_narrows_member_scoped_sources_only():
+    from raglab.retrieval import _filters
+    from raglab.router import Route
+
+    where, params = _filters(Route(scope="in_scope"), "k", ("appeal",), (), {"case_id": "APL-0000000"})
+    assert "c.metadata->'record'->>%s = %s" in where and "case_id" in params and "APL-0000000" in params
+    assert "(c.doc_type <> ALL(%s) OR" in where

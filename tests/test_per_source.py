@@ -32,9 +32,11 @@ def test_floor_keeps_a_crowded_out_source_in_the_pool(db, monkeypatch):
         )
     route = router.Route(scope="in_scope", years=(2026,))
     # The fixture's DELETE leaves the live corpus's ~21k vectors in the HNSW
-    # graph as invisible entries; an iterative scan gives up after
-    # hnsw.max_scan_tuples (20k) and can miss a few of the 63 visible ones.
-    db.execute("SET LOCAL hnsw.max_scan_tuples = 200000")
+    # graph as invisible entries, and an approximate scan walking them can
+    # miss a few of the 63 visible rows (47/50 seen twice). This test is
+    # about the floor, not the index: take the exact path.
+    db.execute("SET LOCAL enable_indexscan = off")
+    db.execute("SET LOCAL enable_bitmapscan = off")
     pool = retrieval.search(db, "zzzz", _vec(0.0), route)
 
     by_type = {}

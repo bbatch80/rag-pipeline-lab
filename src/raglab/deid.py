@@ -125,7 +125,11 @@ def _domain_vocab() -> set[str]:
         words.update(_MONTH_NAMES.split("|"))
         words.update({"january", "february", "march", "april", "june", "july", "august",
                       "september", "october", "november", "december", "outpatient", "inpatient",
-                      "card", "replacement", "portal", "digital", "line", "window", "directory"})
+                      "card", "replacement", "portal", "digital", "line", "window", "directory",
+                      "opm", "geha", "cp", "appeals", "department", "determination"})
+        from raglab.synth import appeals as appeals_mod
+
+        words.update(r.lower() for r in appeals_mod.REVIEWERS)  # staff initials are not member PHI
         _vocab = words
     return _vocab
 
@@ -136,7 +140,8 @@ def is_phi_span(entity_type: str, span_text: str) -> bool:
         return _SPECIFIC_DATE.search(span_text) is not None
     if entity_type in _VOCAB_TYPES:
         tokens = [t.lower() for t in _TOKEN.findall(span_text)]
-        if tokens and all(t in _domain_vocab() for t in tokens):
+        words = [t for t in tokens if not t.isdigit()]  # a policy id "CP-0005": vocabulary plus a number
+        if words and all(t in _domain_vocab() for t in words):
             return False
     return True
 

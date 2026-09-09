@@ -113,3 +113,21 @@ def test_failed_update_preserves_prior_good_version(db, tmp_path):
     # The previous good version must remain queryable.
     assert db.execute("SELECT count(*) FROM documents").fetchone()[0] == 1
     assert db.execute("SELECT count(*) FROM chunks").fetchone()[0] > 0
+
+
+def test_record_header_carries_the_record_keys_as_vault_tokens(db):
+    """Every chunk of a member record gets a search-copy header with the
+    record's keys as the vault's pseudonyms — the tokens a translated
+    question carries — so section chunks rank on whose record they are."""
+    from raglab import deid, ingest
+
+    record = {"case_id": "APL-0038174", "member_id": "M822099594", "claim_id": "CLM-8124637185", "call_id": "C0000105",
+              "decision": "upheld"}
+    header = ingest.record_header(db, record, "tokenize")
+    assert header.startswith("record: case [CASE_ID-") and "member [MEMBER_ID-" in header and "claim [CLAIM_ID-" in header
+    assert "call C0000105" in header and "upheld" not in header and "APL-0038174" not in header
+    assert header.split("case ")[1].split()[0] == deid._pseudonym(db, "CASE_ID", "APL-0038174")
+    assert ingest.record_header(db, {}, "tokenize") == ""
+    assert ingest.record_header(db, record, "mask") == "record: case [CASE_ID]  member [MEMBER_ID]  claim [CLAIM_ID]  call C0000105"
+    assert ingest.processing_recipe("fast", phi=True, record=True).endswith("|" + ingest.RECORD_HEADER)
+    assert ingest.RECORD_HEADER not in ingest.processing_recipe("fast", phi=True)

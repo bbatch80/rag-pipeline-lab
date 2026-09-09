@@ -1,7 +1,7 @@
 """Metadata derivation: from corpus definition + document structure,
 never hand-tagging."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from raglab.chunking import Chunk
 from raglab.corpus import CorpusCell
@@ -19,11 +19,15 @@ class DocumentMeta:
     effective_date: str
     title: str
     member_key: str | None = None  # person key for member-scoped documents
+    # The record system's required fields for a member record (case id,
+    # claim id, call id, dates, codes): stamped on every chunk as metadata
+    # for routing and citation — read from the record, never from the text.
+    record: dict = field(default_factory=dict)
 
 
 def derive_internal_meta(
     title: str, doc_type: str, acl_tag: str, year: int = 2026,
-    member_key: str | None = None,
+    member_key: str | None = None, record: dict | None = None,
 ) -> DocumentMeta:
     """Internal-tier documents: no plan_code (they span plans), program
     'internal', year = effective plan year of their content."""
@@ -38,6 +42,7 @@ def derive_internal_meta(
         effective_date=f"{year}-01-01",
         title=title,
         member_key=member_key,
+        record=record or {},
     )
 
 
@@ -67,4 +72,5 @@ def chunk_jsonb(doc: DocumentMeta, chunk: Chunk) -> dict:
         "section": chunk.section,
         "pages": list(chunk.pages),
         "categories": list(chunk.categories),
+        **({"record": doc.record} if doc.record else {}),
     }

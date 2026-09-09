@@ -59,6 +59,7 @@ def build(
                     "pages": c.pages,
                     "section": c.section,
                     "content_hash": c.content_hash,
+                    "record": c.record or {},
                 },
                 "acl_basis": c.acl_tag,
                 "scores": {"rrf": round(c.rrf_score, 4),

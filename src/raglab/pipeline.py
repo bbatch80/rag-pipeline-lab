@@ -36,6 +36,7 @@ def run_query(
     with watch.stage("route"):
         decision = router.route(query)
     reranked = []
+    ctx = retrieval.Context(query=query)
     if decision.scope == "in_scope":
         # Re-identification is itself an entitlement: queries are translated
         # (name -> vault pseudonym) only for sessions entitled to the vault —
@@ -46,12 +47,12 @@ def run_query(
 
         # Resolved on the raw question: translation would replace the
         # identifiers this looks for.
-        member_key = retrieval.resolve_member(conn, member_id, query)
+        ctx = retrieval.resolve_context(conn, member_id, query)
         with watch.stage("translate"):
             if persona is None or persona == "care_team":
-                search_query = deid.translate_query(conn, query)
+                search_query = deid.translate_query(conn, ctx.query)
             else:  # identifiers only: a key the caller typed is not re-identification
-                search_query = deid.translate_query(conn, query, deid.IDENTIFIER_TYPES)
+                search_query = deid.translate_query(conn, ctx.query, deid.IDENTIFIER_TYPES)
         # Embedding happens before the role switch: the cache table is the
         # owner's, and a vector does not depend on who is asking.
         with watch.stage("embed"):
@@ -59,8 +60,8 @@ def run_query(
         if persona is not None:
             conn.execute(f"SET LOCAL ROLE persona_{persona}")
         with watch.stage("search"):
-            candidates = retrieval.search(conn, search_query, vector, decision, member_key=member_key,
-                                          embed=lambda t: retrieval.embed_cached(conn, t))
+            candidates = retrieval.search(conn, search_query, vector, decision, member_key=ctx.member_key,
+                                          record=ctx.record, embed=lambda t: retrieval.embed_cached(conn, t))
         with watch.stage("rerank"):
             reranked = rerank.rerank(
                 search_query, candidates, stratify_years=decision.years
@@ -73,6 +74,7 @@ def run_query(
         built["payload_id"] = str(uuid.uuid4())
         built["persona"] = persona or "admin"
         built["member_context"] = member_id
+        built["record_context"] = ctx.record
 
     with watch.stage("disclose"):
         _disclose(conn, built, reranked, source)

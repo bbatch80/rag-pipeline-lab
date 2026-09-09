@@ -4,6 +4,8 @@
 
 CREATE SCHEMA IF NOT EXISTS synthea;
 
+DROP TABLE IF EXISTS synthea.appeals;
+DROP TABLE IF EXISTS synthea.claim_adjudication;
 DROP TABLE IF EXISTS synthea.claims;
 DROP TABLE IF EXISTS synthea.medications;
 DROP TABLE IF EXISTS synthea.conditions;
@@ -73,6 +75,34 @@ CREATE TABLE synthea.encounters (
     reasoncode          text,
     reasondescription   text
 );
+
+-- Claim adjudication overlay + appeals (P1-PR4; mirrors migration 013).
+CREATE TABLE synthea.claim_adjudication (
+    encounter     text PRIMARY KEY REFERENCES synthea.encounters (id),
+    claim_id      text NOT NULL,
+    patient       text NOT NULL REFERENCES synthea.patients (id),
+    member_id     text NOT NULL,
+    status        text NOT NULL CHECK (status IN ('paid', 'denied', 'pending')),
+    decision_date date,
+    denial_reason text,
+    policy_id     text
+);
+CREATE TABLE synthea.appeals (
+    case_id       text PRIMARY KEY,
+    patient       text NOT NULL REFERENCES synthea.patients (id),
+    member_id     text NOT NULL,
+    encounter     text NOT NULL REFERENCES synthea.claim_adjudication (encounter),
+    claim_id      text NOT NULL,
+    call_id       text REFERENCES synthea.call_log (call_id),
+    filed_date    date NOT NULL,
+    appeal_type   text NOT NULL,
+    denial_reason text NOT NULL,
+    decision      text NOT NULL,
+    decided_date  date,
+    reviewer      text,
+    policy_id     text
+);
+
 
 CREATE TABLE synthea.conditions (
     start       date,

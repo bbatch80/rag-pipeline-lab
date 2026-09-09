@@ -59,6 +59,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: "3.12"
-      - run: uv sync --group rerank
+      - run: uv sync --group rerank --group phi
       - run: uv run raglab status
       - run: uv run raglab eval-retrieval --gate --label ci
+      - run: uv run raglab deid-eval --sample 60 --gate

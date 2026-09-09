@@ -349,21 +349,30 @@ def load_synthea_cmd():
 
 
 @main.command("deid-eval")
-def deid_eval_cmd():
-    """Score Presidio detection against the PHI injection manifest."""
+@click.option("--sample", default=None, type=int, help="Seeded sample of documents per source (CI).")
+@click.option("--gate", is_flag=True, help="Fail below the D9 thresholds (structured recall, leakage) per source.")
+def deid_eval_cmd(sample: int | None, gate: bool):
+    """Type-correct PHI detection recall and leakage, per source, against each
+    source's PHI manifest (ground truth by construction)."""
     from raglab import deid
 
-    receipt = Receipt("raglab deid-eval")
+    receipt = Receipt("raglab deid-eval" + (f" --sample {sample}" if sample else "") + (" --gate" if gate else ""))
     try:
         with db.connect() as conn:
-            result = deid.evaluate(conn)
+            result = deid.evaluate(conn, sample=sample, gate=gate)
         receipt.add("run id", result.run_id)
-        for entity_type, recall in result.recall_by_type.items():
-            receipt.add(f"recall {entity_type}", recall)
-        receipt.add("overall recall", result.overall_recall)
-        receipt.add("LEAKAGE RATE", f"{result.leakage_rate:.4f} (entities surviving in indexed text)")
-        for doc, etype, value in result.leaked_examples[:5]:
-            receipt.add("  leaked", f"{doc}: {etype} {value!r}")
+        for key, r in result.by_source.items():
+            receipt.add(f"[{key}]", f"{r['n_docs']} docs, {r['n_entities']} entities")
+            for entity_type, recall in r["recall_by_type"].items():
+                flag = " *" if entity_type in deid.STRUCTURED else ""
+                receipt.add(f"  recall {entity_type}{flag}", recall)
+            receipt.add("  overall recall", r["overall_recall"])
+            receipt.add("  LEAKAGE RATE", f"{r['leakage_rate']:.4f} (surface or canonical value surviving in indexed text)")
+            for src, doc, etype, value in r["examples"][:3]:
+                receipt.add("    leaked", f"{doc}: {etype} {value!r}")
+        receipt.add("gate", f"structured recall >= {deid.DEID_THRESHOLDS['structured_recall']} (*), leakage < {deid.DEID_THRESHOLDS['leakage_rate']}, per source")
+        for failure in result.failures:
+            receipt.fail(f"THRESHOLD: {failure}")
     except Exception as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()
@@ -650,6 +659,32 @@ def recall_rls_cmd(queries: int, k: int):
     receipt.finish()
 
 
+@main.command("identifiers")
+def identifiers_cmd():
+    """Assign stable member IDs + MRNs to every Synthea patient and rebuild
+    the enrollment table (deterministic; safe to re-run)."""
+    from raglab import enrollment
+
+    receipt = Receipt("raglab identifiers")
+    try:
+        with db.connect() as conn:
+            stats = enrollment.assign(conn)
+            sample = conn.execute(
+                "SELECT member_id, mrn FROM synthea.patients ORDER BY id LIMIT 1"
+            ).fetchone()
+            by_year = conn.execute(
+                "SELECT year, count(*) FROM synthea.enrollment GROUP BY year ORDER BY year"
+            ).fetchall()
+            conn.commit()
+        receipt.add("patients", stats["patients"])
+        receipt.add("enrollment rows", stats["enrollment_rows"])
+        receipt.add("by year", ", ".join(f"{y}: {n}" for y, n in by_year))
+        receipt.add("sample", f"member_id {sample[0]}  mrn {sample[1]}")
+    except (psycopg.Error, ValueError) as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
 @main.command("eval-diff")
 @click.argument("before", type=int)
 @click.argument("after", type=int)
@@ -865,6 +900,14 @@ def snowflake_verify_cmd():
             receipt.fail("care manager saw financial columns")
         if report["ACTUARY"]["ssn_visible"]:
             receipt.fail("actuary saw identifiers")
+        with snowlane.connect(role="ACTUARY") as act:
+            mid_visible = act.cursor().execute(
+                "SELECT count(MEMBER_ID) + count(MRN) FROM PATIENTS"
+            ).fetchone()[0]
+            enrol = act.cursor().execute("SELECT count(*) FROM ENROLLMENT").fetchone()[0]
+        receipt.add("actuary member_id/mrn", f"{mid_visible} visible (must be 0); enrollment rows {enrol}")
+        if mid_visible:
+            receipt.fail("actuary saw member identifiers")
         if report["ACTUARY"]["distinct_patients"] != full["distinct_patients"]:
             receipt.fail("actuary aggregates must still count distinct members")
         if not (report["PSHB_EXAMINER"]["rows"] < full["rows"]

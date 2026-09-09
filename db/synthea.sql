@@ -8,6 +8,7 @@ DROP TABLE IF EXISTS synthea.claims;
 DROP TABLE IF EXISTS synthea.medications;
 DROP TABLE IF EXISTS synthea.conditions;
 DROP TABLE IF EXISTS synthea.encounters;
+DROP TABLE IF EXISTS synthea.enrollment;
 DROP TABLE IF EXISTS synthea.patients;
 
 CREATE TABLE synthea.patients (
@@ -24,7 +25,23 @@ CREATE TABLE synthea.patients (
     address    text,
     city       text,
     state      text,
-    zip        text
+    zip        text,
+    member_id  text UNIQUE,   -- natural key, derived (raglab identifiers)
+    mrn        text UNIQUE
+);
+
+-- One row per member per plan year: the member's FEHB/PSHB enrollment.
+-- Built deterministically by `raglab identifiers` (see raglab.enrollment).
+CREATE TABLE synthea.enrollment (
+    patient         text REFERENCES synthea.patients (id),
+    member_id       text NOT NULL,
+    year            integer NOT NULL,
+    line_of_business text NOT NULL,          -- FEHB | PSHB
+    plan_code       text NOT NULL,           -- 71-006 ...
+    plan_option     text NOT NULL,           -- High | Standard | HDHP | Elevate | Elevate Plus
+    tier            text NOT NULL,           -- Self Only | Self Plus One | Self and Family
+    enrollment_code text NOT NULL,           -- FEHB enrollment code (e.g. 311)
+    PRIMARY KEY (patient, year)
 );
 
 CREATE TABLE synthea.encounters (

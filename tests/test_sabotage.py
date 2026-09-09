@@ -31,6 +31,9 @@ def test_sabotage_breaks_both_arms(db, monkeypatch):
         def commit(self):
             pass
 
+        def transaction(self, *a, **k):  # savepoints are fine; only commit is forbidden
+            return self._conn.transaction(*a, **k)
+
     eval_retrieval.run(_NoCommit(db), config_label="t", sabotage=True)
     assert seen, "answerable questions were searched"
     assert all(text == "zzqx zzqv zzqw" for text, _ in seen), "lexical arm sabotaged"

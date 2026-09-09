@@ -33,7 +33,8 @@ class _Backend:
                 Element(text="A member called about a deductible. " * 12, category="text", page=1)]
 
 
-def test_ingest_writes_search_copy_and_member_key(db, tmp_path):
+def test_ingest_writes_search_copy_and_member_key(db, tmp_path, monkeypatch):
+    monkeypatch.setenv("RAGLAB_DEID", "off")  # plumbing test; de-id has its own tests
     f = tmp_path / "note_9999.md"; f.write_text("x")
     meta = derive_internal_meta("note_9999", "clinical_note", "care_team",
                                 member_key="11111111-2222-3333-4444-555555555555")
@@ -45,7 +46,8 @@ def test_ingest_writes_search_copy_and_member_key(db, tmp_path):
     assert row == (True, "11111111-2222-3333-4444-555555555555", "11111111-2222-3333-4444-555555555555")
 
 
-def test_member_key_backfills_on_skip(db, tmp_path):
+def test_member_key_backfills_on_skip(db, tmp_path, monkeypatch):
+    monkeypatch.setenv("RAGLAB_DEID", "off")
     f = tmp_path / "note_9998.md"; f.write_text("x")
     without = derive_internal_meta("note_9998", "clinical_note", "care_team")
     assert ingest_document(db, f, without, _Backend()) == "ingested"

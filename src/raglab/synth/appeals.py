@@ -158,16 +158,23 @@ def adjudicate(conn: psycopg.Connection, calls_dir: Path = CALLS_DIR) -> dict:
     """Status for every claim line from 2024 on. Deterministic per encounter;
     consistent with what call notes already told the member."""
     hints = _call_hints(conn, calls_dir)
+    # Roster-aware: the provider's organization and its network status for
+    # the member's plan in the year of service (NULL when the platform holds
+    # no such fact — no roster, no enrollment — and then no constraint).
     rows = conn.execute(
-        """SELECT e.id, e.patient, p.member_id, e.start::date FROM synthea.encounters e
+        """SELECT e.id, e.patient, p.member_id, e.start::date, n.in_network
+           FROM synthea.encounters e
            JOIN synthea.patients p ON p.id = e.patient
+           LEFT JOIN synthea.providers pr ON pr.id = e.provider
+           LEFT JOIN synthea.enrollment en ON en.patient = e.patient AND en.year = EXTRACT(YEAR FROM e.start)
+           LEFT JOIN synthea.provider_network n ON n.organization = pr.organization AND n.plan_code = en.plan_code
            WHERE e.start >= '2024-01-01' AND p.member_id IS NOT NULL ORDER BY e.id"""
     ).fetchall()
     conn.execute("DELETE FROM appeal_evidence")
     conn.execute("DELETE FROM synthea.appeals")
     conn.execute("DELETE FROM synthea.claim_adjudication")
     out, counts = [], {"paid": 0, "denied": 0, "pending": 0}
-    for enc, patient, member_id, start in rows:
+    for enc, patient, member_id, start, in_network in rows:
         claim = identifiers.claim_id(enc)
         h = _h("adj", enc)
         u = (h % 10_000) / 10_000
@@ -178,6 +185,14 @@ def adjudicate(conn: psycopg.Connection, calls_dir: Path = CALLS_DIR) -> dict:
         if decided and decided > END_OF_DATA:
             decided = END_OF_DATA
         reason = _pick(DENIAL_REASONS, ((h // 13) % 10_000) / 10_000) if status == "denied" else None
+        # Consistency by construction: an out-of-network denial requires a
+        # provider whose organization is out of contract for the member's
+        # plan. In network → the hash picks again among the other reasons.
+        # (The reverse is not forced: out-of-network claims are usually paid
+        # at a lower rate, not denied.)
+        if reason == "out_of_network" and in_network:
+            reason = _pick([(r, w) for r, w in DENIAL_REASONS if r != "out_of_network"],
+                           ((h // 19) % 10_000) / 10_000 * 0.85)
         policy = f"CP-{1 + (h // 17) % POLICY_COUNT:04d}" if reason in CLINICAL_REASONS else None
         out.append((enc, claim, patient, member_id, status, decided, reason, policy))
         counts[status] += 1

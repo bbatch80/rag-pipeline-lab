@@ -81,3 +81,32 @@ def test_adjudication_is_deterministic(db, tmp_path):
     first = db.execute("SELECT encounter, status, denial_reason FROM synthea.claim_adjudication ORDER BY encounter").fetchall()
     appeals.adjudicate(db, calls_dir=tmp_path / "calls")
     assert db.execute("SELECT encounter, status, denial_reason FROM synthea.claim_adjudication ORDER BY encounter").fetchall() == first
+
+
+def test_out_of_network_denials_require_an_out_of_network_provider(db, tmp_path):
+    """Consistency by construction: with a roster and enrollment in place, an
+    out-of-network denial never lands on an in-network provider."""
+    from raglab import roster
+    from raglab.synthea_load import CSV_DIR
+
+    if not (CSV_DIR / "providers.csv").exists():
+        import pytest
+        pytest.skip("Synthea CSVs not on this machine")
+    _seed_population(db)
+    roster.load(db)
+    orgs = [r[0] for r in db.execute("SELECT id FROM synthea.organizations ORDER BY id LIMIT 40").fetchall()]
+    provs = {o: db.execute("SELECT id FROM synthea.providers WHERE organization = %s LIMIT 1", (o,)).fetchone()[0] for o in orgs}
+    for i, (pid, eid) in enumerate(db.execute("SELECT patient, id FROM synthea.encounters ORDER BY id").fetchall()):
+        o = orgs[i % len(orgs)]
+        db.execute("UPDATE synthea.encounters SET organization = %s, provider = %s WHERE id = %s", (o, provs[o], eid))
+    journeys.generate(db, members=8, target_calls=120, seed=3, calls_dir=tmp_path / "calls", manifest_path=tmp_path / "calls.jsonl")
+    appeals.adjudicate(db, calls_dir=tmp_path / "calls")
+    bad = db.execute(
+        """SELECT count(*) FROM synthea.claim_adjudication a
+           JOIN synthea.encounters e ON e.id = a.encounter
+           JOIN synthea.providers pr ON pr.id = e.provider
+           JOIN synthea.enrollment en ON en.patient = a.patient AND en.year = EXTRACT(YEAR FROM e.start)
+           JOIN synthea.provider_network n ON n.organization = pr.organization AND n.plan_code = en.plan_code
+           WHERE a.denial_reason = 'out_of_network' AND n.in_network"""
+    ).fetchone()[0]
+    assert bad == 0

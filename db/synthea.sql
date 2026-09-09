@@ -4,6 +4,9 @@
 
 CREATE SCHEMA IF NOT EXISTS synthea;
 
+DROP TABLE IF EXISTS synthea.provider_network;
+DROP TABLE IF EXISTS synthea.providers;
+DROP TABLE IF EXISTS synthea.organizations;
 DROP TABLE IF EXISTS synthea.appeals;
 DROP TABLE IF EXISTS synthea.claim_adjudication;
 DROP TABLE IF EXISTS synthea.claims;
@@ -73,7 +76,29 @@ CREATE TABLE synthea.encounters (
     total_claim_cost    numeric,
     payer_coverage      numeric,
     reasoncode          text,
-    reasondescription   text
+    reasondescription   text,
+    provider            text,
+    organization        text
+);
+
+-- Provider roster (P1-PR5; mirrors migration 014). Network status per
+-- organization × plan, inherited by the organization's providers.
+CREATE TABLE synthea.organizations (
+    id      text PRIMARY KEY,
+    name    text NOT NULL,
+    address text, city text, state text, zip text, phone text, npi text
+);
+CREATE TABLE synthea.providers (
+    id           text PRIMARY KEY,
+    organization text REFERENCES synthea.organizations (id),
+    name         text NOT NULL,
+    gender text, speciality text, address text, city text, state text, zip text, npi text
+);
+CREATE TABLE synthea.provider_network (
+    organization text NOT NULL REFERENCES synthea.organizations (id),
+    plan_code    text NOT NULL,
+    in_network   boolean NOT NULL,
+    PRIMARY KEY (organization, plan_code)
 );
 
 -- Claim adjudication overlay + appeals (P1-PR4; mirrors migration 013).

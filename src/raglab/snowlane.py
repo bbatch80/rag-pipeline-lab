@@ -28,9 +28,13 @@ LOB_EXPR = (
 
 EXPORTS = {
     "patients": (
-        "SELECT id, birthdate, ssn, first, last, gender, race, ethnicity, "
+        "SELECT id, member_id, mrn, birthdate, ssn, first, last, gender, race, ethnicity, "
         "city, state, zip, " + LOB_EXPR.format(col="id")
         + " FROM synthea.patients"
+    ),
+    "enrollment": (
+        "SELECT patient, member_id, year, line_of_business, plan_code, plan_option, "
+        "tier, enrollment_code FROM synthea.enrollment"
     ),
     "claim_lines": (
         "SELECT id, patient, start::date, encounterclass, code, description, "
@@ -172,35 +176,48 @@ def verify(sf_conn) -> dict:
 # Snowflake, not by this code.
 NAMED_QUERIES = {
     "member_claims_summary": {
-        "doc": ("One row per member matching the name: claim-line count, "
-                "total claim cost, payer coverage, and service-date span."),
-        "params": {"last_name": str, "first_name": type(None)},
+        "doc": ("One row per member matched by member ID or by name: claim-line "
+                "count, total claim cost, payer coverage, and service-date span."),
+        "params": {"member_id": type(None), "last_name": type(None), "first_name": type(None)},
         "sql": """
-            SELECT PATIENT_ID, FIRST_NAME, LAST_NAME,
+            SELECT MEMBER_ID, PATIENT_ID, FIRST_NAME, LAST_NAME,
                    COUNT(*) AS CLAIM_LINES,
                    SUM(TOTAL_CLAIM_COST) AS TOTAL_COST,
                    SUM(PAYER_COVERAGE) AS PAYER_COVERAGE,
                    MIN(SERVICE_DATE) AS FIRST_SERVICE,
                    MAX(SERVICE_DATE) AS LAST_SERVICE
             FROM CLAIM_DETAIL
-            WHERE UPPER(LAST_NAME) = UPPER(%(last_name)s)
-              AND (%(first_name)s IS NULL
-                   OR UPPER(FIRST_NAME) = UPPER(%(first_name)s))
-            GROUP BY PATIENT_ID, FIRST_NAME, LAST_NAME
+            WHERE (%(member_id)s IS NOT NULL AND MEMBER_ID = %(member_id)s)
+               OR (%(member_id)s IS NULL AND UPPER(LAST_NAME) = UPPER(%(last_name)s)
+                   AND (%(first_name)s IS NULL OR UPPER(FIRST_NAME) = UPPER(%(first_name)s)))
+            GROUP BY MEMBER_ID, PATIENT_ID, FIRST_NAME, LAST_NAME
             ORDER BY CLAIM_LINES DESC
         """,
     },
     "member_recent_claims": {
-        "doc": ("One row per claim line for the member, newest first: "
-                "service date, encounter class, description, costs."),
-        "params": {"last_name": str, "limit": int},
+        "doc": ("One row per claim line for the member (by member ID or last "
+                "name), newest first: service date, encounter class, description, costs."),
+        "params": {"member_id": type(None), "last_name": type(None), "limit": int},
         "sql": """
-            SELECT FIRST_NAME, LAST_NAME, SERVICE_DATE, ENCOUNTER_CLASS,
+            SELECT MEMBER_ID, FIRST_NAME, LAST_NAME, SERVICE_DATE, ENCOUNTER_CLASS,
                    DESCRIPTION, REASON, TOTAL_CLAIM_COST, PAYER_COVERAGE
             FROM CLAIM_DETAIL
-            WHERE UPPER(LAST_NAME) = UPPER(%(last_name)s)
+            WHERE (%(member_id)s IS NOT NULL AND MEMBER_ID = %(member_id)s)
+               OR (%(member_id)s IS NULL AND UPPER(LAST_NAME) = UPPER(%(last_name)s))
             ORDER BY SERVICE_DATE DESC
             LIMIT %(limit)s
+        """,
+    },
+    "member_enrollment": {
+        "doc": ("The member's enrollment by plan year: line of business, plan, "
+                "option, tier, enrollment code — what Agent Assist uses to pick "
+                "the member's brochure."),
+        "params": {"member_id": str},
+        "sql": """
+            SELECT MEMBER_ID, YEAR, LINE_OF_BUSINESS, PLAN_CODE, PLAN_OPTION, TIER, ENROLLMENT_CODE
+            FROM ENROLLMENT
+            WHERE MEMBER_ID = %(member_id)s
+            ORDER BY YEAR
         """,
     },
     "cost_by_condition": {
@@ -229,7 +246,7 @@ NAMED_QUERIES = {
 MASKED_FOR_ROLE = {
     "CARE_MANAGER": {"BASE_COST", "TOTAL_COST", "TOTAL_CLAIM_COST",
                      "PAYER_COVERAGE", "AVG_COST"},
-    "ACTUARY": {"SSN", "FIRST_NAME", "LAST_NAME", "BIRTHDATE"},
+    "ACTUARY": {"SSN", "FIRST_NAME", "LAST_NAME", "BIRTHDATE", "MEMBER_ID", "MRN"},
 }
 
 
@@ -246,7 +263,7 @@ def run_named_query(sf_conn, query_name: str, params: dict) -> dict:
             },
         }
     spec = NAMED_QUERIES[query_name]
-    bound = {"first_name": None, "limit": 20}
+    bound = {"member_id": None, "last_name": None, "first_name": None, "limit": 20}
     bound.update({k: v for k, v in params.items() if v is not None})
     cur = sf_conn.cursor()
     role = cur.execute("SELECT CURRENT_ROLE()").fetchone()[0]

@@ -181,26 +181,36 @@ name → pseudonym before search, restricted to lookup-identifier entity
 types, so tokenized notes remain searchable by the identifiers
 clinicians actually use — for entitled roles only.
 
-Detection is scored against a generation-time PHI injection manifest
-(ground truth by construction), written to the metrics store by
-`raglab deid-eval`:
+Detection is scored against each source's generation-time PHI manifest
+(ground truth by construction) by `raglab deid-eval`, per source and
+**type-correct**: a member ID flagged as a phone number is a miss. Custom
+recognizers (`raglab.recognizers`) cover what stock Presidio has no notion
+of — member IDs and claim/case numbers with check digits, MRNs, shorthand
+dates, phone shapes, and member names from the enrollment roster — and
+identifiers are vaulted by canonical value, so every surface form of one
+member ID maps to one pseudonym across sources. Clinical notes, 1,518
+entities, before (stock Presidio) and after (custom recognizers), same
+manifest and scoring:
 
-| entity type | detection recall |
-|---|---:|
-| ssn | 1.000 |
-| member_id | 0.984 |
-| phone | 0.936 |
-| address | 0.926 |
-| date | 0.827 |
-| name | 0.824 |
-| mrn | 0.325 |
-| **overall** | **0.854** |
+| entity type | stock Presidio | + custom recognizers |
+|---|---:|---:|
+| member_id | 0.000 | **1.000** |
+| mrn | 0.000 | **1.000** |
+| ssn | 1.000 | 1.000 |
+| phone | 0.846 | **1.000** |
+| address | 0.915 | **1.000** |
+| date | 0.832 | **1.000** |
+| name | 0.768 | **0.996** |
+| **overall** | **0.657** | **0.999** |
 
-Corpus leakage rate (injected entities surviving verbatim in indexed
-text): **12.45%**, dominated by MRNs and shorthand dates — stock Presidio
-has no recognizer for bare medical record numbers in clinical shorthand.
-Production hardening is custom recognizers for local identifier formats,
-re-measured against the same manifest.
+Corpus leakage (a manifest entity's surface *or* canonical value surviving
+verbatim in an indexed chunk of its own document): **0.20%**, down from
+12.45% in v1 — three bare first or last names with no context word nearby.
+The CI gate requires structured-identifier recall ≥ 0.98 per type and
+leakage < 5% per source on a seeded sample. Stated limits: the manifest is
+generator truth (exact recall, no annotation noise); identifier formats are
+the payer's own fixed formats, cleaner than free text; the name roster is
+the same population the notes describe.
 
 ### Member-data lane (Snowflake row access policies + dynamic masking)
 

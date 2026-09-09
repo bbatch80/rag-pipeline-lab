@@ -37,6 +37,8 @@ def synthea_fixture(db, tmp_path):
             "VALUES ('2024-05-01', %s, 'lisinopril 10 MG Oral Tablet')",
             (pid,),
         )
+    from raglab import enrollment
+    enrollment.assign(db)  # generators READ member IDs; the fixture must assign them
     return db
 
 

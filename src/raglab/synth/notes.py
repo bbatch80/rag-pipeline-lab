@@ -20,7 +20,7 @@ from pathlib import Path
 
 import psycopg
 
-from raglab import config
+from raglab import config, identifiers
 
 NOTES_DIR = config.REPO_ROOT / "data" / "internal" / "notes"
 PDF_SRC_DIR = config.REPO_ROOT / "data" / "internal" / "notes_pdf_src"
@@ -48,10 +48,14 @@ def clean_name(value: str) -> str:
     return clean_text(re.sub(r"\d+", "", value or ""))
 
 
+_AREA_CODES = (816, 913, 785, 417, 573, 636, 314, 620, 316, 402, 515, 312, 214, 303, 602, 202)
+
+
 @dataclass
 class Injection:
     type: str  # name | date | ssn | member_id | address | phone | mrn
-    value: str
+    value: str            # exactly as it appears in the text
+    canonical: str = ""   # identifiers: the one canonical value behind the surface form
 
 
 @dataclass
@@ -63,9 +67,9 @@ class NoteBuilder:
     def add(self, text: str) -> None:
         self.parts.append(text)
 
-    def inject(self, phi_type: str, value: str) -> str:
+    def inject(self, phi_type: str, value: str, canonical: str = "") -> str:
         """The chokepoint: PHI enters text only through here."""
-        self.injections.append(Injection(type=phi_type, value=value))
+        self.injections.append(Injection(type=phi_type, value=value, canonical=canonical))
         return value
 
     def name(self, first: str, last: str) -> str:
@@ -90,26 +94,23 @@ class NoteBuilder:
             return self.inject("date", d.strftime("%m.%d.%y"))
         return self.inject("date", d.strftime("%m/%d/%y"))
 
-    def member_id(self) -> str:
-        shape = self.rng.choice(
-            ["GEHA-{:08d}", "M{:09d}", "{:04d}-{:04d}-{:02d}", "ID# {:07d}"]
-        )
-        numbers = [self.rng.randrange(10**8) for _ in range(3)]
-        if "{:04d}-{:04d}" in shape:
-            value = shape.format(
-                self.rng.randrange(10**4), self.rng.randrange(10**4),
-                self.rng.randrange(10**2),
-            )
-        else:
-            value = shape.format(numbers[0])
-        return self.inject("member_id", value)
+    def member_id(self, canonical: str) -> str:
+        """The patient's ONE member ID (read from the roster), presented the
+        way a clinician might type it. Never invented here."""
+        style = self.rng.choice(["canonical", "grouped", "spaced", "bare"])
+        return self.inject("member_id", identifiers.present("member_id", canonical, style), canonical)
 
     def phone(self) -> str:
-        value = f"({self.rng.randrange(200, 999)}) {self.rng.randrange(200, 999)}-{self.rng.randrange(10**4):04d}"
+        # Real numbers have real area codes: member phones come from the
+        # enrollment record, so the generator draws valid NANP area codes
+        # (mostly Kansas City metro, where GEHA is).
+        area = self.rng.choice(_AREA_CODES)
+        value = f"({area}) {self.rng.randrange(200, 999)}-{self.rng.randrange(10**4):04d}"
         return self.inject("phone", value)
 
-    def mrn(self) -> str:
-        return self.inject("mrn", f"MRN{self.rng.randrange(10**7):07d}")
+    def mrn(self, canonical: str) -> str:
+        style = self.rng.choice(["canonical", "spaced", "bare"])
+        return self.inject("mrn", identifiers.present("mrn", canonical, style), canonical)
 
     def text(self) -> str:
         return "\n".join(self.parts)
@@ -139,7 +140,7 @@ _SHORTHAND = {
 def _soap_note(b: NoteBuilder, p: dict, cond: dict, meds: list[dict], enc: dict):
     b.add(f"CLINIC PROGRESS NOTE - {b.date(enc['start'])}")
     b.add(f"pt: {b.name(p['first'], p['last'])}  DOB {b.date(p['birthdate'])}  "
-          f"{b.mrn()}  member {b.member_id()}")
+          f"{b.mrn(p['mrn'])}  member {b.member_id(p['member_id'])}")
     b.add("")
     b.add(f"S: pt c/o sx related to {cond['description'].lower()}, hx as documented. "
           f"{b.rng.choice(['Denies fever/chills.', 'Reports gradual onset.', 'Sx stable since last visit.'])}")
@@ -156,7 +157,7 @@ def _soap_note(b: NoteBuilder, p: dict, cond: dict, meds: list[dict], enc: dict)
 def _discharge_summary(b: NoteBuilder, p: dict, cond: dict, meds: list[dict], enc: dict):
     b.add("DISCHARGE SUMMARY")
     b.add(f"Patient: {b.name(p['first'], p['last'])}   DOB: {b.date(p['birthdate'])}")
-    b.add(f"Member ID {b.member_id()}   SSN {b.inject('ssn', p['ssn'])}")
+    b.add(f"Member ID {b.member_id(p['member_id'])}   SSN {b.inject('ssn', p['ssn'])}")
     b.add(f"Admit: {b.date(enc['start'])}  Discharge: {b.date(enc['stop'] or enc['start'])}")
     b.add("")
     b.add(f"PRINCIPAL DIAGNOSIS: {cond['description']}")
@@ -180,7 +181,7 @@ def _referral_letter(b: NoteBuilder, p: dict, cond: dict, meds: list[dict], enc:
     b.add("RE: Specialist referral")
     b.add("")
     b.add(f"Dear colleague, thank you for seeing {b.name(p['first'], p['last'])}, "
-          f"DOB {b.date(p['birthdate'])}, member {b.member_id()}, "
+          f"DOB {b.date(p['birthdate'])}, member {b.member_id(p['member_id'])}, "
           f"for evaluation of {cond['description'].lower()}.")
     med_line = ", ".join(m["description"] for m in meds[:3]) if meds else "none"
     b.add(f"Relevant meds: {med_line}. Pertinent hx incl. "
@@ -212,7 +213,7 @@ def generate(
     candidates = conn.execute(
         """
         SELECT p.id, p.first, p.last, p.birthdate, p.ssn, p.address, p.city,
-               c.description AS condition, c.encounter
+               c.description AS condition, c.encounter, p.member_id, p.mrn
         FROM synthea.patients p
         JOIN synthea.conditions c ON c.patient = p.id
         WHERE p.first IS NOT NULL AND c.encounter IS NOT NULL
@@ -231,7 +232,9 @@ def generate(
     with open(manifest_path, "w") as manifest:
         for i, row in enumerate(picks):
             (pid, first, last, birthdate, ssn, address, city,
-             condition, encounter_id) = row
+             condition, encounter_id, member_id, mrn_value) = row
+            if not member_id or not mrn_value:
+                raise RuntimeError("patients lack member_id/mrn — run `raglab identifiers` first")
             enc = conn.execute(
                 "SELECT start, stop FROM synthea.encounters WHERE id = %s",
                 (encounter_id,),
@@ -248,7 +251,8 @@ def generate(
             TEMPLATES[template_name](
                 builder,
                 {"first": clean_name(first), "last": clean_name(last), "birthdate": birthdate,
-                 "ssn": ssn, "address": clean_text(address), "city": clean_text(city)},
+                 "ssn": ssn, "address": clean_text(address), "city": clean_text(city),
+                 "member_id": member_id, "mrn": mrn_value},
                 {"description": condition},
                 [{"description": m[0]} for m in meds],
                 {"start": enc[0].date() if enc and enc[0] else birthdate,
@@ -270,7 +274,7 @@ def generate(
                 "patient_id": pid,
                 "template": template_name,
                 "entities": [
-                    {"type": inj.type, "value": inj.value}
+                    {"type": inj.type, "value": inj.value, "canonical": inj.canonical or inj.value}
                     for inj in builder.injections
                 ],
             }) + "\n")

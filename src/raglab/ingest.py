@@ -70,6 +70,14 @@ def processing_recipe(backend_name: str, phi: bool = False) -> str:
     return recipe
 
 
+def index_copy(text: str, source) -> str:
+    """The search copy of a chunk (embedded + BM25-indexed) derived from the
+    display copy. Identity for every source today; call notes (Phase 1) add
+    identifier normalization, abbreviation expansion, and boilerplate
+    suppression here — the display copy is never touched."""
+    return text
+
+
 def content_hash(path: Path, recipe: str = "") -> str:
     """Fingerprint = source bytes + processing recipe. A doc is stale if
     either its file or how we process it changed."""
@@ -101,10 +109,19 @@ def ingest_document(
         (source_path,),
     ).fetchone()
     if row is not None and row[1] == digest:
+        if meta.member_key:  # backfill the person key without re-ingesting
+            conn.execute(
+                "UPDATE documents SET member_key = %s WHERE id = %s AND member_key IS DISTINCT FROM %s",
+                (meta.member_key, row[0], meta.member_key),
+            )
+            conn.execute(
+                "UPDATE chunks SET member_key = %s WHERE document_id = %s AND member_key IS DISTINCT FROM %s",
+                (meta.member_key, row[0], meta.member_key),
+            )
         return "skipped"
 
     elements = backend.parse(pdf_path)
-    chunks = chunk_elements(elements)
+    chunks = chunk_elements(elements, profile=source.chunk_profile or "section")
     failures = run_gates(chunks, source.gate_rules())
 
     if failures:
@@ -154,30 +171,32 @@ def ingest_document(
         conn.execute("DELETE FROM documents WHERE id = %s", (row[0],))
     doc_id = conn.execute(
         """
-        INSERT INTO documents (source_path, title, content_hash, acl_tag, source_id)
-        VALUES (%s, %s, %s, %s, %s) RETURNING id
+        INSERT INTO documents (source_path, title, content_hash, acl_tag, source_id, member_key)
+        VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
         """,
-        (source_path, meta.title, digest, meta.acl_tag, source.source_id),
+        (source_path, meta.title, digest, meta.acl_tag, source.source_id, meta.member_key),
     ).fetchone()[0]
 
     with conn.cursor() as cur:
         cur.executemany(
             """
             INSERT INTO chunks
-                (document_id, chunk_index, content, year, plan_code, acl_tag,
-                 doc_type, metadata)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                (document_id, chunk_index, content, index_text, year, plan_code, acl_tag,
+                 doc_type, metadata, member_key)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             [
                 (
                     doc_id,
                     i,
                     chunk.text,
+                    index_copy(chunk.text, source),
                     meta.year,
                     meta.plan_code,
                     meta.acl_tag,
                     meta.doc_type,
                     json.dumps(chunk_jsonb(meta, chunk)),
+                    meta.member_key,
                 )
                 for i, chunk in enumerate(chunks)
             ],

@@ -148,15 +148,16 @@ def _hybrid(
 ) -> list[Candidate]:
     """One hybrid query: vector arm + lexical arm, RRF-fused (lexical list
     weighted by lexical_weight), top fused_limit."""
-    # Lexical arm: BM25 via pg_textsearch. <@> is the negative BM25 score
-    # (lower = better); the index is named so the filtered scan still uses it.
+    # Lexical arm: BM25 via pg_textsearch over index_text (the search copy;
+    # content is the display copy). <@> is the negative BM25 score (lower =
+    # better); the index is named so the filtered scan still uses it.
     # Non-matching chunks score 0, not NULL: keep only real matches (< 0) so
     # they get no lexical rank — matches sort first, so filtering after LIMIT
     # never drops a match.
     txt_arm = f"""
             SELECT c.id, ROW_NUMBER() OVER (ORDER BY c.neg_score) AS rank
             FROM (
-                SELECT c.id, c.content <@> to_bm25query(%s, 'chunks_bm25_idx') AS neg_score
+                SELECT c.id, c.index_text <@> to_bm25query(%s, 'chunks_bm25_idx') AS neg_score
                 FROM chunks c
                 WHERE true{where}
                 ORDER BY neg_score

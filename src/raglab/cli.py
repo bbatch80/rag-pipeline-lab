@@ -215,6 +215,11 @@ def index_cmd():
     """Drop and rebuild the HNSW index; reindex BM25 (bulk-load-then-index)."""
     receipt = Receipt("raglab index")
     try:
+        # Dead row versions left by bulk updates are counted by index builds
+        # (BM25 statistics, HNSW graph) — vacuum first, outside a transaction.
+        with db.connect() as vconn:
+            vconn.autocommit = True
+            vconn.execute("VACUUM ANALYZE chunks")
         with db.connect() as conn:
             conn.execute("DROP INDEX IF EXISTS chunks_embedding_idx")
             conn.execute(
@@ -225,6 +230,7 @@ def index_cmd():
             # BM25 (pg_textsearch) is fastest built after a bulk load too.
             conn.execute("REINDEX INDEX chunks_bm25_idx")
             conn.commit()
+        receipt.add("vacuum", "chunks (dead row versions cleared before index builds)")
         receipt.add("index", f"chunks_embedding_idx (hnsw, cosine, m={HNSW_M}, ef_construction={HNSW_EF_CONSTRUCTION})")
         receipt.add("bm25", "chunks_bm25_idx reindexed (pg_textsearch, english)")
     except psycopg.Error as exc:
@@ -255,17 +261,34 @@ def benchmark_cmd():
     receipt.finish()
 
 
-@main.command("synth")
+@main.group("synth")
+def synth_group():
+    """Generate synthetic sources, one command per source (each writes its
+    own PHI manifest under data/internal/manifests/)."""
+
+
+@synth_group.command("docs")
+def synth_docs_cmd():
+    """Authored internal docs: SOPs, bulletins, formulary, KB, rates."""
+    from raglab.synth import internal_docs
+
+    receipt = Receipt("raglab synth docs")
+    try:
+        receipt.add("internal docs", internal_docs.write_all())
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+@synth_group.command("notes")
 @click.option("--count", default=250, help="Number of clinical notes.")
 @click.option("--seed", default=42, help="Generation seed.")
-def synth_cmd(count: int, seed: int):
-    """Generate the internal tier: docs, clinical notes + PHI manifest, PDFs."""
-    from raglab.synth import internal_docs, notes, render_pdf
+def synth_notes_cmd(count: int, seed: int):
+    """Clinical notes (markdown + PDF renditions) and their PHI manifest."""
+    from raglab.synth import notes, render_pdf
 
-    receipt = Receipt("raglab synth")
+    receipt = Receipt("raglab synth notes")
     try:
-        docs_written = internal_docs.write_all()
-        receipt.add("internal docs", docs_written)
         with db.connect() as conn:
             stats = notes.generate(conn, count=count, seed=seed)
         receipt.add("clinical notes", stats["notes"])
@@ -275,7 +298,7 @@ def synth_cmd(count: int, seed: int):
         manifest_lines = notes.MANIFEST_PATH.read_text().count("\n")
         if manifest_lines != stats["notes"]:
             receipt.fail(f"manifest has {manifest_lines} entries, expected {stats['notes']}")
-        receipt.add("PHI manifest", f"{manifest_lines} entries at {notes.MANIFEST_PATH.name}")
+        receipt.add("PHI manifest", f"{manifest_lines} entries at {notes.MANIFEST_PATH.relative_to(config.REPO_ROOT)}")
     except Exception as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()

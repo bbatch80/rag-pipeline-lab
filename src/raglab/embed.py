@@ -37,7 +37,7 @@ def embed_pending(
     stats = EmbedStats()
     while True:
         rows = conn.execute(
-            "SELECT id, content FROM chunks WHERE embedding IS NULL "
+            "SELECT id, index_text FROM chunks WHERE embedding IS NULL "
             "ORDER BY id LIMIT %s",
             (batch_size,),
         ).fetchall()

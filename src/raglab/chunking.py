@@ -80,7 +80,22 @@ def chunk_elements(
     hard_max: int = HARD_MAX,
     soft_max: int = SOFT_MAX,
     merge_under: int = MERGE_UNDER,
+    profile: str = "section",
 ) -> list[Chunk]:
+    """profile comes from the source row: 'section' (default: split on
+    headings, merge small pieces) or 'record' (one document = one chunk —
+    call notes, short records — never merged, never split unless it exceeds
+    hard_max, in which case it falls back to section chunking)."""
+    if profile == "record":
+        text = "\n\n".join(el.text for el in elements if el.text.strip()).strip()
+        if text and len(text) <= hard_max:
+            titles = [el.text for el in elements if el.category == "title"]
+            return [Chunk(
+                text=text,
+                section=titles[0] if titles else "",
+                pages=tuple(sorted({el.page for el in elements if el.page is not None})),
+                categories=tuple(sorted({el.category for el in elements})),
+            )]
     chunks: list[Chunk] = []
     current: _Builder | None = None
     section = ""

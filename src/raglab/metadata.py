@@ -18,10 +18,12 @@ class DocumentMeta:
     acl_tag: str
     effective_date: str
     title: str
+    member_key: str | None = None  # person key for member-scoped documents
 
 
 def derive_internal_meta(
-    title: str, doc_type: str, acl_tag: str, year: int = 2026
+    title: str, doc_type: str, acl_tag: str, year: int = 2026,
+    member_key: str | None = None,
 ) -> DocumentMeta:
     """Internal-tier documents: no plan_code (they span plans), program
     'internal', year = effective plan year of their content."""
@@ -35,6 +37,7 @@ def derive_internal_meta(
         acl_tag=acl_tag,
         effective_date=f"{year}-01-01",
         title=title,
+        member_key=member_key,
     )
 
 

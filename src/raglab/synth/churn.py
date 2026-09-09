@@ -17,9 +17,10 @@ def pool_globs_for(registry) -> tuple[str, ...]:
     """Globs (relative to data/internal) of every churn-eligible source."""
     prefix = str(INTERNAL_DIR.relative_to(INTERNAL_DIR.parent.parent)) + "/"
     globs = []
+    ext = {"markdown": "*.md", "csv": "*.csv", "pdf": "*.pdf"}
     for source in registry.all:
         if source.churn_eligible and source.dir and source.dir.startswith(prefix):
-            globs.append(source.dir[len(prefix):] + "/*.md")
+            globs.append(source.dir[len(prefix):] + "/" + ext.get(source.parser or "", "*.md"))
     return tuple(globs)
 
 

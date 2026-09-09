@@ -24,7 +24,7 @@ from raglab import config
 
 NOTES_DIR = config.REPO_ROOT / "data" / "internal" / "notes"
 PDF_SRC_DIR = config.REPO_ROOT / "data" / "internal" / "notes_pdf_src"
-MANIFEST_PATH = config.REPO_ROOT / "data" / "internal" / "phi_manifest.jsonl"
+MANIFEST_PATH = config.REPO_ROOT / "data" / "internal" / "manifests" / "clinical_notes.jsonl"
 
 DEFAULT_COUNT = 250
 DEFAULT_PDF_COUNT = 40

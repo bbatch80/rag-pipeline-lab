@@ -7,10 +7,10 @@ import os
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
+pytestmark = [pytest.mark.slow, pytest.mark.skipif(
     not os.environ.get("SNOWFLAKE_ACCOUNT"),
     reason="no Snowflake credentials (Lane 2 verified locally, CI is zero-secret)",
-)
+)]
 
 
 @pytest.fixture(scope="module")

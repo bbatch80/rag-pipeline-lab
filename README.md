@@ -23,6 +23,17 @@ uv run raglab status
 uv run pytest
 ```
 
+Iterating (nothing verified before a merge changes; these only shorten the loop):
+
+```sh
+uv run pytest -m "not slow"                          # model-loading, network, and eval tests carry the slow marker
+uv run raglab eval-retrieval --category call_note    # one golden slice; partial runs never gate
+uv run raglab explain-golden C6                      # did the expected chunk reach the pool, where did it rerank, what text was scored
+```
+
+Query embeddings are cached by exact text (`query_embeddings`), so repeat
+eval runs and repeat questions do not call the embedding API.
+
 The Docling parser backend is optional locally: `uv sync --group docling`,
 then `uv run docling-tools models download` (one-time, explicit model fetch).
 
@@ -80,6 +91,10 @@ claim numbers, bulletin codes) hit rank 1 via the lexical arm. The router's scop
 gate resolved 6/6 out-of-domain/out-of-year probes without retrieval.
 Abstention threshold (0.5) separates answerable questions (best rerank
 score ≥ 0.72 across the golden set) from absent-topic questions (0.30);
+records get their own threshold (call notes 0.1): a terse, de-identified
+note scores lower in absolute terms even when it is the answer — on the
+call-note slice correct notes score 0.16–0.99 and unrelated notes ≈ 0.01 —
+so the payload abstains only when no candidate clears its source's bar;
 redirect-style questions score high on genuinely-relevant-but-non-answering
 chunks and are handled at the generation layer instead.
 
@@ -96,6 +111,20 @@ macros, skewed reason codes, ~2% wrong claim citations, ~1% copy-paste
 duplicates). Every member-scoped document carries the person key, and every
 generated artifact uses the member's one stable member ID (check-digit
 format, assigned once in both lanes).
+
+Two flags on a source drive retrieval. **Member-scoped** sources (records
+about one person: call notes) are searched only inside a *member context*
+and filtered to that member. The context is a structured field the calling
+surface supplies — the member a rep has open, as a payer's desktop does —
+or, as a convenience, a member ID, MRN, or claim ID typed in the question
+(a claim belongs to one member). Names never resolve to a member: identity
+at a payer is ID plus date of birth. With no member context, member-scoped
+sources are not searched at all, so a question about one member cannot
+surface another member's records (gated at 1.0 in CI). **Event** sources
+carry the date of the event (a call's year, read from the call record, not
+the ingest date) and are exempt from the router's year filter, which is an
+edition filter for brochures: a 2025 claim discussed on a 2026 call is
+still found.
 
 Call notes are one record = one chunk. What is shown and cited is the
 verbatim de-identified note; what is embedded and BM25-indexed is a search
@@ -179,6 +208,11 @@ retrievable set at the next query with zero re-indexing. HNSW scans run
 with `iterative_scan=relaxed_order` so heavily-trimmed roles still fill k
 results (tested at 3% row visibility).
 
+Member scope is a filter, not a heuristic: with a member context the engine
+restricts member-scoped sources to that member's rows before ranking; the
+reranker is never in the security path. The payload records the member
+context it was scoped to.
+
 Every retrieval flows through one pipeline entrypoint
 (`raglab.pipeline.run_query`) that assumes the caller's role via
 `SET LOCAL ROLE` and writes a disclosure record: persona, query, payload
@@ -191,6 +225,7 @@ given document.
 ```sh
 uv run raglab query "<question>" --persona care_team   # full context payload JSON
 uv run raglab explain "<question>" --persona employee --generate
+uv run raglab explain-golden C6             # a golden item: pool, rerank position, scored text
 uv run raglab audit --document "<title>"    # lineage: payloads that used it
 uv run raglab audit --persona public        # disclosure: what a role saw
 ```
@@ -237,7 +272,22 @@ Corpus leakage (a manifest entity's surface *or* canonical value surviving
 verbatim in an indexed chunk of its own document): **0.20%**, down from
 12.45% in v1 — three bare first or last names with no context word nearby.
 The CI gate requires structured-identifier recall ≥ 0.98 per type and
-leakage < 5% per source on a seeded sample. Stated limits: the manifest is
+leakage < 5% per source on a seeded sample.
+
+Recall and leakage are not enough: the statistical recognizers also redact
+what is not protected. On call notes they tagged the rep shorthand "advd"
+as a person 782 times, "PA" (prior authorization) as a location 215 times,
+reason codes as people, and every bare year and duration ("30 day") as a
+date — and the note about a sleep study then read "needs [LOCATION-0085]",
+unfindable by the question it answers. Two rules release such spans before
+replacement: a name/place span made only of domain vocabulary (the
+shorthand dictionary and its expansions, reason codes, month names) is
+released, and a DATE_TIME span is kept only when it is a specific date —
+the "elements of dates" Safe Harbor names (bare years, durations, and
+relative phrases are not). `raglab deid-eval` reports **over-redaction**
+per source (replacements that overlap no manifest entity): call notes 0 of
+256 on the CI sample after the rules, with recall unchanged; clinical notes
+5.9% (drug names such as "Oral Tablet" read as people — a follow-up). Stated limits: the manifest is
 generator truth (exact recall, no annotation noise); identifier formats are
 the payer's own fixed formats, cleaner than free text; the name roster is
 the same population the notes describe.
@@ -315,10 +365,13 @@ uv run raglab-mcp                                      # stdio MCP server
 ### Entitlement assertions in CI
 
 The golden set includes persona-negative questions asserting both
-directions per entitlement wall: the unauthorized persona must return
-`insufficient_evidence` and the authorized persona must answer citing the
-expected document, run through the full persona pipeline (RLS, vault
-translation, disclosure). `deny_abstained`, `allow_answered`, and
+directions per entitlement wall: the protected document must be absent from
+the unauthorized persona's results (it may abstain, or answer from what it
+is entitled to) and the authorized persona must answer citing the expected
+document, run through the full persona pipeline (RLS, vault translation,
+disclosure). Scope-negative questions assert member scoping: a question
+asked in one member's context returns no other member's records.
+`deny_clean`, `scope_clean`, `allow_answered`, and
 retrieval `hit@5` gate CI; the entitlement metrics are thresholded at 1.0 —
 a single leak fails the build. The gate job runs on a self-hosted runner
 beside the loaded database (no corpus or keys on hosted runners); `main` is

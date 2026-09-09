@@ -7,6 +7,8 @@ the dedicated docling CI job runs it on every push.
 
 import pytest
 
+pytestmark = pytest.mark.slow
+
 from raglab.chunking import chunk_elements
 from raglab.parsing.base import CATEGORIES
 

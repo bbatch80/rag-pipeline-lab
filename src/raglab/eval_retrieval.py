@@ -18,7 +18,9 @@ Per unanswerable question:
 
 Per persona_negative question (entitlement assertions, run through the full
 persona pipeline — RLS, vault translation, disclosure — in both directions):
-- deny_abstained   — the unauthorized persona must get insufficient_evidence
+- deny_clean       — the protected document is absent from the unauthorized
+                     persona's results (it may abstain, or answer from what
+                     it is entitled to)
 - allow_answered   — the authorized persona must get status ok
 - allow_hit        — the authorized answer cites the expected document
 """
@@ -41,7 +43,7 @@ THRESHOLDS = {
     "hit@5": 0.85,
     "gate_correct": 1.0,
     "wrong_abstention_rate": 0.05,
-    "deny_abstained": 1.0,
+    "deny_clean": 1.0,
     "allow_answered": 1.0,
     # Ratchet: a floor raised whenever a fix lands, so year-over-year
     # coverage cannot slip unnoticed. History: 0.688 in v1 (the golden set
@@ -52,6 +54,9 @@ THRESHOLDS = {
     # floor sits one half-miss below (7.5/8) so a single borderline page is
     # a finding, not a red build.
     "yoy_source_coverage": 0.9,
+    # Member scoping: a question about one member never returns another
+    # member's records. Absolute.
+    "scope_clean": 1.0,
 }
 
 
@@ -109,8 +114,12 @@ def run(
     conn: psycopg.Connection,
     config_label: str = "baseline",
     sabotage: bool = False,
+    categories: tuple[str, ...] = (),
 ) -> RetrievalEvalResult:
-    """sabotage=True breaks BOTH retrieval arms — a fixed junk vector and a
+    """categories: run only those golden categories (iteration aid; the
+    run is labelled partial and never gates a merge).
+
+    sabotage=True breaks BOTH retrieval arms — a fixed junk vector and a
     nonsense lexical query — while the reranker still sees the real
     question. The discrimination check: a broken retriever MUST score badly.
     (Vector-only sabotage stopped discriminating once BM25 landed: the
@@ -120,7 +129,8 @@ def run(
     run_id = conn.execute(
         "INSERT INTO eval_runs (kind, config_label, git_sha, corpus_hash) "
         "VALUES ('retrieval', %s, %s, %s) RETURNING id",
-        (config_label if not sabotage else f"{config_label}-SABOTAGE", _git_sha(), digest),
+        ((config_label if not sabotage else f"{config_label}-SABOTAGE")
+         + (f"-partial:{','.join(categories)}" if categories else ""), _git_sha(), digest),
     ).fetchone()[0]
 
     scores: list[tuple] = []  # (qid, category, metric, value, detail)
@@ -130,9 +140,36 @@ def run(
 
     for item in ablation.load_golden():
         qid, category = item["id"], item["category"]
+        if categories and category not in categories:
+            continue
 
         if category == "two_lane":
             continue  # needs Snowflake; asserted in tests/test_two_lane_golden.py
+
+        if category == "scope_negative":
+            # Member scoping: every chunk returned for a question about
+            # member X belongs to X or to a source that is not member-scoped.
+            # Runs the real employee path (identifier translation included).
+            if sabotage:
+                continue
+            from raglab.pipeline import run_query
+
+            person = conn.execute(
+                "SELECT id FROM synthea.patients WHERE member_id = %s", (item["member_id"],)
+            ).fetchone()
+            payload = run_query(conn, item["question"], persona="employee", source="eval",
+                                member_id=item.get("member_id"))
+            hashes = [c["source"]["content_hash"] for c in payload.get("chunks", [])]
+            others = 0
+            if hashes:
+                others = conn.execute(
+                    "SELECT count(*) FROM documents WHERE content_hash = ANY(%s) "
+                    "AND member_key IS NOT NULL AND member_key::text <> %s",
+                    (hashes, person[0] if person else ""),
+                ).fetchone()[0]
+            scores.append((qid, category, "scope_clean", float(others == 0),
+                           {"foreign_chunks": others, "returned": len(hashes)}))
+            continue
 
         if category == "persona_negative":
             # Entitlement assertions exercise the REAL persona path
@@ -142,19 +179,20 @@ def run(
                 continue
             from raglab.pipeline import run_query
 
-            denied = run_query(conn, item["question"],
-                               persona=item["persona_deny"], source="eval")
-            allowed = run_query(conn, item["question"],
-                                persona=item["persona_allow"], source="eval")
+            denied = run_query(conn, item["question"], persona=item["persona_deny"],
+                               source="eval", member_id=item.get("member_id"))
+            allowed = run_query(conn, item["question"], persona=item["persona_allow"],
+                                source="eval", member_id=item.get("member_id"))
             titles = [c["source"]["title"] for c in allowed.get("chunks", [])]
+            denied_titles = [c["source"]["title"] for c in denied.get("chunks", [])]
+            leaked = [t for t in denied_titles if any(e in t for e in item["allow_titles"])]
             allow_hit = float(any(
                 expected in title
                 for expected in item["allow_titles"] for title in titles[:5]
             ))
-            scores.append((qid, category, "deny_abstained",
-                           float(denied["status"] == "insufficient_evidence"),
-                           {"persona": item["persona_deny"],
-                            "confidence": denied.get("confidence")}))
+            scores.append((qid, category, "deny_clean", float(not leaked),
+                           {"persona": item["persona_deny"], "status": denied["status"],
+                            "leaked": leaked}))
             scores.append((qid, category, "allow_answered",
                            float(allowed["status"] == "ok"),
                            {"persona": item["persona_allow"],
@@ -164,6 +202,9 @@ def run(
             continue
 
         decision = router.route(item["question"])
+        # Member context, like the pipeline: the item's member_id field (the
+        # member a rep would have open) or an identifier in the question.
+        member_key = retrieval.resolve_member(conn, item.get("member_id"), item["question"])
         # The eval runs as admin, which is entitled to the vault: translate
         # like the pipeline does, so tokenized notes stay reachable by the
         # identifiers a question naturally uses.
@@ -174,9 +215,10 @@ def run(
             gated = decision.scope != "in_scope"
             scores.append((qid, category, "gate_correct", float(gated == expected_gate), {}))
             if not gated:
-                vector = junk_vector if sabotage else retrieval.embed_query(question)
+                vector = junk_vector if sabotage else retrieval.embed_cached(conn, question)
                 candidates = retrieval.search(conn, junk_text if sabotage else question, vector, decision,
-                                              embed=(lambda t: junk_vector) if sabotage else None)
+                                              embed=(lambda t: junk_vector) if sabotage else (lambda t: retrieval.embed_cached(conn, t)),
+                                              member_key=member_key)
                 reranked = rerank.rerank(question, candidates)
                 abstained, best = rerank.abstention_verdict(reranked)
                 scores.append((qid, category, "abstained", float(abstained),
@@ -185,10 +227,11 @@ def run(
 
         watch = Stopwatch()
         with watch.stage("embed"):
-            vector = junk_vector if sabotage else retrieval.embed_query(question)
+            vector = junk_vector if sabotage else retrieval.embed_cached(conn, question)
         with watch.stage("search"):
             candidates = retrieval.search(conn, junk_text if sabotage else question, vector, decision,
-                                              embed=(lambda t: junk_vector) if sabotage else None)
+                                              embed=(lambda t: junk_vector) if sabotage else (lambda t: retrieval.embed_cached(conn, t)),
+                                              member_key=member_key)
         with watch.stage("rerank"):
             reranked = rerank.rerank(
                 question, candidates, top_n=10,
@@ -263,7 +306,7 @@ def diff_runs(conn: psycopg.Connection, before: int, after: int) -> dict:
 
 
 _SLICE_METRICS = ("hit@5", "precision@5", "source_coverage", "gate_correct",
-                  "deny_abstained", "allow_answered", "allow_hit")
+                  "deny_clean", "allow_answered", "allow_hit", "scope_clean")
 
 
 def _slice(rows: list[tuple]) -> dict:
@@ -336,13 +379,18 @@ def _summarize(run_id: int, scores: list[tuple]) -> RetrievalEvalResult:
         result.failures.append(
             f"yoy source_coverage {yoy:.3f} < ratchet {THRESHOLDS['yoy_source_coverage']}"
         )
-    for metric in ("deny_abstained", "allow_answered"):
+    scope = mean("scope_clean", scores)
+    if scope is not None:
+        result.overall["scope_clean"] = scope
+        if scope < THRESHOLDS["scope_clean"]:
+            result.failures.append("member scope leaked: another member's record was returned")
+    for metric in ("deny_clean", "allow_answered"):
         value = mean(metric, scores)
         result.overall[metric] = value
         if value is not None and value < THRESHOLDS[metric]:
             result.failures.append(
                 "persona leak: an unauthorized persona received content"
-                if metric == "deny_abstained"
+                if metric == "deny_clean"
                 else "entitled persona was wrongly blocked"
             )
     return result

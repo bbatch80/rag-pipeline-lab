@@ -30,11 +30,13 @@ SOURCE_FLOOR = int(os.environ.get("RAGLAB_SOURCE_FLOOR", "0"))
 # questions: the lexical list gets this weight in RRF, the vector list 1.
 ID_SHAPED = re.compile(r"\b(?=(?:[A-Za-z-]*\d){3})[A-Za-z0-9-]{7,}\b")
 LEXICAL_WEIGHT_ID = 2.0
-# Member-scoped sources (records about one person) are searched only when
-# the question — or the surface's context — refers to a member: an
-# identifier, or a name on the enrollment roster. A benefits question with
-# no member in it does not dig through call notes. RAGLAB_MEMBER_GATE=off
-# disables it (A/B).
+# Member context. Member-scoped sources (records about one person, flagged
+# in the sources registry) are searched only inside a member context and
+# filtered to that member. The context is a structured field the calling
+# surface supplies — the member the rep has open — or, as a convenience, a
+# member ID / MRN typed in the question. Names are never resolved to a
+# member: identity at a payer is ID plus date of birth, not a name. With no
+# member context, member-scoped sources are not searched at all.
 # How per-source BM25 lists merge into one lexical ranking:
 #   rank  — each source's own rank (rank-1 everywhere gets equal RRF credit)
 #   score — per-source scores sorted together (own statistics, one list)
@@ -46,27 +48,58 @@ LEXICAL_MERGE = os.environ.get("RAGLAB_LEXICAL_MERGE", "rank")
 # (10k call notes restating members' questions) cannot crowd brochure pages
 # out before reranking. Cost: reranker input = fused_limit × visible sources.
 POOLS = os.environ.get("RAGLAB_POOLS", "per_source")
-MEMBER_SCOPED = ("call_note",)  # clinical notes stay wide: care managers ask population questions (P5)
-MEMBER_GATE = os.environ.get("RAGLAB_MEMBER_GATE", "off") == "on"  # off: P5-style population questions name no member
-_NAME_TOKEN = re.compile(r"\b[A-Z][a-z]{2,}\b")
-_roster: set[str] | None = None
+_ID_TOKEN = re.compile(
+    r"\b(?:MRN\s*[- ]?\s*\d{7}|M\s*[- ]?\s*\d{3}\s*[- ]?\s*\d{3}\s*[- ]?\s*\d{3}"
+    r"|CLM[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{4})\b", re.I)
+# identifier kind -> (table, column) that maps it to a person key
+_ID_LOOKUP = {
+    "member_id": ("synthea.patients", "member_id"),
+    "mrn": ("synthea.patients", "mrn"),
+    "claim_id": ("synthea.call_log", "claim_id"),  # a claim belongs to one member
+}
 
 
-def member_reference(conn: psycopg.Connection, query_text: str) -> bool:
-    """Does the question name a member? Identifier-shaped tokens count; so
-    does any capitalized token that is a first or last name on the roster,
-    or a vault pseudonym (the translated form of a name)."""
-    global _roster
-    if ID_SHAPED.search(query_text) or "[" in query_text:
-        return True
-    if _roster is None:
+def resolve_member(conn: psycopg.Connection, member_id: str | None, query_text: str = "") -> str | None:
+    """The person key of the member context: the structured member ID the
+    surface supplied, else an identifier the caller holds typed in the
+    question — a member ID, an MRN, or a claim ID (a claim belongs to one
+    member). None when there is no member context. The question is the RAW
+    question — translation replaces identifiers with pseudonyms."""
+    from raglab import identifiers
+
+    candidates: list[tuple[str, str]] = []
+    if member_id:
+        canon = identifiers.canonicalize("member_id", member_id)
+        if canon is None:
+            raise ValueError(f"not a valid member ID: {member_id!r}")
+        candidates.append(("member_id", canon))
+    for token in _ID_TOKEN.findall(query_text or ""):
+        compact = re.sub(r"[\s-]", "", token)
+        for kind in ("member_id", "mrn", "claim_id"):
+            canon = identifiers.canonicalize(kind, compact)
+            if canon:
+                candidates.append((kind, canon))
+    for kind, canon in candidates:
+        table, column = _ID_LOOKUP[kind]
+        person = "id" if table == "synthea.patients" else "patient"
         try:
-            rows = conn.execute("SELECT first, last FROM synthea.patients").fetchall()
-            _roster = {w for f, l in rows for w in (f, l) if w}
-        except psycopg.Error:
-            conn.rollback()
-            _roster = set()
-    return any(tok in _roster for tok in _NAME_TOKEN.findall(query_text))
+            with conn.transaction():  # savepoint: a missing table must not poison the caller's transaction
+                row = conn.execute(
+                    f"SELECT {person} FROM {table} WHERE {column} = %s", (canon,)
+                ).fetchone()
+        except psycopg.errors.UndefinedTable:  # no synthea schema (CI): no member context
+            return None
+        if row:
+            return str(row[0])
+    return None
+
+
+def _source_flags(conn: psycopg.Connection) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(member-scoped doc_types, event doc_types) from the sources registry."""
+    rows = conn.execute(
+        "SELECT doc_type, member_scoped, event FROM sources WHERE doc_type IS NOT NULL"
+    ).fetchall()
+    return (tuple(r[0] for r in rows if r[1]), tuple(r[0] for r in rows if r[2]))
 PER_METHOD_LIMIT = 100
 FUSED_LIMIT = int(os.environ.get("RAGLAB_FUSED_LIMIT", "50"))
 EF_SEARCH = 40  # Phase 2 benchmark operating point
@@ -88,15 +121,26 @@ class Candidate:
     rrf_score: float
     rerank_score: float | None = None
     content_hash: str = ""
+    index_text: str = ""  # the search copy: what every ranking stage reads
     doc_type: str = ""
     floor: bool = False  # admitted by the per-source floor, not the global pool
 
 
-def _filters(route: Route) -> tuple[str, list]:
+def _filters(route: Route, member_key: str | None = None,
+             member_scoped: tuple[str, ...] = (), events: tuple[str, ...] = ()) -> tuple[str, list]:
     clauses, params = [], []
     if route.years:
-        clauses.append("c.year = ANY(%s)")
-        params.append(list(route.years))
+        # An edition filter: event sources (a call has a date, not an
+        # edition) pass regardless of year.
+        clauses.append("(c.year = ANY(%s) OR c.doc_type = ANY(%s))")
+        params += [list(route.years), list(events)]
+    if member_scoped:
+        if member_key:
+            clauses.append("(c.doc_type <> ALL(%s) OR c.member_key = %s)")
+            params += [list(member_scoped), member_key]
+        else:
+            clauses.append("c.doc_type <> ALL(%s)")
+            params.append(list(member_scoped))
     if route.plan_codes:
         # NULL plan_code = internal docs that span plans; they pass.
         clauses.append("(c.plan_code = ANY(%s) OR c.plan_code IS NULL)")
@@ -115,8 +159,12 @@ def search(
     route: Route,
     fused_limit: int = FUSED_LIMIT,
     embed=None,
+    member_key: str | None = None,
 ) -> list[Candidate]:
-    """Multi-year routes search each year separately and merge — one blended
+    """`member_key` is the member context (retrieval.resolve_member): member-
+    scoped sources are filtered to it, or skipped when it is None.
+
+    Multi-year routes search each year separately and merge — one blended
     ranking lets the dominant year crowd the other's chunks out of the pool
     entirely, and no downstream stage can recover a chunk that never
     surfaced. Each year is searched with the year-neutral form of the
@@ -138,6 +186,7 @@ def search(
             sub = search(
                 conn, sub_text, embed(sub_text),
                 replace(route, years=(year,)), fused_limit=per_year, embed=embed,
+                member_key=member_key,
             )
             for candidate in sub:
                 if candidate.chunk_id not in seen:
@@ -145,11 +194,8 @@ def search(
                     seen.add(candidate.chunk_id)
         return merged
 
-    if MEMBER_GATE and not route.sources and not member_reference(conn, query_text):
-        from dataclasses import replace
-
-        route = replace(route, sources=_non_member_sources(conn))
-    where, filter_params = _filters(route)
+    member_scoped, events = _source_flags(conn)
+    where, filter_params = _filters(route, member_key, member_scoped, events)
     lexical = query_text
     lexical_weight = LEXICAL_WEIGHT_ID if ID_SHAPED.search(query_text) else 1.0
     lexical_sources = route.sources or _ingested_sources(conn)
@@ -196,14 +242,6 @@ def _ingested_sources(conn: psycopg.Connection) -> tuple[str, ...]:
     rows = conn.execute(
         "SELECT doc_type FROM sources WHERE lane IN ('vector', 'both') AND doc_type IS NOT NULL "
         "AND status = 'ingested' ORDER BY source_id"
-    ).fetchall()
-    return tuple(r[0] for r in rows)
-
-
-def _non_member_sources(conn: psycopg.Connection) -> tuple[str, ...]:
-    rows = conn.execute(
-        "SELECT doc_type FROM sources WHERE lane IN ('vector', 'both') AND doc_type IS NOT NULL "
-        "AND status = 'ingested' AND doc_type <> ALL(%s) ORDER BY source_id", (list(MEMBER_SCOPED),)
     ).fetchall()
     return tuple(r[0] for r in rows)
 
@@ -287,7 +325,7 @@ def _hybrid(
                c.plan_code, c.year, c.acl_tag,
                c.metadata->'pages',
                f.vector_rank, f.text_rank, f.score,
-               d.content_hash, c.doc_type
+               d.content_hash, c.doc_type, c.index_text
         FROM fused f
         JOIN chunks c ON c.id = f.id
         JOIN documents d ON d.id = c.document_id
@@ -306,6 +344,7 @@ def _hybrid(
             source_path=r[4], plan_code=r[5], year=r[6], acl_tag=r[7],
             pages=r[8] or [], vector_rank=r[9], text_rank=r[10],
             rrf_score=float(r[11]), content_hash=r[12], doc_type=r[13] or "",
+            index_text=r[14] or "",
         )
         for r in rows
     ]
@@ -319,3 +358,36 @@ def embed_query(text: str) -> str:
 
     response = OpenAI().embeddings.create(model=MODEL, input=text)
     return _to_vector_literal(response.data[0].embedding)
+
+
+EMBED_CACHE = os.environ.get("RAGLAB_EMBED_CACHE", "on") != "off"
+
+
+def embed_cached(conn: psycopg.Connection, text: str) -> str:
+    """embed_query through the query_embeddings table (db/eval.sql). A miss
+    calls the API and stores the vector; the table may not exist yet (a
+    fresh database before any eval), in which case this is embed_query."""
+    import hashlib
+
+    from raglab.embed import MODEL
+
+    if not EMBED_CACHE:
+        return embed_query(text)
+    key = hashlib.sha256(text.encode()).hexdigest()
+    try:
+        with conn.transaction():
+            row = conn.execute(
+                "SELECT embedding FROM query_embeddings WHERE model = %s AND text_hash = %s",
+                (MODEL, key),
+            ).fetchone()
+    except psycopg.Error:
+        return embed_query(text)
+    if row:
+        return row[0]
+    vector = embed_query(text)
+    with conn.transaction():
+        conn.execute(
+            "INSERT INTO query_embeddings (model, text_hash, embedding) VALUES (%s, %s, %s) "
+            "ON CONFLICT DO NOTHING", (MODEL, key, vector),
+        )
+    return vector

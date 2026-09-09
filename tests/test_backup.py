@@ -9,11 +9,11 @@ import pytest
 from raglab import backup
 
 docker = shutil.which("docker")
-pytestmark = pytest.mark.skipif(
+pytestmark = [pytest.mark.slow, pytest.mark.skipif(
     docker is None
     or subprocess.run([docker, "inspect", backup.CONTAINER], capture_output=True).returncode != 0,
     reason="database container not reachable",
-)
+)]
 
 
 def test_backup_contains_every_governed_table(tmp_path, monkeypatch):

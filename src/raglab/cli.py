@@ -400,6 +400,9 @@ def deid_eval_cmd(sample: int | None, gate: bool):
                 receipt.add(f"  recall {entity_type}{flag}", recall)
             receipt.add("  overall recall", r["overall_recall"])
             receipt.add("  LEAKAGE RATE", f"{r['leakage_rate']:.4f} (surface or canonical value surviving in indexed text)")
+            receipt.add("  over-redaction", f"{r['over_redaction_rate']:.4f} of {r['n_applied']} replacements protect nothing (not gated)")
+            for etype, span, n in r["over_examples"][:5]:
+                receipt.add("    over-redacted", f"{etype} {span!r} ×{n}")
             for src, doc, etype, value in r["examples"][:3]:
                 receipt.add("    leaked", f"{doc}: {etype} {value!r}")
         receipt.add("gate", f"structured recall >= {deid.DEID_THRESHOLDS['structured_recall']} (*), leakage < {deid.DEID_THRESHOLDS['leakage_rate']}, per source")
@@ -408,6 +411,51 @@ def deid_eval_cmd(sample: int | None, gate: bool):
     except Exception as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()
+
+
+@main.command("explain-golden")
+@click.argument("qid")
+def explain_cmd(qid: str):
+    """Why a golden question hits or misses: pool membership, reranker
+    position and score, and the text the reranker scored."""
+    from raglab import explain as explain_mod
+
+    receipt = Receipt(f"raglab explain-golden {qid}")
+    try:
+        with db.connect() as conn:
+            ex = explain_mod.explain(conn, qid)
+        receipt.add("question", ex.question)
+        if ex.translated != ex.question:
+            receipt.add("translated", ex.translated)
+        receipt.add("member context", ex.member_key or "none")
+        receipt.add("route", f"{ex.route['scope']} years={ex.route['years']} plans={ex.route['plan_codes']} sources={ex.route['sources'] or 'all'}")
+        receipt.add("pool", f"{ex.pool_size} candidates  " + "  ".join(f"{k}={v}" for k, v in sorted(ex.pool_by_source.items())))
+        for e in ex.expected:
+            name = e["spec"].get("internal") or e["spec"].get("title") or str(e["spec"])
+            if not e["in_pool"]:
+                receipt.add(f"expected {name}", "NOT IN POOL (retrieval miss: neither arm surfaced it)")
+                continue
+            receipt.add(f"expected {name}", f"pool rank {e['pool_rank']}, reranked to position {e['rerank_position']} (score {e['score']:.3f})")
+            receipt.add("  scored text", (e["scored_text"] or "").replace("\n", " | ")[:300])
+        abstained, best = ex.verdict
+        receipt.add("verdict", f"{'ABSTAIN' if abstained else 'answer'} (best {best:.3f}; thresholds prose {rerank_threshold()}, records {rerank_by_source()})")
+        for i, t in enumerate(ex.top[:5]):
+            receipt.add(f"  top {i}", f"{t['title']}  {t['score']:.3f}  {t['text'][:90].replace(chr(10), ' ')}")
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+def rerank_threshold() -> float:
+    from raglab import rerank
+
+    return rerank.ABSTAIN_THRESHOLD
+
+
+def rerank_by_source() -> dict:
+    from raglab import rerank
+
+    return rerank.ABSTAIN_BY_SOURCE
 
 
 @main.command("audit")
@@ -531,7 +579,7 @@ def explain_cmd(query: str, persona: str | None, generate: bool):
 
     abstain, best = rerank.abstention_verdict(reranked)
     click.echo("\n[6] VERDICT")
-    click.echo(f"    best rerank score: {best:.4f} vs threshold {rerank.ABSTAIN_THRESHOLD}")
+    click.echo(f"    best rerank score: {best:.4f} vs threshold {rerank.ABSTAIN_THRESHOLD} (records: {rerank.ABSTAIN_BY_SOURCE})")
     click.echo(f"    {'ABSTAIN (insufficient evidence)' if abstain else 'ANSWERABLE'}")
     click.echo(
         f"    RLS: {'persona_' + persona + ' — invisible tiers never entered retrieval' if persona else 'admin view (all tiers)'}\n"
@@ -589,15 +637,20 @@ def ablation_cmd():
 @click.option("--label", default="baseline", help="config_label recorded with the run.")
 @click.option("--gate", is_flag=True, help="Exit non-zero if thresholds are breached.")
 @click.option("--sabotage", is_flag=True, help="Discrimination check: junk query vectors.")
-def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool):
+@click.option("--category", "categories", multiple=True,
+              help="Only these golden categories (iteration aid; partial runs never gate).")
+def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool, categories: tuple[str, ...]):
     """Tier-1 deterministic retrieval eval over the golden set (free)."""
+    if categories and gate:
+        raise click.UsageError("--gate needs the whole golden set; drop --category")
     from raglab import eval_retrieval
     from raglab.timing import BUDGET_P95_MS
 
     receipt = Receipt("raglab eval-retrieval" + (" --sabotage" if sabotage else ""))
     try:
         with db.connect() as conn:
-            result = eval_retrieval.run(conn, config_label=label, sabotage=sabotage)
+            result = eval_retrieval.run(conn, config_label=label, sabotage=sabotage,
+                                        categories=tuple(categories))
         receipt.add("run id", result.run_id)
         receipt.add("corpus", result.corpus_hash[:12])
         for metric, value in result.overall.items():

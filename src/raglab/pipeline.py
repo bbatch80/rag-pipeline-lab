@@ -24,8 +24,11 @@ def run_query(
     query: str,
     persona: str | None = None,
     source: str = "interactive",
+    member_id: str | None = None,
 ) -> dict:
-    """Returns the context payload; writes the disclosure record."""
+    """Returns the context payload; writes the disclosure record.
+    `member_id` is the member context the surface has open (a rep's selected
+    member); member-scoped sources are filtered to that member."""
     if persona is not None and persona not in PERSONAS:
         raise ValueError(f"unknown persona {persona!r}; expected one of {PERSONAS}")
 
@@ -39,18 +42,25 @@ def run_query(
         # admin (the vault's owner) and care_team by grant — and only via the
         # owner connection, before the session drops to a persona role, which
         # cannot read the vault.
-        search_query = query
-        if persona is None or persona == "care_team":
-            from raglab import deid
+        from raglab import deid
 
-            with watch.stage("translate"):
+        # Resolved on the raw question: translation would replace the
+        # identifiers this looks for.
+        member_key = retrieval.resolve_member(conn, member_id, query)
+        with watch.stage("translate"):
+            if persona is None or persona == "care_team":
                 search_query = deid.translate_query(conn, query)
+            else:  # identifiers only: a key the caller typed is not re-identification
+                search_query = deid.translate_query(conn, query, deid.IDENTIFIER_TYPES)
+        # Embedding happens before the role switch: the cache table is the
+        # owner's, and a vector does not depend on who is asking.
+        with watch.stage("embed"):
+            vector = retrieval.embed_cached(conn, search_query)
         if persona is not None:
             conn.execute(f"SET LOCAL ROLE persona_{persona}")
-        with watch.stage("embed"):
-            vector = retrieval.embed_query(search_query)
         with watch.stage("search"):
-            candidates = retrieval.search(conn, search_query, vector, decision)
+            candidates = retrieval.search(conn, search_query, vector, decision, member_key=member_key,
+                                          embed=lambda t: retrieval.embed_cached(conn, t))
         with watch.stage("rerank"):
             reranked = rerank.rerank(
                 search_query, candidates, stratify_years=decision.years
@@ -62,6 +72,7 @@ def run_query(
         built = payload_mod.build(query, decision, reranked)
         built["payload_id"] = str(uuid.uuid4())
         built["persona"] = persona or "admin"
+        built["member_context"] = member_id
 
     with watch.stage("disclose"):
         _disclose(conn, built, reranked, source)

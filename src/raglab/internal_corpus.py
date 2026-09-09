@@ -27,8 +27,10 @@ class InternalItem:
     backend_kind: str  # markdown | csv | pdf
 
 
-def member_keys(source: Source) -> dict[str, str]:
-    """file stem -> person key, from the source's manifest (if it has one)."""
+def manifest_meta(source: Source) -> dict[str, dict]:
+    """file stem -> {patient_id, year} from the source's manifest (if it has
+    one). `year` is the year of the event the document records (a call's
+    date), not the ingest year."""
     path = MANIFEST_DIR / f"{source.key}.jsonl"
     if not path.exists():
         return {}
@@ -36,9 +38,13 @@ def member_keys(source: Source) -> dict[str, str]:
     for line in path.read_text().splitlines():
         if line.strip():
             rec = json.loads(line)
-            if rec.get("patient_id"):
-                out[Path(rec["doc"]).stem] = rec["patient_id"]
+            out[Path(rec["doc"]).stem] = {"patient_id": rec.get("patient_id"), "year": rec.get("year")}
     return out
+
+
+def member_keys(source: Source) -> dict[str, str]:
+    """file stem -> person key, from the source's manifest (if it has one)."""
+    return {stem: m["patient_id"] for stem, m in manifest_meta(source).items() if m["patient_id"]}
 
 
 def files_for(source: Source) -> list[tuple[Path, str]]:
@@ -61,14 +67,16 @@ def items(registry: Registry) -> list[InternalItem]:
     for source in registry.all:
         if source.lane not in ("vector", "both") or source.status != "ingested":
             continue
-        keys = member_keys(source)
+        metas = manifest_meta(source)
         for path, kind in files_for(source):
             rel = str(path.relative_to(INTERNAL_DIR))
+            m = metas.get(path.stem, {})
             out.append(InternalItem(
                 path=path,
                 meta=derive_internal_meta(
                     titles.get(rel, path.stem), source.doc_type, source.acl_tag,
-                    member_key=keys.get(path.stem),
+                    year=m.get("year") or 2026,
+                    member_key=m.get("patient_id"),
                 ),
                 backend_kind=kind,
             ))

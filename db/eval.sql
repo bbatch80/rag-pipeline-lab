@@ -30,3 +30,15 @@ CREATE INDEX IF NOT EXISTS eval_scores_metric_idx ON eval_scores (metric);
 -- content hashes, so a number can be traced to a corpus version the same
 -- way git_sha traces it to a code version.
 ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS corpus_hash text;
+
+-- Query-embedding cache: the golden questions barely change between runs,
+-- and the embed stage is a paid network call per question. Keyed on the
+-- exact text; the eval and the pipeline read it before calling the API.
+-- RAGLAB_EMBED_CACHE=off bypasses it (tests, A/Bs of the embedder).
+CREATE TABLE IF NOT EXISTS query_embeddings (
+    model      text NOT NULL,
+    text_hash  text NOT NULL,
+    embedding  text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (model, text_hash)
+);

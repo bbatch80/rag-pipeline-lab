@@ -246,7 +246,7 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
         cards.append(_card("wrong abstention", wrong,
                            f"gate ≤ {THRESHOLDS['wrong_abstention_rate']}",
                            wrong <= THRESHOLDS["wrong_abstention_rate"]))
-        for key, label in (("deny_abstained", "persona: deny blocked"),
+        for key, label in (("deny_clean", "persona: deny clean"),
                            ("allow_answered", "persona: allow served")):
             val = overall.get(key)
             if val is not None:
@@ -263,7 +263,7 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
 
     # ---- per-category table -------------------------------------------
     metrics_order = ["hit@5", "precision@5", "source_coverage", "gate_correct",
-                     "deny_abstained", "allow_answered", "allow_hit"]
+                     "deny_clean", "allow_answered", "allow_hit", "scope_clean"]
     def _slice_rows(kind: str, table: dict) -> list[str]:
         rows_html = []
         for name in sorted(table):

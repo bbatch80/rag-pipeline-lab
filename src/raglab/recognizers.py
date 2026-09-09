@@ -66,6 +66,7 @@ def shorthand_date_recognizer() -> PatternRecognizer:
                                  Pattern("numeric", r"\b\d{1,2}[./-]\d{1,2}[./-](?:\d{4}|\d{2})\b", 0.6),
                                  Pattern("iso", r"\b\d{4}-\d{2}-\d{2}\b", 0.6),
                                  Pattern("month_day", rf"\b(?:{_MONTHS})[a-z]*\.? \d{{1,2}}(?:,? \d{{4}})?\b", 0.6),
+                                 Pattern("month_year", rf"\b(?:{_MONTHS})[a-z]*\.?,? \d{{4}}\b", 0.6),
                              ])
 
 

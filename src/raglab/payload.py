@@ -13,7 +13,7 @@ Key properties:
 
 from datetime import datetime, timezone
 
-from raglab.rerank import ABSTAIN_THRESHOLD
+from raglab.rerank import abstention_verdict
 from raglab.retrieval import Candidate
 from raglab.router import Route
 
@@ -37,8 +37,7 @@ def build(
             "chunks": [],
         }
 
-    best = reranked[0].rerank_score if reranked else 0.0
-    insufficient = not reranked or (best or 0.0) < ABSTAIN_THRESHOLD
+    insufficient, best = abstention_verdict(reranked)
     return {
         "spec_version": SPEC_VERSION,
         "query": query,

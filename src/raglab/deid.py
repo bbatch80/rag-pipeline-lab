@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 
 import psycopg
@@ -80,14 +81,75 @@ def analyze(text: str, conn=None):
 
 
 MIN_SCORE = 0.35
+VERSION = "v2"  # part of the processing recipe: bump when what gets redacted changes
+
+# Over-redaction control. The statistical recognizers guess from shape and
+# capitalization: to them "PA" is a state, "advd" and "APPEAL_INFO" are
+# proper nouns, "30 day" is a date. Redacting those destroys the words a
+# question is made of and protects nothing. Two rules:
+#   1. A name/place/org span made only of domain vocabulary (the shorthand
+#      dictionary and its expansions, call reason codes, dispositions,
+#      month names) is released.
+#   2. A DATE_TIME span is kept only when it is a specific date — a month
+#      with a day or a year, a numeric date — the "elements of dates"
+#      Safe Harbor names. Bare years, durations ("30 day", "6 months") and
+#      relative phrases ("last week") are released.
+_VOCAB_TYPES = ("PERSON", "LOCATION", "NRP", "ORGANIZATION")
+_MONTH_NAMES = "jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec"
+_SPECIFIC_DATE = re.compile(
+    rf"\b(?:{_MONTH_NAMES})[a-z]*\.?\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?\b"   # Feb 11, Feb 11 2024
+    rf"|\b\d{{1,2}}(?:st|nd|rd|th)?\s+(?:{_MONTH_NAMES})[a-z]*\.?(?:,?\s+\d{{4}})?\b"  # 11 Feb 2024
+    rf"|\b(?:{_MONTH_NAMES})[a-z]*\.?,?\s+\d{{4}}\b"                                     # Feb 2024
+    r"|\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b"                                             # 2/11/24, 02.11
+    r"|\b\d{4}-\d{2}-\d{2}\b",                                                                # ISO
+    re.IGNORECASE,
+)
+_TOKEN = re.compile(r"[A-Za-z][A-Za-z_/&#]*|\d+")
+_vocab: set[str] | None = None
 
 
-def resolve_overlaps(results):
+def _domain_vocab() -> set[str]:
+    global _vocab
+    if _vocab is None:
+        from raglab.synth import journeys, shorthand
+
+        words = set()
+        for k, v in shorthand.SHORTHAND.items():
+            words.update(t.lower() for t in _TOKEN.findall(k))
+            words.update(t.lower() for t in _TOKEN.findall(v))
+        for code, _ in journeys.REASONS:
+            words.add(code.lower())
+            words.update(code.lower().split("_"))
+        for d in journeys.DISPOSITIONS:
+            words.update(t.lower() for t in _TOKEN.findall(d))
+        words.update(_MONTH_NAMES.split("|"))
+        words.update({"january", "february", "march", "april", "june", "july", "august",
+                      "september", "october", "november", "december", "outpatient", "inpatient",
+                      "card", "replacement", "portal", "digital", "line", "window", "directory"})
+        _vocab = words
+    return _vocab
+
+
+def is_phi_span(entity_type: str, span_text: str) -> bool:
+    """Would redacting this span protect anything? (rules 1 and 2 above)"""
+    if entity_type == "DATE_TIME":
+        return _SPECIFIC_DATE.search(span_text) is not None
+    if entity_type in _VOCAB_TYPES:
+        tokens = [t.lower() for t in _TOKEN.findall(span_text)]
+        if tokens and all(t in _domain_vocab() for t in tokens):
+            return False
+    return True
+
+
+def resolve_overlaps(results, text: str | None = None):
     """One replacement per region: keep the highest-scoring result (longer
-    on ties) and drop anything overlapping it, plus low-confidence noise."""
+    on ties) and drop anything overlapping it, plus low-confidence noise.
+    With `text`, spans that protect nothing (is_phi_span) are released."""
     kept = []
     for r in sorted(results, key=lambda r: (-r.score, -(r.end - r.start), r.start)):
         if r.score < MIN_SCORE:
+            continue
+        if text is not None and not is_phi_span(r.entity_type, text[r.start:r.end]):
             continue
         if all(r.end <= k.start or r.start >= k.end for k in kept):
             kept.append(r)
@@ -129,7 +191,7 @@ def _pseudonym(conn: psycopg.Connection, entity_type: str, original: str) -> str
 def deidentify(conn: psycopg.Connection, text: str, mode: str) -> str:
     """mode: 'mask' | 'tokenize'. Replacements applied right-to-left so
     earlier spans keep their offsets."""
-    results = sorted(resolve_overlaps(analyze(text, conn)), key=lambda r: r.start, reverse=True)
+    results = sorted(resolve_overlaps(analyze(text, conn), text), key=lambda r: r.start, reverse=True)
     out = text
     for r in results:
         original = canonical_original(r.entity_type, text[r.start:r.end])
@@ -149,9 +211,14 @@ QUERY_TRANSLATE_TYPES = (
     "PERSON", "US_SSN", "PHONE_NUMBER", "US_DRIVER_LICENSE", "ID",
     "MEDICAL_LICENSE", "MEMBER_ID", "MRN", "CLAIM_ID", "CASE_ID",
 )
+# Identifiers the caller already holds (a member ID typed by a rep) map to
+# their pseudonyms for EVERY persona: nothing is re-identified by translating
+# a key the caller supplied. Names, SSNs, phones translate only for
+# vault-entitled sessions (admin, care_team).
+IDENTIFIER_TYPES = ("MEMBER_ID", "MRN", "CLAIM_ID", "CASE_ID")
 
 
-def translate_query(conn: psycopg.Connection, query: str) -> str:
+def translate_query(conn: psycopg.Connection, query: str, types: tuple[str, ...] = QUERY_TRANSLATE_TYPES) -> str:
     """Authorized re-identification bridge: rewrite known PHI originals in a
     query to their vault pseudonyms so tokenized notes stay searchable by the
     identifiers a care team actually uses. The vault is owner-only — callers
@@ -161,7 +228,7 @@ def translate_query(conn: psycopg.Connection, query: str) -> str:
         "SELECT original, pseudonym FROM deid_vault "
         "WHERE entity_type = ANY(%s) "
         "ORDER BY length(original) DESC, original, pseudonym",
-        (list(QUERY_TRANSLATE_TYPES),),
+        (list(types),),
     ).fetchall()
     from raglab import identifiers
 
@@ -224,11 +291,25 @@ def evaluate(conn: psycopg.Connection, sample: int | None = None, seed: int = 7,
             entries = random.Random(seed).sample(entries, sample)
         per_type: dict[str, list[int]] = {}
         leaked, total, examples = 0, 0, []
+        applied_n, over_n, over_examples = 0, 0, Counter()
         for entry in entries:
             text = _source_text(source, entry["doc"])
             if text is None:
                 continue
             spans = analyze(text, conn)
+            # Precision: what the pipeline would actually replace, minus
+            # anything that overlaps a manifest entity, is over-redaction.
+            true_spans = []
+            for ent in entry["entities"]:
+                start = text.find(ent["value"])
+                while start != -1:
+                    true_spans.append((start, start + len(ent["value"])))
+                    start = text.find(ent["value"], start + 1)
+            for r in resolve_overlaps(spans, text):
+                applied_n += 1
+                if not any(r.start < e and s < r.end for s, e in true_spans):
+                    over_n += 1
+                    over_examples[(r.entity_type, text[r.start:r.end])] += 1
             for ent in entry["entities"]:
                 value, canonical = ent["value"], ent.get("canonical", ent["value"])
                 allowed = MANIFEST_TO_PRESIDIO.get(ent["type"], set())
@@ -255,6 +336,9 @@ def evaluate(conn: psycopg.Connection, sample: int | None = None, seed: int = 7,
                 "recall_by_type": {t: round(d / n, 3) for t, (d, n) in sorted(per_type.items()) if n},
                 "overall_recall": round(sum(d for d, _ in per_type.values()) / sum(n for _, n in per_type.values()), 3),
                 "leakage_rate": round(leaked / total, 4),
+                "over_redaction_rate": round(over_n / applied_n, 4) if applied_n else 0.0,
+                "n_applied": applied_n,
+                "over_examples": [(t, s, n) for (t, s), n in over_examples.most_common(8)],
                 "n_entities": total, "n_docs": len(entries), "examples": examples,
             }
 
@@ -267,7 +351,9 @@ def evaluate(conn: psycopg.Connection, sample: int | None = None, seed: int = 7,
         for key, r in per_source.items():
             rows = [(run_id, "all", key, f"recall_{t}", v, json.dumps({})) for t, v in r["recall_by_type"].items()]
             rows += [(run_id, "all", key, "overall_recall", r["overall_recall"], json.dumps({"n": r["n_entities"]})),
-                     (run_id, "all", key, "leakage_rate", r["leakage_rate"], json.dumps({"examples": r["examples"][:5]}))]
+                     (run_id, "all", key, "leakage_rate", r["leakage_rate"], json.dumps({"examples": r["examples"][:5]})),
+                     (run_id, "all", key, "over_redaction_rate", r["over_redaction_rate"],
+                      json.dumps({"n_applied": r["n_applied"], "examples": r["over_examples"][:5]}))]
             cur.executemany(
                 "INSERT INTO eval_scores (run_id, question_id, category, metric, value, detail) VALUES (%s, %s, %s, %s, %s, %s)",
                 rows,

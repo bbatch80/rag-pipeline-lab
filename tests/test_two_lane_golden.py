@@ -16,10 +16,10 @@ from raglab.ablation import load_golden
 from raglab.mcp_server import IDENTITIES
 from raglab.pipeline import run_query
 
-pytestmark = pytest.mark.skipif(
+pytestmark = [pytest.mark.slow, pytest.mark.skipif(
     not os.environ.get("SNOWFLAKE_ACCOUNT"),
     reason="no Snowflake credentials (verified locally, CI is zero-secret)",
-)
+)]
 
 TWO_LANE = [g for g in load_golden() if g["category"] == "two_lane"]
 

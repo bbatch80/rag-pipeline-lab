@@ -31,11 +31,15 @@ def test_every_document_is_bound_to_a_source(db):
 
 
 def test_recipe_string_unchanged_by_refactor(monkeypatch):
-    """The PHI flag now drives the de-id suffix; the string is byte-identical
-    to v1's clinical_note branch, so content hashes did not move."""
+    """The PHI flag drives the de-id suffix (mode + de-id rule version, so a
+    change in what gets redacted re-ingests exactly the PHI sources); the
+    plain recipe is byte-identical to v1's, so brochure hashes never move."""
+    from raglab import deid
+
     monkeypatch.setenv("RAGLAB_DEID", "tokenize")
     monkeypatch.setenv("RAGLAB_CONTEXTUAL", "template")
     plain = ingest.processing_recipe("fast")
     phi = ingest.processing_recipe("fast", phi=True)
-    assert phi == plain + "|deid:tokenize"
+    assert plain == "fast|2000/1500/250|template"
+    assert phi == plain + f"|deid:tokenize:{deid.VERSION}"
     assert "|deid:" not in plain

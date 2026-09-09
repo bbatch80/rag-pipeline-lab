@@ -124,3 +124,79 @@ def test_rerank_orders_and_verdicts(monkeypatch):
     ordered_noise = rerank.rerank("q", [_candidate(content="noise")])
     abstain, best = rerank.abstention_verdict(ordered_noise)
     assert abstain, "best score below threshold must abstain"
+
+
+def test_filters_member_context_and_event_exemption():
+    """Member-scoped sources are filtered to the member context or skipped
+    without one; event sources pass the year (edition) filter."""
+    from raglab.retrieval import _filters
+    from raglab.router import Route
+
+    route = Route(scope="in_scope", years=(2025,), plan_codes=(), sources=())
+    where, params = _filters(route, None, ("call_note",), ("call_note",))
+    assert "c.doc_type <> ALL(%s)" in where and ["call_note"] in params
+    assert "(c.year = ANY(%s) OR c.doc_type = ANY(%s))" in where
+
+    where, params = _filters(route, "person-key", ("call_note",), ("call_note",))
+    assert "(c.doc_type <> ALL(%s) OR c.member_key = %s)" in where
+    assert "person-key" in params
+
+
+def _has_roster(db) -> bool:
+    return db.execute("SELECT to_regclass('synthea.patients')").fetchone()[0] is not None
+
+
+def test_resolve_member_without_roster_is_no_context(db):
+    """A database without the synthea schema (CI) resolves nothing and
+    leaves the transaction usable."""
+    from raglab import retrieval
+
+    if _has_roster(db):
+        pytest.skip("roster present; the CI-shaped case needs a database without synthea")
+    assert retrieval.resolve_member(db, "M822099594", "") is None
+    assert db.execute("SELECT 1").fetchone()[0] == 1
+
+
+def test_resolve_member_prefers_structured_context(db):
+    """The structured member ID wins; an ID typed in the question is the
+    fallback; names never resolve; an invalid ID is rejected."""
+    from raglab import retrieval
+
+    if not _has_roster(db):
+        pytest.skip("needs the synthea roster (not in CI's fresh database)")
+    row = db.execute("SELECT member_id, mrn, id FROM synthea.patients LIMIT 1").fetchone()
+    other = db.execute("SELECT member_id FROM synthea.patients OFFSET 1 LIMIT 1").fetchone()[0]
+    key = str(row[2])
+    assert retrieval.resolve_member(db, row[0], f"what about member {other}?") == key
+    assert retrieval.resolve_member(db, None, f"what did member {row[0]} call about?") == key
+    assert retrieval.resolve_member(db, None, f"member with {row[1]} called") == key
+    assert retrieval.resolve_member(db, None, "what did Karima Dickinson call about?") is None
+    with pytest.raises(ValueError):
+        retrieval.resolve_member(db, "M123", "")
+
+
+def test_embed_cache_answers_repeat_questions(db, monkeypatch):
+    """The second embedding of the same text is served from the table; a
+    different text calls the embedder again."""
+    from raglab import retrieval
+    from raglab.eval_retrieval import EVAL_SCHEMA_PATH
+
+    db.execute(EVAL_SCHEMA_PATH.read_text())
+    calls = []
+    monkeypatch.setattr(retrieval, "embed_query", lambda t: calls.append(t) or f"[vec:{t}]")
+    monkeypatch.setattr(retrieval, "EMBED_CACHE", True)
+    assert retrieval.embed_cached(db, "q one") == "[vec:q one]"
+    assert retrieval.embed_cached(db, "q one") == "[vec:q one]"
+    assert retrieval.embed_cached(db, "q two") == "[vec:q two]"
+    assert calls == ["q one", "q two"]
+
+
+def test_claim_id_resolves_to_its_member(db):
+    from raglab import retrieval
+
+    if not _has_roster(db):
+        pytest.skip("needs the synthea call log (not in CI's fresh database)")
+    call_id, patient, claim = db.execute(
+        "SELECT call_id, patient, claim_id FROM synthea.call_log WHERE claim_id IS NOT NULL LIMIT 1"
+    ).fetchone()
+    assert retrieval.resolve_member(db, None, f"What happened with claim {claim}?") == str(patient)

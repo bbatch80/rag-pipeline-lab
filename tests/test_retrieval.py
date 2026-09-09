@@ -124,3 +124,37 @@ def test_rerank_orders_and_verdicts(monkeypatch):
     ordered_noise = rerank.rerank("q", [_candidate(content="noise")])
     abstain, best = rerank.abstention_verdict(ordered_noise)
     assert abstain, "best score below threshold must abstain"
+
+
+def test_filters_member_context_and_event_exemption():
+    """Member-scoped sources are filtered to the member context or skipped
+    without one; event sources pass the year (edition) filter."""
+    from raglab.retrieval import _filters
+    from raglab.router import Route
+
+    route = Route(scope="in_scope", years=(2025,), plan_codes=(), sources=())
+    where, params = _filters(route, None, ("call_note",), ("call_note",))
+    assert "c.doc_type <> ALL(%s)" in where and ["call_note"] in params
+    assert "(c.year = ANY(%s) OR c.doc_type = ANY(%s))" in where
+
+    where, params = _filters(route, "person-key", ("call_note",), ("call_note",))
+    assert "(c.doc_type <> ALL(%s) OR c.member_key = %s)" in where
+    assert "person-key" in params
+
+
+def test_resolve_member_prefers_structured_context(db):
+    """The structured member ID wins; an ID typed in the question is the
+    fallback; names never resolve; an invalid ID is rejected."""
+    import pytest
+
+    from raglab import retrieval
+
+    row = db.execute("SELECT member_id, mrn, id FROM synthea.patients LIMIT 1").fetchone()
+    other = db.execute("SELECT member_id FROM synthea.patients OFFSET 1 LIMIT 1").fetchone()[0]
+    key = str(row[2])
+    assert retrieval.resolve_member(db, row[0], f"what about member {other}?") == key
+    assert retrieval.resolve_member(db, None, f"what did member {row[0]} call about?") == key
+    assert retrieval.resolve_member(db, None, f"member with {row[1]} called") == key
+    assert retrieval.resolve_member(db, None, "what did Karima Dickinson call about?") is None
+    with pytest.raises(ValueError):
+        retrieval.resolve_member(db, "M123", "")

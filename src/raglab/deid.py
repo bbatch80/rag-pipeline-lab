@@ -149,9 +149,14 @@ QUERY_TRANSLATE_TYPES = (
     "PERSON", "US_SSN", "PHONE_NUMBER", "US_DRIVER_LICENSE", "ID",
     "MEDICAL_LICENSE", "MEMBER_ID", "MRN", "CLAIM_ID", "CASE_ID",
 )
+# Identifiers the caller already holds (a member ID typed by a rep) map to
+# their pseudonyms for EVERY persona: nothing is re-identified by translating
+# a key the caller supplied. Names, SSNs, phones translate only for
+# vault-entitled sessions (admin, care_team).
+IDENTIFIER_TYPES = ("MEMBER_ID", "MRN", "CLAIM_ID", "CASE_ID")
 
 
-def translate_query(conn: psycopg.Connection, query: str) -> str:
+def translate_query(conn: psycopg.Connection, query: str, types: tuple[str, ...] = QUERY_TRANSLATE_TYPES) -> str:
     """Authorized re-identification bridge: rewrite known PHI originals in a
     query to their vault pseudonyms so tokenized notes stay searchable by the
     identifiers a care team actually uses. The vault is owner-only — callers
@@ -161,7 +166,7 @@ def translate_query(conn: psycopg.Connection, query: str) -> str:
         "SELECT original, pseudonym FROM deid_vault "
         "WHERE entity_type = ANY(%s) "
         "ORDER BY length(original) DESC, original, pseudonym",
-        (list(QUERY_TRANSLATE_TYPES),),
+        (list(types),),
     ).fetchall()
     from raglab import identifiers
 

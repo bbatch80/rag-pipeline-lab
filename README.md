@@ -315,10 +315,13 @@ uv run raglab-mcp                                      # stdio MCP server
 ### Entitlement assertions in CI
 
 The golden set includes persona-negative questions asserting both
-directions per entitlement wall: the unauthorized persona must return
-`insufficient_evidence` and the authorized persona must answer citing the
-expected document, run through the full persona pipeline (RLS, vault
-translation, disclosure). `deny_abstained`, `allow_answered`, and
+directions per entitlement wall: the protected document must be absent from
+the unauthorized persona's results (it may abstain, or answer from what it
+is entitled to) and the authorized persona must answer citing the expected
+document, run through the full persona pipeline (RLS, vault translation,
+disclosure). Scope-negative questions assert member scoping: a question
+asked in one member's context returns no other member's records.
+`deny_clean`, `scope_clean`, `allow_answered`, and
 retrieval `hit@5` gate CI; the entitlement metrics are thresholded at 1.0 —
 a single leak fails the build. The gate job runs on a self-hosted runner
 beside the loaded database (no corpus or keys on hosted runners); `main` is

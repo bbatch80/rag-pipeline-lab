@@ -221,6 +221,7 @@ def generate(conn: psycopg.Connection, members: int = 1500, target_calls: int = 
         for note in notes:
             (calls_dir / f"call_{note.call_id}.md").write_text(note.text() + "\n")
             rec = {"doc": f"call_{note.call_id}.md", "patient_id": note.patient, "template": note.reason,
+                   "year": note.when.year,
                    "entities": [{"type": e.type, "value": e.value, "canonical": e.canonical} for e in note.entities]}
             if note.duplicate_of:
                 rec["duplicate_of"] = note.duplicate_of

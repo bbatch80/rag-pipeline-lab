@@ -45,10 +45,14 @@ def _snowflake(role: str):
 
 
 @mcp.tool()
-def search_documents(query: str) -> dict:
+def search_documents(query: str, member_id: str | None = None) -> dict:
     """Search the governed GEHA document corpus (brochures, internal
-    operations content, clinical notes — trimmed to your session identity by
-    database row-level security before ranking).
+    operations content, clinical notes, call notes — trimmed to your session
+    identity by database row-level security before ranking).
+
+    `member_id` is the member context: the member the user has open. Records
+    about one member (call notes) are searched only with a member context
+    and only for that member; without it they are not searched.
 
     Returns a context payload (spec 1.0.0): status (ok |
     insufficient_evidence | out_of_scope), confidence, and provenance-rich
@@ -59,7 +63,7 @@ def search_documents(query: str) -> dict:
 
     lane1, _ = IDENTITIES[PERSONA]
     with db.connect() as conn:
-        return run_query(conn, query, persona=lane1, source="mcp")
+        return run_query(conn, query, persona=lane1, source="mcp", member_id=member_id)
 
 
 @mcp.tool()

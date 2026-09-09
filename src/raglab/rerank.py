@@ -50,16 +50,23 @@ def rerank(
 
     stratify_years: when the router resolved MULTIPLE years (YoY questions),
     similarity ranking alone lets one year's near-identical chunks crowd out
-    the other's. Stratification guarantees each routed year its share of the
-    top_n slots (best-scored first within each year), interleaved by score.
-    Chunks with no year affinity (shouldn't exist post-filter) rank after.
+    the other's. Each year is scored against its own query and the years
+    are interleaved by rank (latest year first), so every routed year has
+    its best chunks at the top of the list.
     """
     if not candidates:
         return []
     model = _get_model()
+    # Multi-year routes: each candidate is scored against ITS year's
+    # year-neutral query (router.year_neutral), not the change-worded
+    # question, so "changes this year" sections lose their built-in edge.
+    from raglab import router as router_mod
+
+    by_year = router_mod.year_queries(query, stratify_years)
+    pairs = [(by_year.get(c.year, query), c.content) for c in candidates]
     # sentence-transformers >= 3 applies sigmoid activation in predict();
     # scores arrive in 0..1 already.
-    scores = model.predict([(query, c.content) for c in candidates])
+    scores = model.predict(pairs)
     for candidate, score in zip(candidates, scores, strict=True):
         candidate.rerank_score = float(score)
     ordered = sorted(candidates, key=lambda c: c.rerank_score, reverse=True)
@@ -67,20 +74,26 @@ def rerank(
     if len(stratify_years) < 2:
         return ordered[:top_n]
 
-    per_year = max(1, top_n // len(stratify_years))
+    # Years were scored against different queries (see above), so their
+    # scores are not comparable: interleave by RANK within each year, latest
+    # year first, so the top of every year is near the top of the list.
+    lanes = {year: [c for c in ordered if c.year == year] for year in sorted(stratify_years, reverse=True)}
     picked, picked_ids = [], set()
-    for year in stratify_years:
-        year_best = [c for c in ordered if c.year == year][:per_year]
-        picked.extend(year_best)
-        picked_ids.update(c.chunk_id for c in year_best)
-    # Fill remaining slots by global score.
+    while len(picked) < top_n and any(lanes.values()):
+        for year in list(lanes):
+            if lanes[year] and len(picked) < top_n:
+                c = lanes[year].pop(0)
+                if c.chunk_id not in picked_ids:
+                    picked.append(c)
+                    picked_ids.add(c.chunk_id)
+    # Chunks with no year affinity (shouldn't exist post-filter) fill the rest.
     for c in ordered:
         if len(picked) >= top_n:
             break
         if c.chunk_id not in picked_ids:
             picked.append(c)
             picked_ids.add(c.chunk_id)
-    return sorted(picked, key=lambda c: c.rerank_score, reverse=True)[:top_n]
+    return picked[:top_n]
 
 
 def abstention_verdict(reranked: list[Candidate]) -> tuple[bool, float]:

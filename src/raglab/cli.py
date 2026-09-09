@@ -119,7 +119,7 @@ def ingest_cmd(full: bool):
         "markdown": MarkdownBackend(),
         "csv": CsvBackend(),
     }
-    counts = {"skipped": 0, "ingested": 0, "reingested": 0, "quarantined": 0}
+    counts = {"skipped": 0, "ingested": 0, "reingested": 0, "quarantined": 0, "duplicate": 0}
 
     def one(conn, path, meta, backend_kind, label):
         action = ingest.ingest_document(conn, path, meta, backends[backend_kind])
@@ -141,7 +141,13 @@ def ingest_cmd(full: bool):
                 one(conn, cell.pdf_path, derive_document_meta(cell), "pdf",
                     f"{cell.spec.ri}/{cell.year}")
 
-            internal_items = internal_corpus.items(sources.load(conn))
+            registry = sources.load(conn)
+            from raglab import dedup
+
+            for src in registry.all:  # originals already ingested must be recognizable
+                if src.chunk_profile == "record" and src.status == "ingested":
+                    dedup.seed(src.key, conn)
+            internal_items = internal_corpus.items(registry)
             for item in internal_items:
                 one(conn, item.path, item.meta, item.backend_kind, item.meta.title)
             if internal_items:
@@ -227,12 +233,17 @@ def index_cmd():
                 "USING hnsw (embedding vector_cosine_ops) "
                 f"WITH (m = {HNSW_M}, ef_construction = {HNSW_EF_CONSTRUCTION})"
             )
-            # BM25 (pg_textsearch) is fastest built after a bulk load too.
-            conn.execute("REINDEX INDEX chunks_bm25_idx")
+            # BM25 (pg_textsearch) is fastest built after a bulk load too —
+            # one index per source (own statistics); reindex each.
+            bm25 = [r[0] for r in conn.execute(
+                "SELECT indexname FROM pg_indexes WHERE indexname LIKE 'chunks_bm25_%%' ORDER BY 1"
+            ).fetchall()]
+            for name in bm25:
+                conn.execute(f"REINDEX INDEX {name}")
             conn.commit()
         receipt.add("vacuum", "chunks (dead row versions cleared before index builds)")
         receipt.add("index", f"chunks_embedding_idx (hnsw, cosine, m={HNSW_M}, ef_construction={HNSW_EF_CONSTRUCTION})")
-        receipt.add("bm25", "chunks_bm25_idx reindexed (pg_textsearch, english)")
+        receipt.add("bm25", f"{len(bm25)} per-source indexes reindexed (pg_textsearch, english)")
     except psycopg.Error as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()
@@ -275,6 +286,27 @@ def synth_docs_cmd():
     receipt = Receipt("raglab synth docs")
     try:
         receipt.add("internal docs", internal_docs.write_all())
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+@synth_group.command("calls")
+@click.option("--members", default=1500, help="Members with call histories (floor).")
+@click.option("--calls", default=10000, help="Target number of call notes.")
+@click.option("--seed", default=42, help="Generation seed.")
+def synth_calls_cmd(members: int, calls: int, seed: int):
+    """Call notes from per-member storylines (+ synthea.call_log rows) and their PHI manifest."""
+    from raglab.synth import journeys
+
+    receipt = Receipt("raglab synth calls")
+    try:
+        with db.connect() as conn:
+            stats = journeys.generate(conn, members=members, target_calls=calls, seed=seed)
+            conn.commit()
+        for k, v in stats.items():
+            receipt.add(k, v)
+        receipt.add("PHI manifest", str(journeys.MANIFEST_PATH.relative_to(config.REPO_ROOT)))
     except Exception as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()

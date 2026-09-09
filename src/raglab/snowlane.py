@@ -32,6 +32,10 @@ EXPORTS = {
         "city, state, zip, " + LOB_EXPR.format(col="id")
         + " FROM synthea.patients"
     ),
+    "call_log": (
+        "SELECT call_id, patient, member_id, call_date, rep_id, reason_code, disposition, "
+        "claim_id, duration_sec, " + LOB_EXPR.format(col="patient") + " FROM synthea.call_log"
+    ),
     "enrollment": (
         "SELECT patient, member_id, year, line_of_business, plan_code, plan_option, "
         "tier, enrollment_code FROM synthea.enrollment"
@@ -208,6 +212,18 @@ NAMED_QUERIES = {
             LIMIT %(limit)s
         """,
     },
+    "member_calls": {
+        "doc": ("The member's call history, newest first: date, rep, reason code, "
+                "disposition, the claim discussed (if any), duration."),
+        "params": {"member_id": str, "limit": int},
+        "sql": """
+            SELECT CALL_ID, CALL_DATE, REP_ID, REASON_CODE, DISPOSITION, CLAIM_ID, DURATION_SEC
+            FROM CALL_LOG
+            WHERE MEMBER_ID = %(member_id)s
+            ORDER BY CALL_DATE DESC
+            LIMIT %(limit)s
+        """,
+    },
     "member_enrollment": {
         "doc": ("The member's enrollment by plan year: line of business, plan, "
                 "option, tier, enrollment code — what Agent Assist uses to pick "
@@ -246,7 +262,7 @@ NAMED_QUERIES = {
 MASKED_FOR_ROLE = {
     "CARE_MANAGER": {"BASE_COST", "TOTAL_COST", "TOTAL_CLAIM_COST",
                      "PAYER_COVERAGE", "AVG_COST"},
-    "ACTUARY": {"SSN", "FIRST_NAME", "LAST_NAME", "BIRTHDATE", "MEMBER_ID", "MRN"},
+    "ACTUARY": {"SSN", "FIRST_NAME", "LAST_NAME", "BIRTHDATE", "MEMBER_ID", "MRN", "CLAIM_ID"},
 }
 
 

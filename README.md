@@ -51,9 +51,14 @@ minimal search effort; the sweep demonstrates methodology, not necessity.
 ## Retrieval funnel ablation
 
 Query → rule-based router (scope gate, year resolution, plan filters) →
-hybrid search (pgvector + BM25 via pg_textsearch) → reciprocal rank fusion
-(k=60, rank-only, in SQL; the lexical list weighted ×2 for identifier-shaped
-questions) → top-50 → cross-encoder reranker (BAAI/bge-reranker-base, local).
+hybrid search **per source** (pgvector + one BM25 index per source via
+pg_textsearch, each with its own statistics; RRF k=60, rank-only, in SQL; the
+lexical list weighted ×2 for identifier-shaped questions; each source fuses to
+its own top-50 so a large source cannot crowd a small one out before
+reranking) → cross-encoder reranker (BAAI/bge-reranker-base, local). Change
+questions are searched per plan year: the latest year with the question as
+asked, prior years with a year-neutral form of it, and each year's candidates
+are reranked against that year's query.
 Measured as hit@5 on the 29 answerable questions of a 43-question golden set
 with human-verified source labels (`eval/golden.jsonl`); reproduce with
 `raglab ablation`, inspect any query with `raglab explain "<query>"`.
@@ -77,6 +82,31 @@ Abstention threshold (0.5) separates answerable questions (best rerank
 score ≥ 0.72 across the golden set) from absent-topic questions (0.30);
 redirect-style questions score high on genuinely-relevant-but-non-answering
 chunks and are handled at the generation layer instead.
+
+## Sources
+
+Eighteen fixed sources, declared once in a `sources` table (tier, lane,
+directory, parser, chunk profile, gate rules, PHI flag) — no registry or
+intake mechanism; code reads the row. Vector lane today: FEHB/PSHB brochures
+(23 PDFs, 2021–2026), rates, SOPs, claims bulletins, formulary, CSR knowledge
+base, 250 clinical notes (40 as PDFs), and **10,030 call-center notes**
+generated from per-member storylines over the Synthea population (1,790
+members, long-tailed volume, six rep personas with their own shorthand and
+macros, skewed reason codes, ~2% wrong claim citations, ~1% copy-paste
+duplicates). Every member-scoped document carries the person key, and every
+generated artifact uses the member's one stable member ID (check-digit
+format, assigned once in both lanes).
+
+Call notes are one record = one chunk. What is shown and cited is the
+verbatim de-identified note; what is embedded and BM25-indexed is a search
+copy: identifiers canonicalized, shorthand expanded from a curated
+dictionary, and sentences that appear in more than 2% of notes dropped as
+boilerplate (frequency finds the macros; nothing knows the macro list).
+Near-duplicates (MinHash, Jaccard ≥ 0.8 with the header line excluded) point
+at their original and carry no chunks. Warehouse lane: PATIENTS, CLAIM_LINES,
+ENROLLMENT (one row per member per plan year), CALL_LOG — reachable only
+through named, parameterized queries under Snowflake row-access and masking
+policies.
 
 ## Evaluation experiments
 

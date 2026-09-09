@@ -11,6 +11,7 @@ def _vec(x: float) -> str:
 
 
 def test_floor_keeps_a_crowded_out_source_in_the_pool(db, monkeypatch):
+    monkeypatch.setattr(retrieval, "POOLS", "global")  # the floor is the global-pool safeguard
     monkeypatch.setattr(retrieval, "SOURCE_FLOOR", 5)
     """60 brochure chunks sit nearer the query than 3 SOP chunks. A flat
     top-50 pool holds brochures only; the floor admits the SOPs' best."""

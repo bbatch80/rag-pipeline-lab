@@ -67,10 +67,10 @@ def test_fulltext_ranking(db):
     rows = db.execute(
         """
         SELECT chunk_index,
-               -(index_text <@> to_bm25query('deductible', 'chunks_bm25_idx')) AS rank
+               -(index_text <@> to_bm25query('deductible', 'chunks_bm25_brochure_idx')) AS rank
         FROM chunks
         WHERE document_id = %s
-          AND -(index_text <@> to_bm25query('deductible', 'chunks_bm25_idx')) > 0
+          AND -(index_text <@> to_bm25query('deductible', 'chunks_bm25_brochure_idx')) > 0
         ORDER BY rank DESC
         """,
         (doc_id,),

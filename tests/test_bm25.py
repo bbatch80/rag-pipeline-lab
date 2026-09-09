@@ -53,3 +53,20 @@ def test_identifier_query_lets_exact_match_win(corpus, db):
     lexical list weighted, the exact match tops the fused pool."""
     pool = retrieval.search(db, "GEHA-04821733", _vec(1.0), router.Route(scope="in_scope", years=(2026,)))
     assert "GEHA-04821733" in pool[0].content
+
+
+def test_each_source_ranks_within_its_own_index(corpus, db):
+    """A matching SOP and a matching brochure chunk each get lexical rank 1:
+    ranks are per source (own BM25 statistics), scores never compared."""
+    sop = db.execute(
+        "INSERT INTO documents (source_path, title, content_hash, source_id, acl_tag) "
+        "VALUES ('t/s.md', 'S', 'h', 3, 'employee') RETURNING id"
+    ).fetchone()[0]
+    db.execute(
+        "INSERT INTO chunks (document_id, chunk_index, content, year, doc_type, embedding) "
+        "VALUES (%s, 0, 'Procedure: verify the HDHP deductible before adjudication.', 2026, 'sop', %s::vector)",
+        (sop, _vec(3.0)),
+    )
+    pool = retrieval.search(db, "deductible HDHP", _vec(1.0), router.Route(scope="in_scope", years=(2026,)))
+    by_type = {c.doc_type: c.text_rank for c in pool if c.text_rank == 1}
+    assert by_type.get("brochure") == 1 and by_type.get("sop") == 1

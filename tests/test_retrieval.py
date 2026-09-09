@@ -142,13 +142,28 @@ def test_filters_member_context_and_event_exemption():
     assert "person-key" in params
 
 
+def _has_roster(db) -> bool:
+    return db.execute("SELECT to_regclass('synthea.patients')").fetchone()[0] is not None
+
+
+def test_resolve_member_without_roster_is_no_context(db):
+    """A database without the synthea schema (CI) resolves nothing and
+    leaves the transaction usable."""
+    from raglab import retrieval
+
+    if _has_roster(db):
+        pytest.skip("roster present; the CI-shaped case needs a database without synthea")
+    assert retrieval.resolve_member(db, "M822099594", "") is None
+    assert db.execute("SELECT 1").fetchone()[0] == 1
+
+
 def test_resolve_member_prefers_structured_context(db):
     """The structured member ID wins; an ID typed in the question is the
     fallback; names never resolve; an invalid ID is rejected."""
-    import pytest
-
     from raglab import retrieval
 
+    if not _has_roster(db):
+        pytest.skip("needs the synthea roster (not in CI's fresh database)")
     row = db.execute("SELECT member_id, mrn, id FROM synthea.patients LIMIT 1").fetchone()
     other = db.execute("SELECT member_id FROM synthea.patients OFFSET 1 LIMIT 1").fetchone()[0]
     key = str(row[2])
@@ -179,6 +194,8 @@ def test_embed_cache_answers_repeat_questions(db, monkeypatch):
 def test_claim_id_resolves_to_its_member(db):
     from raglab import retrieval
 
+    if not _has_roster(db):
+        pytest.skip("needs the synthea call log (not in CI's fresh database)")
     call_id, patient, claim = db.execute(
         "SELECT call_id, patient, claim_id FROM synthea.call_log WHERE claim_id IS NOT NULL LIMIT 1"
     ).fetchone()

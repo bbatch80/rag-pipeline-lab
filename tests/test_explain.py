@@ -1,8 +1,12 @@
 """raglab explain-golden: the three facts behind a hit or a miss."""
 
+import os
+
 import pytest
 
-pytestmark = pytest.mark.slow
+pytestmark = [pytest.mark.slow, pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"), reason="needs the embedded corpus and the embedder (not in CI's fresh database)"
+)]
 
 
 def test_explain_reports_pool_and_rerank_facts():

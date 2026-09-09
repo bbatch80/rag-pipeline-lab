@@ -82,9 +82,13 @@ def resolve_member(conn: psycopg.Connection, member_id: str | None, query_text: 
     for kind, canon in candidates:
         table, column = _ID_LOOKUP[kind]
         person = "id" if table == "synthea.patients" else "patient"
-        row = conn.execute(
-            f"SELECT {person} FROM {table} WHERE {column} = %s", (canon,)
-        ).fetchone()
+        try:
+            with conn.transaction():  # savepoint: a missing table must not poison the caller's transaction
+                row = conn.execute(
+                    f"SELECT {person} FROM {table} WHERE {column} = %s", (canon,)
+                ).fetchone()
+        except psycopg.errors.UndefinedTable:  # no synthea schema (CI): no member context
+            return None
         if row:
             return str(row[0])
     return None

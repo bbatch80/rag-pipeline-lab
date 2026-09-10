@@ -282,3 +282,32 @@ def test_new_tiers_inherit_employee_material(db):
         db.execute(f"SET LOCAL ROLE {role}")
         assert db.execute("SELECT count(*) FROM chunks WHERE content LIKE 'employee secret%'").fetchone()[0] == 3, role
         db.execute("RESET ROLE")
+
+
+def _link(db, title, case="APL-TEST001"):
+    db.execute("INSERT INTO appeal_evidence (case_id, document_title, kind) VALUES (%s, %s, 'clinical_note') ON CONFLICT DO NOTHING", (case, title))
+
+
+def test_relational_entitlement_follows_the_evidence_link(db):
+    """A clinical note is visible to the appeals tier while an appeal cites it
+    — and only that note; unlinking it removes it with zero re-indexing."""
+    _seed_tiers(db)  # care_team doc 'doc-care_team' with 3 chunks, unlinked
+    other = db.execute(
+        "INSERT INTO documents (source_path, title, content_hash, acl_tag, source_id) "
+        "VALUES ('t/other.md', 'note_other', 'h', 'care_team', 7) RETURNING id").fetchone()[0]
+    db.execute("INSERT INTO chunks (document_id, chunk_index, content, acl_tag, year, doc_type) "
+               "VALUES (%s, 0, 'care_team other note', 'care_team', 2026, 'clinical_note')", (other,))
+    _link(db, "doc-care_team")
+    db.execute("SET LOCAL ROLE persona_appeals")
+    assert db.execute("SELECT count(*) FROM chunks WHERE content LIKE 'care_team secret%'").fetchone()[0] == 3, "linked note visible"
+    assert db.execute("SELECT count(*) FROM chunks WHERE content = 'care_team other note'").fetchone()[0] == 0, "unlinked note invisible"
+    assert db.execute("SELECT count(*) FROM documents WHERE title = 'doc-care_team'").fetchone()[0] == 1
+    db.execute("RESET ROLE")
+    for role in ("persona_member_services", "persona_employee", "persona_public"):
+        db.execute(f"SET LOCAL ROLE {role}")
+        assert db.execute("SELECT count(*) FROM chunks WHERE content LIKE 'care_team secret%'").fetchone()[0] == 0, f"{role} never sees clinical notes"
+        db.execute("RESET ROLE")
+    db.execute("DELETE FROM appeal_evidence WHERE case_id = 'APL-TEST001'")
+    db.execute("SET LOCAL ROLE persona_appeals")
+    assert db.execute("SELECT count(*) FROM chunks WHERE content LIKE 'care_team secret%'").fetchone()[0] == 0, "unlinked -> gone, no re-index"
+    db.execute("RESET ROLE")

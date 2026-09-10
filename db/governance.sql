@@ -45,6 +45,17 @@ ALTER TABLE chunks FORCE ROW LEVEL SECURITY;
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents FORCE ROW LEVEL SECURITY;
 
+-- The relational branch below reads appeal_evidence; on a fresh database this
+-- file runs before migration 013 creates it, so the same definition lives
+-- here (idempotent both ways).
+CREATE TABLE IF NOT EXISTS appeal_evidence (
+    case_id        text NOT NULL,
+    document_title text NOT NULL,
+    kind           text NOT NULL,
+    PRIMARY KEY (case_id, document_title)
+);
+CREATE INDEX IF NOT EXISTS appeal_evidence_document_idx ON appeal_evidence (document_title);
+
 DROP POLICY IF EXISTS chunks_lateral_acl ON chunks;
 CREATE POLICY chunks_lateral_acl ON chunks FOR SELECT USING (
     acl_tag = 'public'
@@ -56,6 +67,11 @@ CREATE POLICY chunks_lateral_acl ON chunks FOR SELECT USING (
         AND pg_has_role(current_user, 'persona_member_services', 'member'))
     OR (acl_tag = 'appeals'
         AND pg_has_role(current_user, 'persona_appeals', 'member'))
+    -- relational (Phase 2 decision 2): a clinical note any appeal cites
+    OR (acl_tag = 'care_team'
+        AND pg_has_role(current_user, 'persona_appeals', 'member')
+        AND EXISTS (SELECT 1 FROM appeal_evidence e JOIN documents d ON d.title = e.document_title
+                    WHERE d.id = chunks.document_id AND e.kind = 'clinical_note'))
 );
 
 DROP POLICY IF EXISTS documents_lateral_acl ON documents;
@@ -69,9 +85,16 @@ CREATE POLICY documents_lateral_acl ON documents FOR SELECT USING (
         AND pg_has_role(current_user, 'persona_member_services', 'member'))
     OR (acl_tag = 'appeals'
         AND pg_has_role(current_user, 'persona_appeals', 'member'))
+    -- relational (Phase 2 decision 2): a clinical note any appeal cites
+    OR (acl_tag = 'care_team'
+        AND pg_has_role(current_user, 'persona_appeals', 'member')
+        AND EXISTS (SELECT 1 FROM appeal_evidence e
+                    WHERE e.document_title = documents.title AND e.kind = 'clinical_note'))
 );
 
 -- Writes stay owner-only: personas are read-only consumers.
+GRANT SELECT ON appeal_evidence TO persona_public, persona_employee, persona_care_team, persona_member_services, persona_appeals;
+CREATE INDEX IF NOT EXISTS documents_title_idx ON documents (title);
 
 -- Disclosure log: who asked, what was returned, on what authority.
 -- DELIBERATELY NO FOREIGN KEYS — audit records must not share the corpus

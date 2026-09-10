@@ -71,8 +71,21 @@ def test_disclosure_is_fail_closed(db, monkeypatch):
     assert db.execute("SELECT count(*) FROM disclosure_log WHERE source = 'test'").fetchone()[0] == 0
 
 
+class _NoCommit:
+    """run_query commits; the fixture forbids it (tests never commit)."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def commit(self):
+        pass
+
+
 def test_disclosure_row_carries_the_user_id(db, monkeypatch):
     monkeypatch.setattr("raglab.retrieval.embed_query", lambda t: "[" + ",".join(["0.5"] * 1536) + "]")
-    built = pipeline.run_query(db, "What is the HDHP deductible?", persona="public", source="test", user_id=42)
+    built = pipeline.run_query(_NoCommit(db), "What is the HDHP deductible?", persona="public", source="test", user_id=42)
     row = db.execute("SELECT user_id, persona FROM disclosure_log WHERE payload_id = %s", (built["payload_id"],)).fetchone()
     assert row == (42, "public")

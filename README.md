@@ -32,7 +32,14 @@ uv run raglab explain-golden C6                      # did the expected chunk re
 ```
 
 Query embeddings are cached by exact text (`query_embeddings`), so repeat
-eval runs and repeat questions do not call the embedding API.
+eval runs and repeat questions do not call the embedding API. Reranker
+scores are cached the same way (`rerank_scores`): a cross-encoder score is
+a pure function of the model, the final ranking query, and the exact text
+scored, so the key is the model name plus its weight snapshot, the query
+string, and the sha256 of the scored text — no chunk id, no timestamp. A
+re-ingest, a search-copy rebuild, a query-side change, or a model swap
+changes the key and misses honestly; a PR that changes neither questions
+nor chunks re-scores nothing. The eval receipt reports hits and misses.
 
 Three layers of change, three costs. Source bytes, parser, or de-id: the
 processing recipe changes and the affected documents re-ingest in full

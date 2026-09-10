@@ -47,6 +47,93 @@ TOP_N_OUT = 10
 _model = None
 
 
+# ---------------------------------------------------------------- cache
+# A cross-encoder score is a pure function of (model, query text, chunk
+# text). The cache memoizes exactly that: the model name + the weight
+# snapshot it loaded, the final ranking query string, the sha256 of the
+# exact text scored (prefix + record header + search copy, per text mode).
+# No chunk id, no timestamp — a re-ingest, a search-copy rebuild, a header
+# rule, a query-side change, or a model swap all change the key and miss
+# honestly. Thresholds are applied after scoring and are not in the key.
+RERANK_CACHE = os.environ.get("RAGLAB_RERANK_CACHE", "on") != "off"
+CACHE_STATS = {"hits": 0, "misses": 0}
+_cache_conn = None
+_model_key: str | None = None
+
+
+def model_key() -> str:
+    """MODEL_NAME plus the weight snapshot revision the local cache holds."""
+    global _model_key
+    if _model_key is None:
+        rev = "local"
+        try:
+            from huggingface_hub import scan_cache_dir
+
+            for repo in scan_cache_dir().repos:
+                if repo.repo_id == MODEL_NAME:
+                    revs = sorted(repo.revisions, key=lambda r: r.last_modified)
+                    rev = revs[-1].commit_hash[:12] if revs else "local"
+        except Exception:  # no hub cache metadata: still keyed on the name
+            pass
+        _model_key = f"{MODEL_NAME}@{rev}"
+    return _model_key
+
+
+def _cache_connection():
+    """An owner connection of its own (autocommit): the pipeline's session
+    may be running under a persona role that cannot write. Tests patch
+    this to hand in the rolled-back fixture connection."""
+    global _cache_conn
+    if _cache_conn is None or _cache_conn.closed:
+        from raglab import db
+
+        _cache_conn = db.connect()
+        _cache_conn.autocommit = True
+    return _cache_conn
+
+
+def score_pairs(model, pairs: list[tuple[str, str]], conn=None) -> list[float]:
+    """model.predict through the rerank_scores table: hits are read, misses
+    are predicted in ONE batched call and stored. Without the table (a
+    fresh database before any eval) or with the cache off, plain predict."""
+    import hashlib
+
+    if not RERANK_CACHE or not pairs:
+        return [float(x) for x in model.predict(pairs)] if pairs else []
+    h = lambda s: hashlib.sha256(s.encode()).hexdigest()  # noqa: E731
+    keys = [(h(q), h(t)) for q, t in pairs]
+    mk = model_key()
+    try:
+        conn = conn or _cache_connection()
+        with conn.transaction():
+            rows = conn.execute(
+                "SELECT query_hash, text_hash, score FROM rerank_scores "
+                "WHERE model = %s AND query_hash = ANY(%s) AND text_hash = ANY(%s)",
+                (mk, sorted({q for q, _ in keys}), sorted({t for _, t in keys})),
+            ).fetchall()
+    except Exception:  # no table / no database: score everything
+        return [float(x) for x in model.predict(pairs)]
+    known = {(q, t): float(s) for q, t, s in rows}
+    scores: list[float | None] = [known.get(k) for k in keys]
+    miss_idx = [i for i, s in enumerate(scores) if s is None]
+    CACHE_STATS["hits"] += len(pairs) - len(miss_idx)
+    CACHE_STATS["misses"] += len(miss_idx)
+    if miss_idx:
+        fresh = [float(x) for x in model.predict([pairs[i] for i in miss_idx])]
+        for i, s in zip(miss_idx, fresh, strict=True):
+            scores[i] = s
+        try:
+            with conn.transaction(), conn.cursor() as cur:
+                cur.executemany(
+                    "INSERT INTO rerank_scores (model, query_hash, text_hash, score) VALUES (%s, %s, %s, %s) "
+                    "ON CONFLICT DO NOTHING",
+                    [(mk, keys[i][0], keys[i][1], s) for i, s in zip(miss_idx, fresh, strict=True)],
+                )
+        except Exception:
+            pass  # a cache write failure never fails a query
+    return [float(s) for s in scores]  # type: ignore[arg-type]
+
+
 def _get_model():
     global _model
     if _model is None:
@@ -115,7 +202,7 @@ def rerank(
     pairs = [(by_year.get(c.year, query), rerank_text(c)) for c in candidates]
     # sentence-transformers >= 3 applies sigmoid activation in predict();
     # scores arrive in 0..1 already.
-    scores = [float(x) for x in model.predict(pairs)]
+    scores = score_pairs(model, pairs)
     if RERANK_TEXT == "max":
         # Records (call notes) are scored twice — the whole search copy and
         # the body without the note header — and take the higher. The
@@ -127,7 +214,7 @@ def rerank(
         idx = [i for i, c in enumerate(candidates) if c.doc_type in _HEADER_SOURCES]
         if idx:
             bodies = [(pairs[i][0], record_body(candidates[i])) for i in idx]
-            for i, score in zip(idx, model.predict(bodies), strict=True):
+            for i, score in zip(idx, score_pairs(model, bodies), strict=True):
                 scores[i] = max(scores[i], float(score))
     for candidate, score in zip(candidates, scores, strict=True):
         candidate.rerank_score = score

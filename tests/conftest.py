@@ -1,5 +1,6 @@
 import os
 os.environ.setdefault("RAGLAB_EMBED_CACHE", "off")  # tests patch the embedder; the cache must not answer for it
+os.environ.setdefault("RAGLAB_RERANK_CACHE", "off")  # tests patch the reranker; same reason
 import pytest
 
 from raglab import db as raglab_db

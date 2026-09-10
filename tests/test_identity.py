@@ -13,7 +13,8 @@ def test_seed_is_idempotent_and_resolves_every_matrix_row(db):
     assert stats == {"groups": 7, "users": 6}
     assert identity.seed(db, password="pw") == stats  # re-run: same rows, no duplicates
     ident = identity.resolve(db, "rep.dana")
-    assert (ident.group, ident.persona, ident.warehouse_role) == ("call_center", "member_services", "CLAIMS_EXAMINER")
+    assert (ident.group, ident.persona, ident.warehouse_role) == ("call_center", "member_services", "MEMBER_SERVICES_REP")
+    assert identity.resolve(db, "appeals.lee").warehouse_role == "APPEALS_ANALYST"
     assert ident.surfaces == ("agent_assist", "ask") and ident.user_id > 0
     assert identity.resolve(db, "appeals.lee").persona == "appeals"
     assert identity.resolve(db, "cm.priya").persona == "care_team"

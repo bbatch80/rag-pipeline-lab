@@ -180,7 +180,7 @@ def run(
             person = conn.execute(
                 "SELECT id FROM synthea.patients WHERE member_id = %s", (item["member_id"],)
             ).fetchone()
-            payload = run_query(conn, item["question"], persona="employee", source="eval",
+            payload = run_query(conn, item["question"], persona=item.get("persona", "member_services"), source="eval",
                                 member_id=item.get("member_id"))
             hashes = [c["source"]["content_hash"] for c in payload.get("chunks", [])]
             others = 0

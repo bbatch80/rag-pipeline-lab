@@ -305,12 +305,16 @@ with an audit trail in both lanes.
 
 ### Document lane (Postgres row-level security)
 
-Chunks and documents carry an `acl_tag`; real Postgres roles
-(`persona_public` / `persona_employee` / `persona_care_team`) enforce a
-lateral need-to-know model under `FORCE ROW LEVEL SECURITY`: everyone sees
-public documents, only the employee role sees internal operations content,
-only the care_team role sees clinical notes — the two non-public tiers are
-mutually invisible. Rows outside a role's entitlement are trimmed by the
+Chunks and documents carry an `acl_tag`; real Postgres roles enforce a
+lateral need-to-know model under `FORCE ROW LEVEL SECURITY`. Five tiers:
+everyone sees public documents; `persona_employee` adds internal operations
+content (SOPs, bulletins, formulary, CSR knowledge base); `persona_care_team`
+adds clinical notes; `persona_member_services` (call-center reps) and
+`persona_appeals` (appeals analysts) each add their own records — call
+notes and appeal documents — and inherit the employee tier by Postgres role
+membership, so one `SET ROLE` grants a role's whole entitlement and a new
+role is one GRANT. The clinical tier and the operations tiers never see each
+other; the two operations tiers never see each other's records. Rows outside a role's entitlement are trimmed by the
 engine before ranking, so unauthorized content never enters a candidate
 set, a payload, or a context window. Revoking a role membership changes the
 retrievable set at the next query with zero re-indexing. HNSW scans run

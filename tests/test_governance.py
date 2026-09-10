@@ -8,8 +8,9 @@ table-level and already applied.
 import pytest
 
 # Every document is bound to a source row (migration 002); the tier decides which.
-SOURCE_FOR_TAG = {"public": 1, "employee": 3, "care_team": 7}
-DOC_TYPE_FOR_TAG = {"public": "brochure", "employee": "sop", "care_team": "clinical_note"}
+SOURCE_FOR_TAG = {"public": 1, "employee": 3, "care_team": 7, "member_services": 8, "appeals": 9}
+DOC_TYPE_FOR_TAG = {"public": "brochure", "employee": "sop", "care_team": "clinical_note",
+                    "member_services": "call_note", "appeals": "appeal"}
 
 from raglab.pipeline import run_query
 
@@ -17,7 +18,7 @@ from raglab.pipeline import run_query
 def _seed_tiers(db, per_tier=3, embed=False):
     doc_ids = {}
     vec = "[" + ",".join(["0.5"] * 1536) + "]"
-    for tag in ("public", "employee", "care_team"):
+    for tag in ("public", "employee", "care_team", "member_services", "appeals"):
         doc_id = db.execute(
             "INSERT INTO documents (source_path, title, content_hash, acl_tag, source_id) "
             "VALUES (%s, %s, 'h', %s, %s) RETURNING id",
@@ -38,6 +39,9 @@ VISIBILITY = {
     "persona_public": {"public"},
     "persona_employee": {"public", "employee"},
     "persona_care_team": {"public", "care_team"},
+    # Phase 2 tiers inherit persona_employee (decision 1)
+    "persona_member_services": {"public", "employee", "member_services"},
+    "persona_appeals": {"public", "employee", "appeals"},
 }
 
 
@@ -253,3 +257,28 @@ def test_disclosure_record_survives_document_deletion(db, monkeypatch):
     assert survivor is not None and survivor[0], (
         "audit record must survive corpus deletion"
     )
+
+
+@pytest.mark.parametrize("role,hidden", [
+    ("persona_employee", {"member_services", "appeals", "care_team"}),
+    ("persona_member_services", {"appeals", "care_team"}),
+    ("persona_appeals", {"member_services", "care_team"}),
+    ("persona_care_team", {"member_services", "appeals", "employee"}),
+])
+def test_phase2_walls_hold_both_ways(db, role, hidden):
+    """The operations tiers inherit employee and see their own records only;
+    the clinical tier sees neither; employee sees neither new tier."""
+    _seed_tiers(db)
+    db.execute(f"SET LOCAL ROLE {role}")
+    for tag in hidden:
+        leaked = db.execute("SELECT count(*) FROM chunks WHERE content LIKE %s", (f"{tag} secret%",)).fetchone()[0]
+        assert leaked == 0, f"{role} must not see {tag} content"
+    db.execute("RESET ROLE")
+
+
+def test_new_tiers_inherit_employee_material(db):
+    _seed_tiers(db)
+    for role in ("persona_member_services", "persona_appeals"):
+        db.execute(f"SET LOCAL ROLE {role}")
+        assert db.execute("SELECT count(*) FROM chunks WHERE content LIKE 'employee secret%'").fetchone()[0] == 3, role
+        db.execute("RESET ROLE")

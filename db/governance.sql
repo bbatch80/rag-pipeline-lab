@@ -56,6 +56,54 @@ CREATE TABLE IF NOT EXISTS appeal_evidence (
 );
 CREATE INDEX IF NOT EXISTS appeal_evidence_document_idx ON appeal_evidence (document_title);
 
+-- Relational entitlement stored on the row (Phase 2 decision 7): a flag on
+-- documents and chunks, maintained from appeal_evidence by triggers (migration
+-- 023 carries the same definitions; both are idempotent). The policy reads
+-- the column — no per-row sub-plan.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS appeal_cited boolean NOT NULL DEFAULT false;
+ALTER TABLE chunks    ADD COLUMN IF NOT EXISTS appeal_cited boolean NOT NULL DEFAULT false;
+CREATE OR REPLACE FUNCTION appeal_cited_for(p_title text, p_acl_tag text) RETURNS boolean
+LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM appeal_evidence e
+        WHERE e.document_title = p_title
+          AND e.kind = CASE p_acl_tag WHEN 'care_team' THEN 'clinical_note'
+                                      WHEN 'member_services' THEN 'call_note' END)
+$$;
+CREATE OR REPLACE FUNCTION appeal_evidence_sync_flag() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE t text;
+BEGIN
+    FOREACH t IN ARRAY ARRAY_REMOVE(ARRAY[
+        CASE WHEN TG_OP IN ('INSERT', 'UPDATE') THEN NEW.document_title END,
+        CASE WHEN TG_OP IN ('DELETE', 'UPDATE') THEN OLD.document_title END], NULL)
+    LOOP
+        UPDATE documents SET appeal_cited = appeal_cited_for(title, acl_tag) WHERE title = t;
+        UPDATE chunks c SET appeal_cited = d.appeal_cited FROM documents d
+            WHERE d.id = c.document_id AND d.title = t AND c.appeal_cited IS DISTINCT FROM d.appeal_cited;
+    END LOOP;
+    RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS appeal_evidence_sync_flag ON appeal_evidence;
+CREATE TRIGGER appeal_evidence_sync_flag AFTER INSERT OR UPDATE OR DELETE ON appeal_evidence
+    FOR EACH ROW EXECUTE FUNCTION appeal_evidence_sync_flag();
+CREATE OR REPLACE FUNCTION documents_set_appeal_cited() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    NEW.appeal_cited := appeal_cited_for(NEW.title, NEW.acl_tag);
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS documents_set_appeal_cited ON documents;
+CREATE TRIGGER documents_set_appeal_cited BEFORE INSERT OR UPDATE OF title, acl_tag ON documents
+    FOR EACH ROW EXECUTE FUNCTION documents_set_appeal_cited();
+CREATE OR REPLACE FUNCTION chunks_set_appeal_cited() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    SELECT d.appeal_cited INTO NEW.appeal_cited FROM documents d WHERE d.id = NEW.document_id;
+    NEW.appeal_cited := COALESCE(NEW.appeal_cited, false);
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS chunks_set_appeal_cited ON chunks;
+CREATE TRIGGER chunks_set_appeal_cited BEFORE INSERT ON chunks
+    FOR EACH ROW EXECUTE FUNCTION chunks_set_appeal_cited();
+
 DROP POLICY IF EXISTS chunks_lateral_acl ON chunks;
 CREATE POLICY chunks_lateral_acl ON chunks FOR SELECT USING (
     acl_tag = 'public'
@@ -67,16 +115,10 @@ CREATE POLICY chunks_lateral_acl ON chunks FOR SELECT USING (
         AND pg_has_role(current_user, 'persona_member_services', 'member'))
     OR (acl_tag = 'appeals'
         AND pg_has_role(current_user, 'persona_appeals', 'member'))
-    -- relational (Phase 2 decision 2): a clinical note any appeal cites
-    OR (acl_tag = 'care_team'
-        AND pg_has_role(current_user, 'persona_appeals', 'member')
-        AND EXISTS (SELECT 1 FROM appeal_evidence e JOIN documents d ON d.title = e.document_title
-                    WHERE d.id = chunks.document_id AND e.kind = 'clinical_note'))
-    -- relational (Phase 2 decision 6): a call note any appeal cites
-    OR (acl_tag = 'member_services'
-        AND pg_has_role(current_user, 'persona_appeals', 'member')
-        AND EXISTS (SELECT 1 FROM appeal_evidence e JOIN documents d ON d.title = e.document_title
-                    WHERE d.id = chunks.document_id AND e.kind = 'call_note'))
+    -- relational (Phase 2 decisions 2, 6, 7): a clinical note or call note an
+    -- appeal cites — stored on the row as appeal_cited, kept true by triggers
+    OR (acl_tag IN ('care_team', 'member_services') AND appeal_cited
+        AND pg_has_role(current_user, 'persona_appeals', 'member'))
 );
 
 DROP POLICY IF EXISTS documents_lateral_acl ON documents;
@@ -90,16 +132,10 @@ CREATE POLICY documents_lateral_acl ON documents FOR SELECT USING (
         AND pg_has_role(current_user, 'persona_member_services', 'member'))
     OR (acl_tag = 'appeals'
         AND pg_has_role(current_user, 'persona_appeals', 'member'))
-    -- relational (Phase 2 decision 2): a clinical note any appeal cites
-    OR (acl_tag = 'care_team'
-        AND pg_has_role(current_user, 'persona_appeals', 'member')
-        AND EXISTS (SELECT 1 FROM appeal_evidence e
-                    WHERE e.document_title = documents.title AND e.kind = 'clinical_note'))
-    -- relational (Phase 2 decision 6): a call note any appeal cites
-    OR (acl_tag = 'member_services'
-        AND pg_has_role(current_user, 'persona_appeals', 'member')
-        AND EXISTS (SELECT 1 FROM appeal_evidence e
-                    WHERE e.document_title = documents.title AND e.kind = 'call_note'))
+    -- relational (Phase 2 decisions 2, 6, 7): a clinical note or call note an
+    -- appeal cites — stored on the row as appeal_cited, kept true by triggers
+    OR (acl_tag IN ('care_team', 'member_services') AND appeal_cited
+        AND pg_has_role(current_user, 'persona_appeals', 'member'))
 );
 
 -- Writes stay owner-only: personas are read-only consumers.

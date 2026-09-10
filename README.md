@@ -317,9 +317,10 @@ role is one GRANT. The clinical tier and the operations tiers never see each
 other; the two operations tiers never see each other's records. One
 entitlement depends on data rather than role: a clinical note or a call
 note becomes visible to the appeals tier when any appeal cites it in
-`appeal_evidence`, and disappears when the citation is removed — the row
-policies read the link table at query time, keyed by document title, with
-no re-indexing. Person records (call notes, appeals, clinical notes) are
+`appeal_evidence`, and disappears when the citation is removed. The
+relationship is stored on the row as a flag that triggers keep in step with
+the evidence table, so the policy reads a column rather than running a
+lookup per candidate row, and no re-indexing is involved. Person records (call notes, appeals, clinical notes) are
 member-scoped: a question about one member returns that member's records
 only, and a member question without a member ID returns none of them. Rows outside a role's entitlement are trimmed by the
 engine before ranking, so unauthorized content never enters a candidate

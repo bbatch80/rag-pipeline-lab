@@ -1053,6 +1053,14 @@ def status():
                 else "not loaded",
             )
 
+            drift = conn.execute(
+                "SELECT (SELECT count(*) FROM documents WHERE appeal_cited IS DISTINCT FROM appeal_cited_for(title, acl_tag)), "
+                "(SELECT count(*) FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.appeal_cited IS DISTINCT FROM d.appeal_cited)"
+            ).fetchone()
+            if drift == (0, 0):
+                receipt.add("appeal_cited flags", "consistent with appeal_evidence")
+            else:
+                receipt.fail(f"appeal_cited flags drifted: {drift[0]} documents, {drift[1]} chunks")
             hnsw = conn.execute(
                 "SELECT indexdef FROM pg_indexes WHERE indexname = 'chunks_embedding_idx'"
             ).fetchone()

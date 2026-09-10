@@ -351,3 +351,47 @@ def test_person_record_sources_are_member_scoped(db):
     ).fetchall()
     assert len(rows) == 3
     assert all(flag for _, flag in rows), [k for k, flag in rows if not flag]
+
+
+def test_appeal_cited_flag_follows_the_evidence_table(db):
+    """Decision 7: the relational entitlement is a flag on the row, kept true
+    by triggers — set when a citation of the matching kind is written, cleared
+    when it is removed, inherited by chunks, and picked up by a document
+    inserted after the citation (re-ingest)."""
+    _seed_tiers(db)
+    def flag(title):
+        d = db.execute("SELECT appeal_cited FROM documents WHERE title = %s", (title,)).fetchone()[0]
+        c = db.execute("SELECT bool_and(c.appeal_cited), count(*) FROM chunks c JOIN documents d ON d.id = c.document_id WHERE d.title = %s", (title,)).fetchone()
+        assert c[1] > 0 and c[0] == d, "chunks disagree with their document"
+        return d
+    assert flag("doc-care_team") is False and flag("doc-member_services") is False
+    _link(db, "doc-care_team", kind="clinical_note")
+    _link(db, "doc-member_services", kind="clinical_note")  # wrong kind for a call note
+    assert flag("doc-care_team") is True
+    assert flag("doc-member_services") is False, "kind must match the tier"
+    _link(db, "doc-member_services", kind="call_note")
+    assert flag("doc-member_services") is True
+    db.execute("DELETE FROM appeal_evidence WHERE case_id = 'APL-TEST001'")
+    assert flag("doc-care_team") is False and flag("doc-member_services") is False
+    # a document that arrives after its citation exists (re-ingest) is flagged at insert
+    db.execute("INSERT INTO appeal_evidence (case_id, document_title, kind) VALUES ('APL-TEST002', 'note_late', 'clinical_note')")
+    late = db.execute("INSERT INTO documents (source_path, title, content_hash, acl_tag, source_id) "
+                      "VALUES ('t/late.md', 'note_late', 'h', 'care_team', %s) RETURNING id", (SOURCE_FOR_TAG["care_team"],)).fetchone()[0]
+    db.execute("INSERT INTO chunks (document_id, chunk_index, content, acl_tag, year, doc_type) "
+               "VALUES (%s, 0, 'late note', 'care_team', 2026, 'clinical_note')", (late,))
+    assert flag("note_late") is True
+    db.execute("SET LOCAL ROLE persona_appeals")
+    assert db.execute("SELECT count(*) FROM chunks WHERE content = 'late note'").fetchone()[0] == 1
+    db.execute("RESET ROLE")
+
+
+@pytest.mark.readonly
+def test_appeal_cited_flags_are_consistent_on_the_live_corpus(db):
+    """The stored flag equals the truth recomputed from appeal_evidence for
+    every document and chunk — the guard against a write that bypassed the
+    triggers (the stale-true direction is an entitlement bug)."""
+    bad_docs = db.execute(
+        "SELECT count(*) FROM documents WHERE appeal_cited IS DISTINCT FROM appeal_cited_for(title, acl_tag)").fetchone()[0]
+    bad_chunks = db.execute(
+        "SELECT count(*) FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.appeal_cited IS DISTINCT FROM d.appeal_cited").fetchone()[0]
+    assert (bad_docs, bad_chunks) == (0, 0)

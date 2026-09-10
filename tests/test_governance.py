@@ -284,8 +284,8 @@ def test_new_tiers_inherit_employee_material(db):
         db.execute("RESET ROLE")
 
 
-def _link(db, title, case="APL-TEST001"):
-    db.execute("INSERT INTO appeal_evidence (case_id, document_title, kind) VALUES (%s, %s, 'clinical_note') ON CONFLICT DO NOTHING", (case, title))
+def _link(db, title, case="APL-TEST001", kind="clinical_note"):
+    db.execute("INSERT INTO appeal_evidence (case_id, document_title, kind) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING", (case, title, kind))
 
 
 def test_relational_entitlement_follows_the_evidence_link(db):
@@ -310,4 +310,33 @@ def test_relational_entitlement_follows_the_evidence_link(db):
     db.execute("DELETE FROM appeal_evidence WHERE case_id = 'APL-TEST001'")
     db.execute("SET LOCAL ROLE persona_appeals")
     assert db.execute("SELECT count(*) FROM chunks WHERE content LIKE 'care_team secret%'").fetchone()[0] == 0, "unlinked -> gone, no re-index"
+    db.execute("RESET ROLE")
+
+
+def test_relational_entitlement_covers_cited_call_notes(db):
+    """Decision 6: a call note is visible to the appeals tier while an appeal
+    cites it (kind='call_note'); uncited calls stay invisible; the kind must
+    match — a call note cited as 'clinical_note' opens nothing; no other tier
+    gains anything from the link; unlinking removes it with zero re-indexing."""
+    _seed_tiers(db)  # member_services doc 'doc-member_services' with 3 chunks, unlinked
+    other = db.execute(
+        "INSERT INTO documents (source_path, title, content_hash, acl_tag, source_id) "
+        "VALUES ('t/other-call.md', 'call_other', 'h', 'member_services', %s) RETURNING id",
+        (SOURCE_FOR_TAG["member_services"],)).fetchone()[0]
+    db.execute("INSERT INTO chunks (document_id, chunk_index, content, acl_tag, year, doc_type) "
+               "VALUES (%s, 0, 'member_services other call', 'member_services', 2026, 'call_note')", (other,))
+    _link(db, "call_other", kind="clinical_note")  # wrong kind: must not open the call
+    _link(db, "doc-member_services", kind="call_note")
+    db.execute("SET LOCAL ROLE persona_appeals")
+    assert db.execute("SELECT count(*) FROM chunks WHERE content LIKE 'member_services secret%'").fetchone()[0] == 3, "cited call visible"
+    assert db.execute("SELECT count(*) FROM chunks WHERE content = 'member_services other call'").fetchone()[0] == 0, "kind mismatch opens nothing"
+    assert db.execute("SELECT count(*) FROM documents WHERE title = 'doc-member_services'").fetchone()[0] == 1
+    db.execute("RESET ROLE")
+    for role in ("persona_care_team", "persona_employee", "persona_public"):
+        db.execute(f"SET LOCAL ROLE {role}")
+        assert db.execute("SELECT count(*) FROM chunks WHERE content LIKE 'member_services secret%'").fetchone()[0] == 0, f"{role} never sees call notes"
+        db.execute("RESET ROLE")
+    db.execute("DELETE FROM appeal_evidence WHERE case_id = 'APL-TEST001'")
+    db.execute("SET LOCAL ROLE persona_appeals")
+    assert db.execute("SELECT count(*) FROM chunks WHERE content LIKE 'member_services secret%'").fetchone()[0] == 0, "unlinked -> gone, no re-index"
     db.execute("RESET ROLE")

@@ -450,6 +450,26 @@ def download_letters_cmd(rebuild_manifest: bool):
     receipt.finish()
 
 
+@main.command("seed-identity")
+@click.option("--password", default=None, help="Demo password for every seeded account (default: RAGLAB_DEMO_PASSWORD or 'raglab-demo').")
+def seed_identity_cmd(password: str | None):
+    """Groups (persona + warehouse role + surfaces) and the six seeded accounts (Phase 2 decision 3)."""
+    from raglab import identity
+
+    receipt = Receipt("raglab seed-identity")
+    try:
+        with db.connect() as conn:
+            stats = identity.seed(conn, password)
+            conn.commit()
+        for k, v in stats.items():
+            receipt.add(k, v)
+        for username, (display, group) in identity.SEED_USERS.items():
+            receipt.add(f"  {username}", f"{display} -> {group}")
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
 @main.command("load-roster")
 def load_roster_cmd():
     """Provider roster: organizations + providers from Synthea, the encounter

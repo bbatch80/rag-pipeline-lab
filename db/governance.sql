@@ -132,7 +132,8 @@ CREATE TABLE IF NOT EXISTS deid_vault (
     pseudonym     text NOT NULL,
     created_at    timestamptz NOT NULL DEFAULT now()
 );
-GRANT SELECT, INSERT ON disclosure_log TO
-    persona_public, persona_employee, persona_care_team;
-GRANT USAGE ON SEQUENCE disclosure_log_id_seq TO
-    persona_public, persona_employee, persona_care_team;
+-- Personas hold NO privilege on the disclosure log: run_query resets to the
+-- owner before writing (D10; the dormant grants v1 issued were revoked in
+-- migration 020). The audit row names the person by an opaque user id the
+-- engine never reads (Phase 2 decision 3).
+ALTER TABLE disclosure_log ADD COLUMN IF NOT EXISTS user_id bigint;

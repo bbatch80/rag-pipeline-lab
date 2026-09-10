@@ -110,3 +110,11 @@ def test_out_of_network_denials_require_an_out_of_network_provider(db, tmp_path)
            WHERE a.denial_reason = 'out_of_network' AND n.in_network"""
     ).fetchone()[0]
     assert bad == 0
+
+
+def test_letters_render_one_pdf_per_source_text(tmp_path):
+    src = tmp_path / "src"; src.mkdir()
+    for i in range(3):
+        (src / f"letter_{i:04d}.txt").write_text("GEHA APPEALS DETERMINATION\nDate: January 1, 2026\n\nDear Member,\n\nUpheld.\n")
+    assert appeals.render_letters(src, tmp_path / "pdf") == 3
+    assert sorted(p.name for p in (tmp_path / "pdf").glob("*.pdf")) == ["letter_0000.pdf", "letter_0001.pdf", "letter_0002.pdf"]

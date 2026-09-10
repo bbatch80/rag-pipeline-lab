@@ -166,6 +166,8 @@ def ingest_cmd(full: bool):
                 ).fetchall()
                 for (source_path,) in gone:
                     receipt.add("deleted (source gone)", source_path)
+                if gone:  # a summary line that survives a filtered read of the receipt
+                    receipt.add("DELETED", f"{len(gone)} documents whose source files are gone")
             conn.commit()
 
             for status_name, count in counts.items():
@@ -355,7 +357,10 @@ def synth_appeals_cmd(cases: int, letters: int, seed: int):
             conn.commit()
         for k, v in stats.items():
             receipt.add(k, v)
-        receipt.add("letters rendered", appeals.render_letters())
+        rendered = appeals.render_letters()
+        receipt.add("letters rendered", rendered)
+        if rendered != stats["letters_pdf"]:
+            receipt.fail(f"rendered {rendered} letter PDFs but {stats['letters_pdf']} cases expect one")
         receipt.add("PHI manifest", str(appeals.MANIFEST_PATH.relative_to(config.REPO_ROOT)))
     except Exception as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")

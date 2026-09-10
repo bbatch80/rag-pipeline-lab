@@ -95,10 +95,12 @@ def expected_source(item: dict, registry) -> str:
         if "plan_code" in source:
             types.add("brochure")
         elif "internal" in source:
-            rel = "data/internal/" + source["internal"]
-            for s in registry.all:
-                if s.dir and rel.startswith(s.dir + "/") and s.doc_type:
-                    types.add(s.doc_type)
+            # a path under a source directory — data/internal/ (authored,
+            # generated) or data/raw/ (fetched: carrier letters)
+            for rel in ("data/internal/" + source["internal"], "data/raw/" + source["internal"]):
+                for s in registry.all:
+                    if s.dir and rel.startswith(s.dir + "/") and s.doc_type:
+                        types.add(s.doc_type)
     return "+".join(sorted(types)) if types else "none"
 
 

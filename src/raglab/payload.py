@@ -47,6 +47,7 @@ def build(
         "router": {
             "years": list(route.years),
             "plan_codes": list(route.plan_codes),
+            "as_of": route.as_of,
         },
         "chunks": [
             {

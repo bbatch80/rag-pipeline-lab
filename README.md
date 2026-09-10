@@ -199,6 +199,24 @@ fact to check it against. Stated simplifications: Synthea's roster carries
 a single specialty and one provider per organization; no contract or
 directory-verification dates.
 
+**Clinical policies, versioned.** Twenty authored medical policies
+(CP-0001–CP-0020, the ids the adjudication overlay and the appeals cite),
+ten with a second version in which one criterion changes during 2025.
+Every version is indexed — a claim is adjudicated under the version in
+effect on its date of service — and the version fields (policy id, version,
+effective window, status, supersedes) ride on every chunk as record
+metadata. Default retrieval sees only the version in effect: a hard filter
+on the effective window, driven by the router's `as_of` date (explicit —
+"as of August 1, 2024", "in effect on 01/06/2026" — or the end of the
+routed year), never a boost; a superseded version in a default top ten is
+gated at 1.0 like a scope leak. A change question about a policy searches
+one version at a time, the same per-year machinery that serves
+year-over-year brochure questions, with the versions stratified in the
+result. A policy id in a question is record context: it filters to that
+policy and, because a bare id ranks poorly against a cross-encoder (0.13
+for "CP-0003 criteria as of …"), the record's title is appended to the
+ranking query (0.97) — from the record, not a model. Public tier; no PHI.
+
 Warehouse lane: PATIENTS, CLAIM_LINES, ENROLLMENT (one row per member per
 plan year), CALL_LOG, CLAIM_ADJUDICATION, APPEALS, ORGANIZATIONS, PROVIDERS,
 PROVIDER_NETWORK — reachable only through named, parameterized queries

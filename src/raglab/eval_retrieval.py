@@ -57,6 +57,8 @@ THRESHOLDS = {
     # Member scoping: a question about one member never returns another
     # member's records. Absolute.
     "scope_clean": 1.0,
+    # Version precedence: no superseded policy version in a default top-10.
+    "version_clean": 1.0,
 }
 
 
@@ -148,6 +150,23 @@ def run(
         if category == "two_lane":
             continue  # needs Snowflake; asserted in tests/test_two_lane_golden.py
 
+        if category == "version_negative":
+            # A default (undated) question about a policy must not surface
+            # its superseded version; a dated one must not surface the other.
+            decision = router.route(item["question"])
+            ctx = retrieval.resolve_context(conn, None, item["question"])
+            decision = retrieval.expand_versions(conn, decision, ctx, item["question"])
+            question = deid.translate_query(conn, ctx.query)
+            vector = junk_vector if sabotage else retrieval.embed_cached(conn, question)
+            candidates = retrieval.search(conn, junk_text if sabotage else question, vector, decision,
+                                          embed=(lambda t: junk_vector) if sabotage else (lambda t: retrieval.embed_cached(conn, t)),
+                                          member_key=ctx.member_key, record=ctx.record)
+            reranked = rerank.rerank(question, candidates, top_n=10, stratify_years=decision.years)
+            titles = [c.doc_title for c in reranked[:10]]
+            leaked = [t for t in titles if any(a in t for a in item["absent_titles"])]
+            scores.append((qid, category, "version_clean", float(not leaked), {"leaked": leaked, "as_of": decision.as_of}))
+            continue
+
         if category == "scope_negative":
             # Member scoping: every chunk returned for a question about
             # member X belongs to X or to a source that is not member-scoped.
@@ -207,6 +226,7 @@ def run(
         # Member context, like the pipeline: the item's member_id field (the
         # member a rep would have open) or an identifier in the question.
         ctx = retrieval.resolve_context(conn, item.get("member_id"), item["question"])
+        decision = retrieval.expand_versions(conn, decision, ctx, item["question"])
         member_key, record = ctx.member_key, ctx.record
         # The eval runs as admin, which is entitled to the vault: translate
         # like the pipeline does (names -> pseudonyms); resolved identifiers
@@ -309,7 +329,7 @@ def diff_runs(conn: psycopg.Connection, before: int, after: int) -> dict:
 
 
 _SLICE_METRICS = ("hit@5", "precision@5", "source_coverage", "gate_correct",
-                  "deny_clean", "allow_answered", "allow_hit", "scope_clean")
+                  "deny_clean", "allow_answered", "allow_hit", "scope_clean", "version_clean")
 
 
 def _slice(rows: list[tuple]) -> dict:
@@ -382,6 +402,11 @@ def _summarize(run_id: int, scores: list[tuple]) -> RetrievalEvalResult:
         result.failures.append(
             f"yoy source_coverage {yoy:.3f} < ratchet {THRESHOLDS['yoy_source_coverage']}"
         )
+    version = mean("version_clean", scores)
+    if version is not None:
+        result.overall["version_clean"] = version
+        if version < THRESHOLDS["version_clean"]:
+            result.failures.append("version leak: a superseded policy version reached a default top-10")
     scope = mean("scope_clean", scores)
     if scope is not None:
         result.overall["scope_clean"] = scope

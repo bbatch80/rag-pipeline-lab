@@ -6,7 +6,7 @@ import math
 # interval. Fractional metrics (precision@5, source_coverage) are means of
 # [0, 1] values and are reported as means only.
 BINARY_METRICS = frozenset({
-    "hit@5", "gate_correct", "wrong_abstention", "deny_clean", "scope_clean",
+    "hit@5", "gate_correct", "wrong_abstention", "deny_clean", "scope_clean", "version_clean",
     "allow_answered", "allow_hit", "abstained",
 })
 

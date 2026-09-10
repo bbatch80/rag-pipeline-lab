@@ -357,6 +357,21 @@ def synth_appeals_cmd(cases: int, letters: int, seed: int):
     receipt.finish()
 
 
+@synth_group.command("policies")
+def synth_policies_cmd():
+    """Clinical policies CP-0001..CP-0020 (ten with a second version) and their manifest."""
+    from raglab.synth import policies
+
+    receipt = Receipt("raglab synth policies")
+    try:
+        for k, v in policies.generate().items():
+            receipt.add(k, v)
+        receipt.add("manifest", str(policies.MANIFEST_PATH.relative_to(config.REPO_ROOT)))
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
 @synth_group.command("notes")
 @click.option("--count", default=250, help="Number of clinical notes.")
 @click.option("--seed", default=42, help="Generation seed.")

@@ -617,7 +617,7 @@ def audit_cmd(document: str | None, persona: str | None, limit: int):
 
 @main.command("explain")
 @click.argument("query")
-@click.option("--persona", default=None, type=click.Choice(["public", "employee", "care_team"]))
+@click.option("--persona", default=None, type=click.Choice(["public", "employee", "care_team", "member_services", "appeals"]))
 @click.option("--generate", is_flag=True,
               help="Also send the payload to both generators and print their answers.")
 def explain_cmd(query: str, persona: str | None, generate: bool):

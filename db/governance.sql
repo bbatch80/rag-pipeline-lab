@@ -6,7 +6,9 @@
 --   public    -> acl_tag = 'public' only
 --   employee  -> public + employee (SOPs, bulletins, formulary, KB)
 --   care_team -> public + care_team (clinical notes)
--- Neither non-public tier sees the other. The engine filters BEFORE ranking:
+--   member_services -> public + employee + call notes (inherits persona_employee)
+--   appeals         -> public + employee + appeal documents (inherits persona_employee)
+-- The clinical tier and the operations tiers never see each other. The engine filters BEFORE ranking:
 -- authorization happens before content can enter any context window.
 
 DO $$
@@ -20,15 +22,23 @@ BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'persona_care_team') THEN
         CREATE ROLE persona_care_team NOLOGIN;
     END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'persona_member_services') THEN
+        CREATE ROLE persona_member_services NOLOGIN;
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'persona_appeals') THEN
+        CREATE ROLE persona_appeals NOLOGIN;
+    END IF;
 END
 $$;
+-- Tiers compose by inheritance (Phase 2 decision 1).
+GRANT persona_employee TO persona_member_services, persona_appeals;
 
 -- The app user may assume any persona (SET ROLE); with no persona set it is
 -- a member of all three, i.e. the administrative full view.
-GRANT persona_public, persona_employee, persona_care_team TO raglab;
+GRANT persona_public, persona_employee, persona_care_team, persona_member_services, persona_appeals TO raglab;
 
 GRANT SELECT ON documents, chunks TO
-    persona_public, persona_employee, persona_care_team;
+    persona_public, persona_employee, persona_care_team, persona_member_services, persona_appeals;
 
 ALTER TABLE chunks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chunks FORCE ROW LEVEL SECURITY;
@@ -42,6 +52,10 @@ CREATE POLICY chunks_lateral_acl ON chunks FOR SELECT USING (
         AND pg_has_role(current_user, 'persona_employee', 'member'))
     OR (acl_tag = 'care_team'
         AND pg_has_role(current_user, 'persona_care_team', 'member'))
+    OR (acl_tag = 'member_services'
+        AND pg_has_role(current_user, 'persona_member_services', 'member'))
+    OR (acl_tag = 'appeals'
+        AND pg_has_role(current_user, 'persona_appeals', 'member'))
 );
 
 DROP POLICY IF EXISTS documents_lateral_acl ON documents;
@@ -51,6 +65,10 @@ CREATE POLICY documents_lateral_acl ON documents FOR SELECT USING (
         AND pg_has_role(current_user, 'persona_employee', 'member'))
     OR (acl_tag = 'care_team'
         AND pg_has_role(current_user, 'persona_care_team', 'member'))
+    OR (acl_tag = 'member_services'
+        AND pg_has_role(current_user, 'persona_member_services', 'member'))
+    OR (acl_tag = 'appeals'
+        AND pg_has_role(current_user, 'persona_appeals', 'member'))
 );
 
 -- Writes stay owner-only: personas are read-only consumers.

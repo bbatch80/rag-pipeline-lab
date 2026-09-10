@@ -15,7 +15,7 @@ def _fn(tool):
 
 
 def test_identity_map_is_closed():
-    assert set(IDENTITIES) == {"public", "employee", "care_team", "actuary"}
+    assert set(IDENTITIES) == {"public", "employee", "care_team", "member_services", "appeals", "actuary"}
     lane2 = {role for _, role in IDENTITIES.values() if role}
     assert lane2 <= set(snowlane.ROLES)
 

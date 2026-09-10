@@ -16,7 +16,7 @@ from raglab import payload as payload_mod
 from raglab import rerank, retrieval, router
 from raglab.timing import Stopwatch
 
-PERSONAS = ("public", "employee", "care_team")
+PERSONAS = ("public", "employee", "care_team", "member_services", "appeals")
 
 
 def run_query(

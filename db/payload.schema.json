@@ -53,7 +53,7 @@
             }
           },
           "acl_basis": {
-            "enum": ["public", "employee", "care_team"],
+            "enum": ["public", "employee", "care_team", "member_services", "appeals"],
             "description": "The ACL tier that entitled the caller to this chunk."
           },
           "scores": {

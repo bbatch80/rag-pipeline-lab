@@ -333,7 +333,17 @@ context it was scoped to.
 Every retrieval flows through one pipeline entrypoint
 (`raglab.pipeline.run_query`) that assumes the caller's role via
 `SET LOCAL ROLE` and writes a disclosure record: persona, query, payload
-id, chunk ids, content hashes, document titles, ACL basis, score.
+id, chunk ids, content hashes, document titles, ACL basis, score — and the
+user. Identity is resolved at the edge (the MCP server, later the login
+session): a username becomes a document persona, a warehouse role, the
+granted surfaces, and an opaque user id (`raglab.identity`; groups carry
+the entitlement, six seeded accounts, scrypt passwords). The engine receives
+persona, role, and id; it stamps the id into the audit row and never reads
+it, so the row policies stay role-only by construction. The disclosure
+write is fail-closed: payload build, disclosure insert, commit, return, in
+one transaction — if the audit row cannot be written, no context is
+returned. Persona roles hold no privilege on the log, the vault, or the
+identity tables (pinned by the RLS-invariants tests).
 The disclosure log has no foreign keys and denormalizes document identity,
 so audit records survive document deletion and reingest. `raglab audit`
 reports both directions: what a persona saw, and which payloads used a

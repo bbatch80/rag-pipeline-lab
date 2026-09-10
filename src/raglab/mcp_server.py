@@ -30,8 +30,9 @@ IDENTITIES = {
     "actuary": ("public", "ACTUARY"),
 }
 
+USER = os.environ.get("RAGLAB_USER")  # Phase 2: a seeded username, resolved through the identity tables
 PERSONA = os.environ.get("RAGLAB_PERSONA", "public")
-if PERSONA not in IDENTITIES:
+if USER is None and PERSONA not in IDENTITIES:
     raise SystemExit(
         f"RAGLAB_PERSONA={PERSONA!r} is not one of {sorted(IDENTITIES)}"
     )
@@ -39,6 +40,17 @@ if PERSONA not in IDENTITIES:
 mcp = MCPServer("raglab")
 
 _sf_conn = None
+
+
+def _identity(conn):
+    """The session identity: RAGLAB_USER resolved through the identity tables
+    (Phase 2), else the legacy RAGLAB_PERSONA mapping. Never a tool parameter."""
+    from raglab import identity as identity_mod
+
+    if USER:
+        return identity_mod.resolve(conn, USER)
+    lane1, role = IDENTITIES[PERSONA]
+    return identity_mod.Identity(0, PERSONA, PERSONA, PERSONA, lane1, role)
 
 
 def _snowflake(role: str):
@@ -65,9 +77,10 @@ def search_documents(query: str, member_id: str | None = None) -> dict:
     ONLY from chunk text and cite source title + pages for every fact."""
     from raglab.pipeline import run_query
 
-    lane1, _ = IDENTITIES[PERSONA]
     with db.connect() as conn:
-        return run_query(conn, query, persona=lane1, source="mcp", member_id=member_id)
+        ident = _identity(conn)
+        return run_query(conn, query, persona=ident.persona, source="mcp", member_id=member_id,
+                         user_id=ident.user_id)
 
 
 @mcp.tool()
@@ -94,7 +107,8 @@ def query_member_data(
     Each result names its masked_columns: values there are policy-masked
     for your role — report them as 'not visible to your role'. A NULL in
     any OTHER column is genuinely absent source data, not masking."""
-    _, role = IDENTITIES[PERSONA]
+    with db.connect() as conn:
+        role = _identity(conn).warehouse_role
     if role is None:
         return {
             "status": "not_authorized",

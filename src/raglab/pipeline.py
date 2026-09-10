@@ -25,10 +25,17 @@ def run_query(
     persona: str | None = None,
     source: str = "interactive",
     member_id: str | None = None,
+    user_id: int | None = None,
 ) -> dict:
     """Returns the context payload; writes the disclosure record.
     `member_id` is the member context the surface has open (a rep's selected
-    member); member-scoped sources are filtered to that member."""
+    member); member-scoped sources are filtered to that member. `user_id` is
+    the opaque id the edge resolved (raglab.identity): stamped into the
+    disclosure row, never read — policies are role-only.
+
+    Fail-closed (D10): payload build -> disclosure INSERT -> COMMIT -> return,
+    one transaction. If the disclosure row cannot be written, no payload is
+    returned and nothing is committed."""
     if persona is not None and persona not in PERSONAS:
         raise ValueError(f"unknown persona {persona!r}; expected one of {PERSONAS}")
 
@@ -78,7 +85,12 @@ def run_query(
         built["record_context"] = ctx.record
 
     with watch.stage("disclose"):
-        _disclose(conn, built, reranked, source)
+        try:
+            _disclose(conn, built, reranked, source, user_id)
+        except Exception as exc:  # fail closed: no audit row, no context
+            DISCLOSURE_FAILURES["count"] += 1
+            conn.rollback()
+            raise RuntimeError("context withheld: disclosure record failed") from exc
     # The disclose stage is measured after the row exists; stamp the full
     # picture onto the same row before the commit that makes it real.
     conn.execute(
@@ -89,7 +101,10 @@ def run_query(
     return built
 
 
-def _disclose(conn, built: dict, reranked, source: str) -> None:
+DISCLOSURE_FAILURES = {"count": 0}  # process memory: a DB that can't take the row can't take the count
+
+
+def _disclose(conn, built: dict, reranked, source: str, user_id: int | None = None) -> None:
     chunks = reranked[: len(built.get("chunks", []))]
     hashes = []
     if chunks:
@@ -104,8 +119,8 @@ def _disclose(conn, built: dict, reranked, source: str) -> None:
         INSERT INTO disclosure_log
             (persona, source, query, payload_id, payload_status,
              chunk_ids, content_hashes, doc_titles, acl_basis, top_score,
-             payload)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             payload, user_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             built["persona"], source, built["query"], built["payload_id"],
@@ -116,5 +131,6 @@ def _disclose(conn, built: dict, reranked, source: str) -> None:
             sorted({c.acl_tag for c in chunks}),
             built.get("confidence"),
             json.dumps(built),
+            user_id,
         ),
     )

@@ -263,7 +263,7 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
 
     # ---- per-category table -------------------------------------------
     metrics_order = ["hit@5", "precision@5", "source_coverage", "gate_correct",
-                     "deny_clean", "allow_answered", "allow_hit", "scope_clean"]
+                     "deny_clean", "allow_answered", "allow_hit", "scope_clean", "version_clean"]
     def _slice_rows(kind: str, table: dict) -> list[str]:
         rows_html = []
         for name in sorted(table):

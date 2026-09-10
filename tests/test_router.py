@@ -59,4 +59,5 @@ def test_route_is_deterministic():
         years=(2025, 2026),
         plan_codes=("71-014",),
         reasons=route(q).reasons,
+        change=True,
     )

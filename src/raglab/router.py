@@ -62,6 +62,11 @@ class Route:
     # can see. Surfaces and cue families narrow it; RLS decides visibility.
     sources: tuple[str, ...] = ()
     reasons: tuple[str, ...] = field(default=())
+    # Versioned sources (clinical policies): the date whose in-effect version
+    # applies. Explicit ("as of March 1, 2025", "in effect on 2026-01-06")
+    # or None → the end of the routed year (undated → today's version).
+    as_of: str | None = None
+    change: bool = False  # change language: per-year / per-version search
 
 
 def route(query: str) -> Route:
@@ -128,12 +133,43 @@ def route(query: str) -> Route:
             plans.append(program_codes[key])
             reasons.append(f"plan cue: {key} -> {program_codes[key]}")
 
+    as_of = as_of_date(query)
+    if as_of:
+        reasons.append(f"as of {as_of}")
     return Route(
         scope="in_scope",
         years=years,
         plan_codes=tuple(plans),
         reasons=tuple(reasons),
+        as_of=as_of,
+        change=change,
     )
+
+
+_MONTHS = {m: i for i, m in enumerate(
+    ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"], start=1)}
+_AS_OF = re.compile(
+    r"\b(?:as of|in effect on|effective(?: on)?|on the date of service,?)\s+"
+    r"(?P<d>(?:\d{4}-\d{2}-\d{2})|(?:\d{1,2}/\d{1,2}/\d{2,4})|(?:[A-Z][a-z]+\.? \d{1,2},? \d{4}))", re.IGNORECASE)
+
+
+def as_of_date(query: str) -> str | None:
+    """An explicit in-effect date in the question, as ISO; None otherwise."""
+    m = _AS_OF.search(query)
+    if not m:
+        return None
+    raw = m.group("d")
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+            return raw
+        if "/" in raw:
+            mm, dd, yy = raw.split("/")
+            year = int(yy) + (2000 if len(yy) == 2 else 0)
+            return f"{year:04d}-{int(mm):02d}-{int(dd):02d}"
+        month, day, year = raw.replace(",", "").replace(".", "").split()
+        return f"{int(year):04d}-{_MONTHS[month.lower()[:9]] if month.lower() in _MONTHS else _MONTHS[[k for k in _MONTHS if k.startswith(month.lower()[:3])][0]]:02d}-{int(day):02d}"
+    except (ValueError, IndexError, KeyError):
+        return None
 
 
 # Change language only — never function words ("in" would tear "in-network"

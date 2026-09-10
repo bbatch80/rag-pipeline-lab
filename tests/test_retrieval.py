@@ -248,3 +248,10 @@ def test_filters_record_context_narrows_member_scoped_sources_only():
     where, params = _filters(Route(scope="in_scope"), "k", ("appeal",), (), {"case_id": "APL-0000000"})
     assert "c.metadata->'record'->>%s = %s" in where and "case_id" in params and "APL-0000000" in params
     assert "(c.doc_type <> ALL(%s) OR" in where
+
+
+def test_policy_id_is_record_context_without_a_member(db):
+    from raglab import retrieval
+
+    ctx = retrieval.resolve_context(db, None, "What are the criteria under CP-0003?")
+    assert ctx.record == {"policy_id": "CP-0003"} and ctx.member_key is None

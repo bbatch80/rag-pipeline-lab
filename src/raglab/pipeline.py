@@ -48,6 +48,7 @@ def run_query(
         # Resolved on the raw question: translation would replace the
         # identifiers this looks for.
         ctx = retrieval.resolve_context(conn, member_id, query)
+        decision = retrieval.expand_versions(conn, decision, ctx, query)
         with watch.stage("translate"):
             if persona is None or persona == "care_team":
                 search_query = deid.translate_query(conn, ctx.query)

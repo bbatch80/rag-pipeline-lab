@@ -14,7 +14,7 @@ import re
 
 import psycopg
 
-from raglab.router import Route
+from raglab.router import CURRENT_YEAR, Route
 
 RRF_K = 60
 # Every visible source keeps at least this many candidates in the pool
@@ -50,7 +50,7 @@ LEXICAL_MERGE = os.environ.get("RAGLAB_LEXICAL_MERGE", "rank")
 POOLS = os.environ.get("RAGLAB_POOLS", "per_source")
 _ID_TOKEN = re.compile(
     r"\b(?:MRN\s*[- ]?\s*\d{7}|M\s*[- ]?\s*\d{3}\s*[- ]?\s*\d{3}\s*[- ]?\s*\d{3}"
-    r"|CLM[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{4}|APL[\s-]?\d{7})\b", re.I)
+    r"|CLM[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{4}|APL[\s-]?\d{7}|CP-\d{4})\b", re.I)
 # identifier kind -> (table, column) that maps it to a person key
 _ID_LOOKUP = {
     "member_id": ("synthea.patients", "member_id"),
@@ -74,7 +74,7 @@ class Context:
 STRIP_IDS = os.environ.get("RAGLAB_STRIP_IDS", "off") == "on"  # measured 2026-09-09: stripping loses the ranker its strongest signal
 # identifier kind -> the chunk-metadata field it filters on (member ids and
 # MRNs resolve to the member key, a typed column)
-_RECORD_FIELD = {"claim_id": "claim_id", "case_id": "case_id"}
+_RECORD_FIELD = {"claim_id": "claim_id", "case_id": "case_id", "policy_id": "policy_id"}
 
 
 def resolve_context(conn: psycopg.Connection, member_id: str | None, query_text: str = "") -> Context:
@@ -93,12 +93,32 @@ def resolve_context(conn: psycopg.Connection, member_id: str | None, query_text:
             raise ValueError(f"not a valid member ID: {member_id!r}")
         candidates.append(("member_id", canon, None))
     for m in _ID_TOKEN.finditer(query_text or ""):
+        if re.fullmatch(r"(?i)CP-\d{4}", m.group(0)):  # a policy id: a record key, no member behind it
+            ctx.record.setdefault("policy_id", m.group(0).upper())
+            continue
         compact = re.sub(r"[\s-]", "", m.group(0))
         for kind in ("member_id", "mrn", "claim_id", "case_id"):
             canon = identifiers.canonicalize(kind, compact)
             if canon:
                 candidates.append((kind, canon, m.group(0)))
                 break
+    # A policy id names a record with a human title: a thin question ("CP-0003
+    # criteria as of ...") ranks on the id token alone (0.13 against the right
+    # chunk); with the record's title appended it ranks on the subject
+    # (0.97). The title comes from the record, never from a model.
+    if "policy_id" in ctx.record:
+        try:
+            with conn.transaction():
+                row = conn.execute(
+                    "SELECT title FROM documents WHERE title LIKE %s ORDER BY title LIMIT 1",
+                    (ctx.record["policy_id"] + " %",),
+                ).fetchone()
+        except psycopg.Error:
+            row = None
+        if row:
+            title = re.sub(r"\s+v\d+$", "", row[0])
+            if title.lower() not in ctx.query.lower():
+                ctx.query = f"{ctx.query} ({title})"
     stripped = ctx.query
     for kind, canon, surface in candidates:
         table, column = _ID_LOOKUP[kind]
@@ -126,17 +146,37 @@ def resolve_context(conn: psycopg.Connection, member_id: str | None, query_text:
     return ctx
 
 
+def expand_versions(conn: psycopg.Connection, route: Route, ctx: Context, query_text: str) -> Route:
+    """A change question about a policy searches one version at a time: the
+    per-year machinery, with each version's effective year as its year and
+    that year's end as its as-of date, so the reranker stratifies the
+    versions like it stratifies plan years. Callers apply this BEFORE search
+    and rerank so both see the same years."""
+    from dataclasses import replace
+
+    if not (route.change and ctx.record.get("policy_id")) or route.as_of or re.search(r"\b20\d{2}\b", query_text or ""):
+        return route
+    version_years = [r[0] for r in conn.execute(
+        "SELECT DISTINCT year FROM chunks WHERE metadata->'record'->>'policy_id' = %s "
+        "AND metadata->'record'->>'version' IS NOT NULL ORDER BY 1",  # the policy's own versions, not the appeals citing it
+        (ctx.record["policy_id"],)).fetchall()]
+    if len(version_years) < 2:
+        return route
+    return replace(route, years=tuple(version_years),
+                   reasons=route.reasons + (f"policy change question -> one search per version {tuple(version_years)}",))
+
+
 def resolve_member(conn: psycopg.Connection, member_id: str | None, query_text: str = "") -> str | None:
     """The person key of the member context (see resolve_context)."""
     return resolve_context(conn, member_id, query_text).member_key
 
 
-def _source_flags(conn: psycopg.Connection) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """(member-scoped doc_types, event doc_types) from the sources registry."""
+def _source_flags(conn: psycopg.Connection) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """(member-scoped, event, versioned doc_types) from the sources registry."""
     rows = conn.execute(
-        "SELECT doc_type, member_scoped, event FROM sources WHERE doc_type IS NOT NULL"
+        "SELECT doc_type, member_scoped, event, versioned FROM sources WHERE doc_type IS NOT NULL"
     ).fetchall()
-    return (tuple(r[0] for r in rows if r[1]), tuple(r[0] for r in rows if r[2]))
+    return (tuple(r[0] for r in rows if r[1]), tuple(r[0] for r in rows if r[2]), tuple(r[0] for r in rows if r[3]))
 PER_METHOD_LIMIT = 100
 FUSED_LIMIT = int(os.environ.get("RAGLAB_FUSED_LIMIT", "50"))
 EF_SEARCH = 40  # Phase 2 benchmark operating point
@@ -166,14 +206,24 @@ class Candidate:
 
 def _filters(route: Route, member_key: str | None = None,
              member_scoped: tuple[str, ...] = (), events: tuple[str, ...] = (),
-             record: dict | None = None) -> tuple[str, list]:
+             record: dict | None = None, versioned: tuple[str, ...] = ()) -> tuple[str, list]:
     clauses, params = [], []
-    # Record context: a case or claim id in the question narrows member-
-    # scoped sources to the chunks whose metadata carries that key.
+    # Record context: an identifier in the question (case, claim, policy)
+    # narrows every chunk that carries that key in its record metadata to
+    # the matching value; chunks without the key are untouched.
     for field_name, value in (record or {}).items():
-        if member_scoped:
-            clauses.append("(c.doc_type <> ALL(%s) OR c.metadata->'record'->>%s = %s)")
-            params += [list(member_scoped), field_name, value]
+        clauses.append("(c.metadata->'record'->>%s IS NULL OR c.metadata->'record'->>%s = %s)")
+        params += [field_name, field_name, value]
+    if versioned:
+        # Version precedence: only the version in effect on the as-of date
+        # (explicit, else the end of the routed year). A hard filter, never
+        # a boost — a superseded version is the near-duplicate distractor.
+        as_of = route.as_of or f"{max(route.years) if route.years else CURRENT_YEAR}-12-31"
+        clauses.append(
+            "(c.doc_type <> ALL(%s) OR (c.metadata->'record'->>'effective_from' <= %s "
+            "AND (c.metadata->'record'->>'effective_to' IS NULL OR c.metadata->'record'->>'effective_to' > %s)))"
+        )
+        params += [list(versioned), as_of, as_of]
     if route.years:
         # An edition filter: event sources (a call has a date, not an
         # edition) pass regardless of year.
@@ -219,9 +269,9 @@ def search(
     language — so a prior-year benefit table is retrieved on its subject.
     `embed` turns a per-year query into a vector (default: embed_query; the
     eval's sabotage passes a junk-vector function)."""
-    if len(route.years) >= 2:
-        from dataclasses import replace
+    from dataclasses import replace
 
+    if len(route.years) >= 2:
         from raglab import router as router_mod
 
         embed = embed or embed_query
@@ -232,7 +282,8 @@ def search(
             sub_text = by_year.get(year, query_text)
             sub = search(
                 conn, sub_text, embed(sub_text),
-                replace(route, years=(year,)), fused_limit=per_year, embed=embed,
+                replace(route, years=(year,), change=False),  # one year: no re-expansion
+                fused_limit=per_year, embed=embed,
                 member_key=member_key, record=record,
             )
             for candidate in sub:
@@ -241,8 +292,8 @@ def search(
                     seen.add(candidate.chunk_id)
         return merged
 
-    member_scoped, events = _source_flags(conn)
-    where, filter_params = _filters(route, member_key, member_scoped, events, record)
+    member_scoped, events, versioned = _source_flags(conn)
+    where, filter_params = _filters(route, member_key, member_scoped, events, record, versioned)
     lexical = query_text
     lexical_weight = LEXICAL_WEIGHT_ID if ID_SHAPED.search(query_text) else 1.0
     lexical_sources = route.sources or _ingested_sources(conn)

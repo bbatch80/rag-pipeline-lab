@@ -36,7 +36,7 @@ def explain(conn: psycopg.Connection, qid: str, top_n: int = 10) -> Explanation:
     ctx = retrieval.resolve_context(conn, item.get("member_id"), question)
     member_key = ctx.member_key
     translated = deid.translate_query(conn, ctx.query)
-    route = router.route(question)
+    route = retrieval.expand_versions(conn, router.route(question), ctx, question)
     vector = retrieval.embed_cached(conn, translated)
     pool = retrieval.search(conn, translated, vector, route, member_key=member_key, record=ctx.record,
                             embed=lambda t: retrieval.embed_cached(conn, t))

@@ -3,11 +3,12 @@ status per organization × plan (providers inherit)."""
 
 import pytest
 
+
 from raglab import roster
 from raglab.synthea_load import CSV_DIR
 
-pytestmark = pytest.mark.skipif(not (CSV_DIR / "providers.csv").exists(),
-                                reason="Synthea CSVs not on this machine (CI's fresh database)")
+pytestmark = [pytest.mark.readonly, pytest.mark.skipif(not (CSV_DIR / "providers.csv").exists(),
+                                reason="Synthea CSVs not on this machine (CI's fresh database)")]
 
 
 def _seed(db):

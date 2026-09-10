@@ -1,8 +1,13 @@
 """Member identifiers and enrollment are deterministic and shaped right."""
 
+import pytest
+
+
 from datetime import date
 
 from raglab import config, enrollment, identifiers
+
+pytestmark = pytest.mark.readonly
 
 
 def _synthea(db):

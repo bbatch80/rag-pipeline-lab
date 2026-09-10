@@ -49,7 +49,11 @@ packages = ["src/raglab"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["slow: loads a model, calls a network service, or runs an eval (iteration: pytest -m 'not slow'; pre-PR and CI: everything)"]
+markers = [
+    "slow: loads a model, calls a network service, or runs an eval (iteration: pytest -m 'not slow'; pre-PR and CI: everything)",
+    "readonly: the module only reads the corpus or touches synthea tables — the db fixture skips its ~2 s DELETE",
+    "clean_corpus: this test needs the emptied document tables even inside a readonly module",
+]
 
 [tool.uv.sources]
 en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }

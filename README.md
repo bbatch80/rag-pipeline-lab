@@ -114,7 +114,8 @@ Eighteen fixed sources, declared once in a `sources` table (tier, lane,
 directory, parser, chunk profile, gate rules, PHI flag) — no registry or
 intake mechanism; code reads the row. Vector lane today: FEHB/PSHB brochures
 (23 PDFs, 2021–2026), rates, SOPs, claims bulletins, formulary, CSR knowledge
-base, 250 clinical notes (40 as PDFs), and **10,030 call-center notes**
+base, 250 clinical notes (40 as PDFs), 73 OPM carrier letters, 30 clinical
+policy versions, 340 appeal documents, and **10,030 call-center notes**
 generated from per-member storylines over the Synthea population (1,790
 members, long-tailed volume, six rep personas with their own shorthand and
 macros, skewed reason codes, ~2% wrong claim citations, ~1% copy-paste
@@ -216,6 +217,18 @@ result. A policy id in a question is record context: it filters to that
 policy and, because a bare id ranks poorly against a cross-encoder (0.13
 for "CP-0003 criteria as of …"), the record's title is appended to the
 ranking query (0.97) — from the record, not a model. Public tier; no PHI.
+
+**OPM carrier letters.** The first real, external document family: OPM's
+numbered guidance to FEHB and PSHB carriers — the annual call letter, technical
+guidance, program announcements — 73 public PDFs for 2023–2026, every
+letter OPM published in those years. The manifest is fixed in the package
+(built once by probing OPM's stable URL pattern with the browser user-agent
+and the `%PDF` guard the brochure fetch already uses; `raglab
+download-letters`); the letter's number, date, subject and URL ride as
+record metadata and the subject becomes the document title. A letter is a
+dated event, not a plan-year edition — issued in year N, usually about plan
+year N+1 — so it is exempt from the plan-year filter: a question about the
+2026 contract year finds the 2025 call letter that set its deadline.
 
 Warehouse lane: PATIENTS, CLAIM_LINES, ENROLLMENT (one row per member per
 plan year), CALL_LOG, CLAIM_ADJUDICATION, APPEALS, ORGANIZATIONS, PROVIDERS,

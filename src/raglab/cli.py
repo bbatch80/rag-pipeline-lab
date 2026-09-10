@@ -141,6 +141,11 @@ def ingest_cmd(full: bool):
                 one(conn, cell.pdf_path, derive_document_meta(cell), "pdf",
                     f"{cell.spec.ri}/{cell.year}")
 
+            from raglab import letters as letters_mod
+
+            for pdf_path, letter_meta in letters_mod.items():  # OPM carrier letters (fixed manifest)
+                one(conn, pdf_path, letter_meta, "pdf", letter_meta.title)
+
             registry = sources.load(conn)
             from raglab import dedup
 
@@ -416,6 +421,26 @@ def churn_cmd(seed: int, rate: float):
         if not actions:
             receipt.fail("churn touched nothing — pool empty?")
     except OSError as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+@main.command("download-letters")
+@click.option("--rebuild-manifest", is_flag=True, help="Probe OPM for the manifest years and rewrite the fixed manifest (one-time curation).")
+def download_letters_cmd(rebuild_manifest: bool):
+    """OPM carrier letters by fixed manifest: browser UA, %PDF guard, cached on disk."""
+    from raglab import letters
+
+    receipt = Receipt("raglab download-letters" + (" --rebuild-manifest" if rebuild_manifest else ""))
+    try:
+        if rebuild_manifest:
+            built = letters.build_manifest()
+            receipt.add("manifest", f"{len(built)} letters written to {letters.MANIFEST_PATH.name}")
+        counts = letters.fetch()
+        for k, v in counts.items():
+            receipt.add(k, v)
+        receipt.add("on disk", sum(1 for l in letters.load_manifest() if l.pdf_path.exists()))
+    except Exception as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()
 

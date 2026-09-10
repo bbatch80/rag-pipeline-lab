@@ -42,3 +42,18 @@ CREATE TABLE IF NOT EXISTS query_embeddings (
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (model, text_hash)
 );
+
+-- Rerank score cache: the cross-encoder is a pure function of (model,
+-- query text, chunk text), so a score is memoized on exactly those three —
+-- the model name plus the weight snapshot it loaded, the final ranking
+-- query string, and the sha256 of the exact text scored. No chunk id, no
+-- timestamp: any change to what the reranker reads changes the key.
+-- RAGLAB_RERANK_CACHE=off bypasses it (tests patch the model).
+CREATE TABLE IF NOT EXISTS rerank_scores (
+    model      text NOT NULL,
+    query_hash text NOT NULL,
+    text_hash  text NOT NULL,
+    score      real NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (model, query_hash, text_hash)
+);

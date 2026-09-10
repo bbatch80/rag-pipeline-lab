@@ -32,7 +32,16 @@ uv run raglab explain-golden C6                      # did the expected chunk re
 ```
 
 Query embeddings are cached by exact text (`query_embeddings`), so repeat
-eval runs and repeat questions do not call the embedding API.
+eval runs and repeat questions do not call the embedding API. Reranker
+scores are cached the same way (`rerank_scores`): a cross-encoder score is
+a pure function of the model, the final ranking query, and the exact text
+scored, so the key is the model name plus its weight snapshot, the query
+string, and the sha256 of the scored text — no chunk id, no timestamp. A
+re-ingest, a search-copy rebuild, a query-side change, or a model swap
+changes the key and misses honestly; a PR that changes neither questions
+nor chunks re-scores nothing. The eval receipt reports hits and misses.
+Measured on the full golden set: cold 556 s (14,978 pairs scored), warm
+51 s (16,935 hits, 0 scored), identical results.
 
 Three layers of change, three costs. Source bytes, parser, or de-id: the
 processing recipe changes and the affected documents re-ingest in full
@@ -474,7 +483,9 @@ asked in one member's context returns no other member's records.
 `deny_clean`, `scope_clean`, `allow_answered`, and
 retrieval `hit@5` gate CI; the entitlement metrics are thresholded at 1.0 —
 a single leak fails the build. The gate job runs on a self-hosted runner
-beside the loaded database (no corpus or keys on hosted runners); `main` is
+beside the loaded database (no corpus or keys on hosted runners) on pull
+requests only — a squash merge re-runs CI on the tree the PR gate just
+verified, so push-to-main runs only the fast `test` job; `main` is
 protected, and every change lands through a pull request whose checks it
 must pass. Payload `status`/`confidence` inform the
 consumer; grounding is enforced at the generation layer, whose contract

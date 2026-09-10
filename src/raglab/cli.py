@@ -765,6 +765,11 @@ def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool, categories: tuple
                                         categories=tuple(categories))
         receipt.add("run id", result.run_id)
         receipt.add("corpus", result.corpus_hash[:12])
+        from raglab import rerank as rerank_mod
+
+        cs = rerank_mod.CACHE_STATS
+        if cs["hits"] or cs["misses"]:
+            receipt.add("rerank cache", f"{cs['hits']} hits, {cs['misses']} scored ({rerank_mod.model_key()})")
         for metric, value in result.overall.items():
             if value is not None:
                 ci = result.overall_ci.get(metric)

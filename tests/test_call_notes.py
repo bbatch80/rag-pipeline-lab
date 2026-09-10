@@ -1,10 +1,15 @@
 """Call notes: shorthand dictionary, search-copy normalization, near-duplicate
 marking, and storyline integrity."""
 
+import pytest
+
+
 import json
 
 from raglab import dedup, identifiers, indexcopy, sources
 from raglab.synth import journeys, shorthand
+
+pytestmark = pytest.mark.readonly
 
 
 def test_expand_is_idempotent_and_whole_token():

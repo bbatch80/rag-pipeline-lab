@@ -1,9 +1,14 @@
 """Appeals + adjudication: an additive pass over the merged call log."""
 
+import pytest
+
 import json
+
 
 from raglab import identifiers
 from raglab.synth import appeals, journeys
+
+pytestmark = pytest.mark.readonly
 
 
 def _seed_population(db):

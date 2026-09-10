@@ -1,6 +1,11 @@
 """Confidence intervals and paired run diffs."""
 
+import pytest
+
+
 from raglab import eval_retrieval, stats
+
+pytestmark = pytest.mark.readonly
 
 
 def test_wilson_matches_known_values():

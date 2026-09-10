@@ -3,9 +3,12 @@ relevance matching, rerank/abstention mechanics (fake model — no weights)."""
 
 import pytest
 
+
 from raglab import ablation, rerank
 from raglab.retrieval import Candidate, RRF_K, search
 from raglab.router import Route
+
+pytestmark = pytest.mark.readonly
 
 
 def _candidate(**kw):
@@ -45,6 +48,7 @@ def tiny_corpus(db):
     return db, vec
 
 
+@pytest.mark.clean_corpus
 def test_rrf_math_matches_hand_computation(tiny_corpus):
     db, vec = tiny_corpus
     route = Route(scope="in_scope", years=(2026,))

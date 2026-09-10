@@ -2,9 +2,13 @@
 
 import pytest
 
+
 from raglab import ingest, migrations, sources
 
+pytestmark = pytest.mark.readonly
 
+
+@pytest.mark.clean_corpus
 def test_migrations_apply_once(db):
     """Applying again is a no-op; every file is recorded."""
     assert migrations.apply(db) == []  # already applied to this database
@@ -23,6 +27,7 @@ def test_sources_is_the_fixed_inventory(db):
         registry.for_doc_type("something_new")
 
 
+@pytest.mark.clean_corpus
 def test_every_document_is_bound_to_a_source(db):
     with pytest.raises(Exception):  # NOT NULL: a document without a source is rejected
         db.execute(

@@ -3,11 +3,14 @@ type-correct per-source de-id eval. Skipped where Presidio is not installed."""
 
 import json
 
+
 import pytest
 
 pytest.importorskip("presidio_analyzer")
 
 from raglab import deid, identifiers  # noqa: E402
+
+pytestmark = pytest.mark.readonly
 
 
 class _NoCommit:
@@ -70,6 +73,7 @@ def test_query_translation_normalizes_surface_forms(db):
     assert "[MEMBER_ID-" in translated
 
 
+@pytest.mark.clean_corpus
 def test_evaluate_is_type_correct_and_per_source(db, tmp_path, monkeypatch):
     from raglab import internal_corpus
     mid, mrn = identifiers.member_id("p1"), identifiers.mrn("p1")

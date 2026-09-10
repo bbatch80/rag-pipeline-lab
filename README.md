@@ -314,7 +314,11 @@ adds clinical notes; `persona_member_services` (call-center reps) and
 notes and appeal documents — and inherit the employee tier by Postgres role
 membership, so one `SET ROLE` grants a role's whole entitlement and a new
 role is one GRANT. The clinical tier and the operations tiers never see each
-other; the two operations tiers never see each other's records. Rows outside a role's entitlement are trimmed by the
+other; the two operations tiers never see each other's records. One
+entitlement depends on data rather than role: a clinical note becomes
+visible to the appeals tier when any appeal cites it in `appeal_evidence`,
+and disappears when the citation is removed — the row policies read the
+link table at query time, keyed by document title, with no re-indexing. Rows outside a role's entitlement are trimmed by the
 engine before ranking, so unauthorized content never enters a candidate
 set, a payload, or a context window. Revoking a role membership changes the
 retrievable set at the next query with zero re-indexing. HNSW scans run

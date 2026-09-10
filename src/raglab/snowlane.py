@@ -17,7 +17,7 @@ from raglab import config
 SETUP_SQL_PATH = config.REPO_ROOT / "db" / "snowflake" / "setup.sql"
 STAGE_DIR = config.REPO_ROOT / "data" / "snowflake_stage"
 
-ROLES = ("CLAIMS_EXAMINER", "PSHB_EXAMINER", "CARE_MANAGER", "ACTUARY")
+ROLES = ("CLAIMS_EXAMINER", "PSHB_EXAMINER", "CARE_MANAGER", "ACTUARY", "MEMBER_SERVICES_REP", "APPEALS_ANALYST")
 
 # LOB assignment is synthetic (Synthea has no plan codes): a deterministic
 # hash of the patient id splits ~80/20 FEHB/PSHB, denormalized onto both
@@ -172,8 +172,9 @@ def verify(sf_conn) -> dict:
         stats = cur.execute(
             "SELECT count(*), count(DISTINCT LINE_OF_BUSINESS), "
             "count(SSN), count(TOTAL_CLAIM_COST), "
-            "count(DISTINCT PATIENT_ID) FROM CLAIM_DETAIL"
+            "count(DISTINCT PATIENT_ID), count(FIRST_NAME) FROM CLAIM_DETAIL"
         ).fetchone()
+        geo = cur.execute("SELECT count(CITY), max(length(ZIP)) FROM PATIENTS").fetchone()
         sample = rows[0] if rows else None
         report[role] = {
             "rows": stats[0],
@@ -181,6 +182,9 @@ def verify(sf_conn) -> dict:
             "ssn_visible": stats[2] > 0,
             "cost_visible": stats[3] > 0,
             "distinct_patients": stats[4],
+            "names_visible": stats[5] > 0,
+            "city_visible": geo[0] > 0,
+            "zip_length": geo[1],
             "sample_name": sample[0] if sample else None,
         }
     cur.execute("USE ROLE ACCOUNTADMIN")
@@ -363,11 +367,14 @@ NAMED_QUERIES = {
 MASKED_FOR_ROLE = {
     "CARE_MANAGER": {"BASE_COST", "TOTAL_COST", "TOTAL_CLAIM_COST",
                      "PAYER_COVERAGE", "AVG_COST"},
-    "ACTUARY": {"SSN", "FIRST_NAME", "LAST_NAME", "BIRTHDATE", "MEMBER_ID", "MRN", "CLAIM_ID", "CASE_ID"},
+    "ACTUARY": {"SSN", "FIRST_NAME", "LAST_NAME", "BIRTHDATE", "MEMBER_ID", "MRN", "CLAIM_ID", "CASE_ID", "ZIP", "CITY"},
+    # Phase 2 decision 4: no operations role verifies identity by SSN
+    "MEMBER_SERVICES_REP": {"SSN"},
+    "APPEALS_ANALYST": {"SSN"},
 }
 
 
-def run_named_query(sf_conn, query_name: str, params: dict) -> dict:
+def run_named_query(sf_conn, query_name: str, params: dict, payload_id: str | None = None) -> dict:
     """Execute a catalog query with bound parameters; returns column names,
     rows, the query's documented meaning, and which columns the session
     role's policies masked. Unknown names are refused — the catalog IS the
@@ -386,6 +393,9 @@ def run_named_query(sf_conn, query_name: str, params: dict) -> dict:
     bound.update({k: v for k, v in params.items() if v is not None})
     cur = sf_conn.cursor()
     role = cur.execute("SELECT CURRENT_ROLE()").fetchone()[0]
+    # D18: every governed query carries the payload id as its QUERY_TAG, so
+    # QUERY_HISTORY / ACCESS_HISTORY can be joined to our disclosure row.
+    cur.execute("ALTER SESSION SET QUERY_TAG = %s", (payload_id or f"raglab:{query_name}",))
     cur.execute(spec["sql"], bound)
     columns = [d[0] for d in cur.description]
     rows = [

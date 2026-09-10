@@ -38,9 +38,8 @@ def test_care_manager_financials_masked(report):
 def test_actuary_deidentified_but_aggregable(report):
     r = report["ACTUARY"]
     assert not r["ssn_visible"], "actuary must not see identifiers"
-    assert r["sample_name"] and len(r["sample_name"]) == 64, (
-        "names must be stable hashes so distinct-member aggregation works"
-    )
+    assert not r["names_visible"] and r["sample_name"] is None, "D11: names are NULL for the actuary, not hashed"
+    assert not r["city_visible"] and r["zip_length"] == 3, "D11: geography to minimum-necessary"
     assert r["distinct_patients"] == report["CLAIMS_EXAMINER"]["distinct_patients"], (
         "de-identification must not break member-level aggregates"
     )
@@ -54,3 +53,13 @@ def test_pshb_examiner_row_scoped(report):
     assert scoped["ssn_visible"] and scoped["cost_visible"], (
         "row scoping composes with full column visibility"
     )
+
+
+def test_operations_roles_see_amounts_but_not_ssn(report):
+    """Phase 2 decision 4: reps and appeals analysts work from member IDs and
+    amounts; neither verifies identity by SSN."""
+    for role in ("MEMBER_SERVICES_REP", "APPEALS_ANALYST"):
+        r = report[role]
+        assert r["cost_visible"] and not r["ssn_visible"], role
+        assert r["names_visible"] and r["lobs"] == 2, role
+        assert r["distinct_patients"] == report["CLAIMS_EXAMINER"]["distinct_patients"], role

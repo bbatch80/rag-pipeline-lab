@@ -23,10 +23,8 @@ IDENTITIES = {
     "public": ("public", None),
     "employee": ("employee", "CLAIMS_EXAMINER"),
     "care_team": ("care_team", "CARE_MANAGER"),
-    # Phase 2 tiers; their own warehouse roles land in P2-PR4 (until then the
-    # examiner role stands in for both).
-    "member_services": ("member_services", "CLAIMS_EXAMINER"),
-    "appeals": ("appeals", "CLAIMS_EXAMINER"),
+    "member_services": ("member_services", "MEMBER_SERVICES_REP"),
+    "appeals": ("appeals", "APPEALS_ANALYST"),
     "actuary": ("public", "ACTUARY"),
 }
 

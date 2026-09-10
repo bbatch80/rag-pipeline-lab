@@ -421,6 +421,22 @@ the same population the notes describe.
 
 ### Member-data lane (Snowflake row access policies + dynamic masking)
 
+Six roles. The claims examiner sees every column; a PSHB-only examiner is
+row-scoped to one line of business; the care manager sees identity but not
+financials; the actuary sees financials but no identity — names, SSN,
+member and claim identifiers NULL, birth dates to the year, ZIP to three
+digits, city NULL — and counts distinct members on the person key, so
+nothing the old name hash provided is lost and nothing reversible remains
+(the Analyst View is minimum-necessary workforce access, not Safe Harbor
+de-identification: service dates stay at day grain). The two operations
+roles added in Phase 2, `MEMBER_SERVICES_REP` and `APPEALS_ANALYST`, hold
+explicit per-table grants rather than inheriting the examiner: amounts
+visible (a rep answers "what do I owe and why"; an appeal turns on
+amounts), SSN masked (identity is member ID plus date of birth, never
+SSN), both lines of business. Every named query sets the Snowflake
+`QUERY_TAG` to the payload id, so the warehouse's own query and access
+history can be joined to the disclosure row.
+
 Synthea claims (11,519 patients, 676,859 claim lines) served from
 Snowflake as a governed copy; Postgres remains the system of record.
 `raglab snowflake-setup` rebuilds the lane end-to-end (warehouse, roles,

@@ -17,12 +17,11 @@ from dataclasses import dataclass, field
 
 import psycopg
 
-# group -> (persona, warehouse role, surfaces). The warehouse roles for the
-# two operations groups arrive in P2-PR4; the examiner role stands in.
+# group -> (persona, warehouse role, surfaces).
 GROUPS: dict[str, tuple[str, str | None, tuple[str, ...], str]] = {
     "public":           ("public",          None,              ("ask",),                        "Unauthenticated / public benefits questions"),
-    "call_center":      ("member_services", "CLAIMS_EXAMINER", ("ask", "agent_assist"),         "Call-center representatives"),
-    "appeals":          ("appeals",         "CLAIMS_EXAMINER", ("ask", "appeals_workbench"),    "Appeals analysts"),
+    "call_center":      ("member_services", "MEMBER_SERVICES_REP", ("ask", "agent_assist"),      "Call-center representatives"),
+    "appeals":          ("appeals",         "APPEALS_ANALYST",     ("ask", "appeals_workbench"), "Appeals analysts"),
     "benefits":         ("employee",        None,              ("ask",),                        "Benefits specialists"),
     "care_management":  ("care_team",       "CARE_MANAGER",    ("ask", "agent_assist"),         "Care managers"),
     "analytics":        ("public",          "ACTUARY",         ("ask", "analyst_view"),         "Analysts / actuaries"),

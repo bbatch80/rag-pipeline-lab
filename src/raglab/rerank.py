@@ -123,11 +123,15 @@ def score_pairs(model, pairs: list[tuple[str, str]], conn=None) -> list[float]:
         for i, s in zip(miss_idx, fresh, strict=True):
             scores[i] = s
         try:
-            with conn.transaction(), conn.cursor() as cur:
-                cur.executemany(
-                    "INSERT INTO rerank_scores (model, query_hash, text_hash, score) VALUES (%s, %s, %s, %s) "
+            # One statement for the whole batch (unnest), not one per row:
+            # ~500 misses per question would otherwise be ~500 round trips —
+            # the cold pass measured +2.7 s/question with executemany.
+            with conn.transaction():
+                conn.execute(
+                    "INSERT INTO rerank_scores (model, query_hash, text_hash, score) "
+                    "SELECT %s, q, t, s FROM unnest(%s::text[], %s::text[], %s::real[]) AS u(q, t, s) "
                     "ON CONFLICT DO NOTHING",
-                    [(mk, keys[i][0], keys[i][1], s) for i, s in zip(miss_idx, fresh, strict=True)],
+                    (mk, [keys[i][0] for i in miss_idx], [keys[i][1] for i in miss_idx], fresh),
                 )
         except Exception:
             pass  # a cache write failure never fails a query

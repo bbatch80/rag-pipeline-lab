@@ -369,9 +369,9 @@ def test_appeal_cited_flag_follows_the_evidence_table(db):
     _link(db, "doc-member_services", kind="clinical_note")  # wrong kind for a call note
     assert flag("doc-care_team") is True
     assert flag("doc-member_services") is False, "kind must match the tier"
-    _link(db, "doc-member_services", kind="call_note")
+    _link(db, "doc-member_services", case="APL-TEST003", kind="call_note")  # a second case: (case, title) is the key
     assert flag("doc-member_services") is True
-    db.execute("DELETE FROM appeal_evidence WHERE case_id = 'APL-TEST001'")
+    db.execute("DELETE FROM appeal_evidence WHERE case_id IN ('APL-TEST001', 'APL-TEST003')")
     assert flag("doc-care_team") is False and flag("doc-member_services") is False
     # a document that arrives after its citation exists (re-ingest) is flagged at insert
     db.execute("INSERT INTO appeal_evidence (case_id, document_title, kind) VALUES ('APL-TEST002', 'note_late', 'clinical_note')")

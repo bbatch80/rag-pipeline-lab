@@ -28,6 +28,7 @@ jobs:
       - run: uv run pytest -v
 
   docling:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -47,9 +48,11 @@ jobs:
   # A regression below any threshold in eval_retrieval.THRESHOLDS fails
   # the job, and branch protection makes that block the merge.
   gate:
-    # Never run fork PRs on the self-hosted machine: a fork can edit this
-    # workflow. Same-repo branches and pushes to main only.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Same-repo pull requests only. Never a fork's PR: a fork can edit this
+    # workflow and the runner holds the real database and keys. Not on push
+    # to main either: a squash merge re-runs CI on the tree the PR gate just
+    # verified, so the twelve-minute gate is not repeated.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: self-hosted
     concurrency:
       group: raglab-gate

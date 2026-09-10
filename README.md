@@ -481,7 +481,9 @@ asked in one member's context returns no other member's records.
 `deny_clean`, `scope_clean`, `allow_answered`, and
 retrieval `hit@5` gate CI; the entitlement metrics are thresholded at 1.0 —
 a single leak fails the build. The gate job runs on a self-hosted runner
-beside the loaded database (no corpus or keys on hosted runners); `main` is
+beside the loaded database (no corpus or keys on hosted runners) on pull
+requests only — a squash merge re-runs CI on the tree the PR gate just
+verified, so push-to-main runs only the fast `test` job; `main` is
 protected, and every change lands through a pull request whose checks it
 must pass. Payload `status`/`confidence` inform the
 consumer; grounding is enforced at the generation layer, whose contract

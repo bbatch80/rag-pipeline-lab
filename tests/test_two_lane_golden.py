@@ -30,7 +30,7 @@ def test_both_lanes_answer_under_identity(item):
 
     with psycopg.connect(config.DATABASE_URL) as conn:
         built = run_query(conn, item["doc_probe"], persona=lane1_persona,
-                          source="eval")
+                          source="eval", member_id=item.get("member_id"))  # the surface supplies the member id
     assert built["status"] == "ok", built.get("confidence")
     titles = [c["source"]["title"] for c in built["chunks"][:5]]
     assert any(item["doc_anchor"] in t for t in titles), titles

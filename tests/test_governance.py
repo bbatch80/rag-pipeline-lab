@@ -340,3 +340,14 @@ def test_relational_entitlement_covers_cited_call_notes(db):
     db.execute("SET LOCAL ROLE persona_appeals")
     assert db.execute("SELECT count(*) FROM chunks WHERE content LIKE 'member_services secret%'").fetchone()[0] == 0, "unlinked -> gone, no re-index"
     db.execute("RESET ROLE")
+
+
+def test_person_record_sources_are_member_scoped(db):
+    """Every source whose documents are records about one person carries the
+    member_scoped flag, so the member filter applies (golden S1 found clinical
+    notes registered without it: a chart question returned other patients)."""
+    rows = db.execute(
+        "SELECT key, member_scoped FROM sources WHERE key IN ('call_notes', 'appeal_documents', 'clinical_notes')"
+    ).fetchall()
+    assert len(rows) == 3
+    assert all(flag for _, flag in rows), [k for k, flag in rows if not flag]

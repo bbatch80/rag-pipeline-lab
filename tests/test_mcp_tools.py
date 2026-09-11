@@ -7,7 +7,7 @@ import os
 import pytest
 
 from raglab import snowlane
-from raglab.mcp_server import IDENTITIES, query_member_data
+from raglab.mcp_server import IDENTITIES, compose_context, query_member_data
 
 
 def _fn(tool):
@@ -65,3 +65,52 @@ def test_named_query_runs_under_examiner_role():
         assert "CLAIM_LINES" in result["columns"]
     finally:
         sf.close()
+
+
+def test_compose_context_runs_as_the_session_identity_never_a_parameter(monkeypatch):
+    """The third tool is a thin adapter: identity comes from the session,
+    the plan from the platform, every leg runs as that identity, and the
+    server's one warehouse session is handed over without being closed."""
+    import inspect
+
+    import raglab.mcp_server as server
+    from raglab import planner
+
+    assert "persona" not in inspect.signature(_fn(compose_context)).parameters
+    assert "plan" not in inspect.signature(_fn(compose_context)).parameters
+    monkeypatch.setattr(server, "USER", None)
+    monkeypatch.setattr(server, "PERSONA", "appeals")
+    seen = {}
+
+    def fake_compose(conn, question, caller, member_id=None, plan=None, source="interactive", sf_connect=None):
+        seen.update(question=question, caller=caller, member_id=member_id, plan=plan, source=source)
+        session = sf_connect("APPEALS_ANALYST")
+        session.close()  # a leg closes what it is handed
+        seen["session"] = session
+        return {"status": "ok", "payload_id": "x"}
+
+    class _Conn:
+        def cursor(self):
+            return "cursor"
+        def close(self):
+            raise AssertionError("the shared warehouse session must not be closed by a leg")
+
+    monkeypatch.setattr(planner, "compose", fake_compose)
+    monkeypatch.setattr(server, "_snowflake", lambda role: _Conn())
+    out = _fn(compose_context)("Was claim CLM-1363781509 denied, and did the member appeal it?", member_id="M344317862")
+    assert out["status"] == "ok"
+    assert seen["caller"].persona == "appeals" and seen["caller"].warehouse_role == "APPEALS_ANALYST"
+    assert seen["member_id"] == "M344317862" and seen["plan"] is None and seen["source"] == "mcp"
+    assert seen["session"].cursor() == "cursor"
+
+
+def test_compose_context_public_identity_has_no_warehouse_role(monkeypatch):
+    import raglab.mcp_server as server
+    from raglab import planner
+
+    monkeypatch.setattr(server, "USER", None)
+    monkeypatch.setattr(server, "PERSONA", "public")
+    seen = {}
+    monkeypatch.setattr(planner, "compose", lambda conn, q, caller, **kw: seen.update(caller=caller) or {"status": "ok"})
+    _fn(compose_context)("What does the HDHP brochure say about copays?")
+    assert seen["caller"].persona == "public" and seen["caller"].warehouse_role is None

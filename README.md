@@ -497,8 +497,8 @@ Both lanes surface through one contract and one thin server.
 ### The payload spec
 
 Every retrieval — CLI, evaluation, or MCP — returns the same versioned
-JSON payload (spec `1.0.0`; normative schema at `db/payload.schema.json`,
-validated in CI). Key properties:
+JSON payload (spec `1.1.0`, additive over `1.0.0`; normative schema at
+`db/payload.schema.json`, validated in CI). Key properties:
 
 - `status` (`ok` | `insufficient_evidence` | `out_of_scope`) is decided
   upstream by the abstention threshold and scope gate — the consumer
@@ -515,10 +515,16 @@ validated in CI). Key properties:
 
 ### The server
 
-`raglab-mcp` (configured in `.mcp.json`) is a ~110-line adapter over the
-pipeline — no retrieval or governance logic lives in it. Two tools:
+`raglab-mcp` (configured in `.mcp.json`) is a thin adapter over the
+pipeline — no retrieval or governance logic lives in it. Three tools:
 
-- `search_documents(query)` — the full document-lane funnel (routing,
+- `compose_context(question, member_id?)` — one question in, the composed
+  payload out: the platform plans the legs (document probes and named
+  warehouse queries, at most three, one pass), runs each as the session
+  identity, and returns one payload with one status and one payload id.
+  For agents that already know the leg, the two primitives remain:
+
+- `search_documents(query, member_id?)` — the full document-lane funnel (routing,
   hybrid search, reranking, RLS trimming) returning the payload above;
   every call is written to the disclosure log with `source=mcp`.
 - `query_member_data(query_name, ...)` — named, parameterized catalog
@@ -526,7 +532,8 @@ pipeline — no retrieval or governance logic lives in it. Two tools:
   the session's warehouse role; results name their `masked_columns` so
   consumers can distinguish policy masking from absent data.
 
-Caller identity is server launch configuration (`RAGLAB_PERSONA`), never
+Caller identity is server launch configuration (`RAGLAB_USER`, resolved
+through the identity tables; `RAGLAB_PERSONA` as the legacy form), never
 a tool parameter — a model cannot claim an identity. Each identity pairs
 a document-lane persona with a member-data role; the production analog is
 SSO passthrough of the caller's directory groups.

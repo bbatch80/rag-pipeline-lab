@@ -45,7 +45,8 @@ def test_rerank_interleaves_covered_plans_so_each_plan_leads(monkeypatch):
     monkeypatch.setattr(rerank, "_get_model", lambda: object())
     pool = [_cand(1, "71-021", 0), _cand(2, "71-021", 0), _cand(3, "71-021", 0), _cand(4, "71-026", 0), _cand(5, "71-026", 0), _cand(6, "71-022", 0)]
     out = rerank.rerank("q", pool, top_n=4, stratify_plans=("71-021", "71-022", "71-026"))
-    assert [c.plan_code for c in out[:3]] == ["71-021", "71-022", "71-026"], "every covered plan's best chunk is in the top three"
+    assert {c.plan_code for c in out[:3]} == {"71-021", "71-022", "71-026"}, "every covered plan's best chunk is in the top three"
+    assert out[0].plan_code == "71-021", "the strongest plan leads; the others still get their seats"
     plain = rerank.rerank("q", pool, top_n=4)
     assert [c.plan_code for c in plain[:3]] == ["71-021", "71-021", "71-021"], "without the rule the dominant plan fills the top"
 

@@ -313,6 +313,17 @@ runs. Plans are one pass — no leg is decided from another's result — with a
 single widen-once retry for a hinted document leg that found nothing.
 `raglab query` plans by default; `--no-plan` runs the single-probe path.
 
+The plan comes from a pinned model (Haiku 4.5) in one schema-constrained
+call: it sees the question with identifiers and names replaced by vault
+tokens plus a menu of document families and named queries, and returns the
+shape (simple or compound) and the legs. Anything that goes wrong — a
+timeout, invalid output, a plan that fails validation — falls back to the
+rules plan with the reason recorded. A golden question's plan is stored,
+keyed by the translated question, the menu, and the model version, and
+reused until one of those changes, so the CI gate never calls the model;
+`raglab eval-retrieval --replan` asks the live model fresh and reports plans
+that would change, without gating.
+
 ## Governance
 
 Two lanes, enforcement in the engine — application code never filters

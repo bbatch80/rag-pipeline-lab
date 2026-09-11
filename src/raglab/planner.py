@@ -19,7 +19,11 @@ fast path), `caller` (a plan supplied by the caller, e.g. a golden item),
 `model` (P3-PR2: the pinned planner model on the translated question)."""
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 
@@ -63,10 +67,11 @@ class Plan:
     origin: str                    # rules | caller | model
     model: str | None = None
     widened: bool = False
+    fallback_reason: str | None = None
 
     def to_dict(self) -> dict:
-        return {"shape": self.shape, "origin": self.origin, "model": self.model,
-                "widened": self.widened, "legs": [leg.to_dict() for leg in self.legs]}
+        return {"shape": self.shape, "origin": self.origin, "model": self.model, "widened": self.widened,
+                "fallback_reason": self.fallback_reason, "legs": [leg.to_dict() for leg in self.legs]}
 
 
 @dataclass
@@ -77,11 +82,40 @@ class Caller:
     user_id: int | None = None
 
 
+# What each document family CONTAINS, for the planner's menu — the registry
+# names a source and its department; the model needs to know which questions
+# the text answers and which the warehouse answers instead. Part of the menu
+# hash: edit a line and stored plans recompute.
+SOURCE_GUIDE = {
+    "brochure": "FEHB/PSHB plan brochures: what a plan covers, copays, deductibles, exclusions, how to file claims and appeals — by plan and year.",
+    "rates": "Premium rate tables by plan, option, and enrollment type.",
+    "sop": "Member-services standard operating procedures: how reps handle situations.",
+    "bulletin": "Claims bulletins: internal instructions to examiners.",
+    "formulary": "Drug formulary: tiers and coverage of medications.",
+    "kb": "CSR knowledge base articles.",
+    "clinical_note": "Clinical notes about one patient (SOAP, referral, discharge): diagnoses, treatment, what the clinician wrote.",
+    "call_note": "Call notes: the rep's written narrative of one member's call — what the member asked or disputed, what they were told, next steps. (The warehouse call log holds only when a call happened and its reason code.)",
+    "appeal": "Appeal case documents: the case summary, denial rationale, clinical summary of submitted records, determination letters. (The warehouse appeals table holds only the case's dates, decision, and reviewer.)",
+    "clinical_policy": "Medical policies: coverage criteria for procedures and services, versioned by effective date.",
+    "carrier_letter": "OPM carrier letters: program-wide instructions to carriers by year.",
+}
+
+
 def menu(conn: psycopg.Connection) -> dict:
     """The fixed menu a plan may choose from: document source families that
-    are ingested, and the named-query catalog. Nothing outside it executes."""
-    return {"sources": tuple(retrieval._ingested_sources(conn)),
-            "named_queries": tuple(snowlane.NAMED_QUERIES)}
+    are ingested (with the registry's one-line description, so the model can
+    tell call NOTES — what was said — from the call LOG in the warehouse),
+    and the named-query catalog. Nothing outside it executes. Descriptions
+    are part of the menu hash: change one and stored plans recompute."""
+    ingested = tuple(retrieval._ingested_sources(conn))
+    try:
+        with conn.transaction():
+            rows = conn.execute("SELECT doc_type, display_name, department FROM sources WHERE doc_type = ANY(%s)", (list(ingested),)).fetchall()
+    except psycopg.Error:
+        rows = []
+    registry = {dt: f"{name} ({dept})" for dt, name, dept in rows}
+    return {"sources": ingested, "named_queries": tuple(snowlane.NAMED_QUERIES),
+            "source_docs": {dt: SOURCE_GUIDE.get(dt, registry.get(dt, dt)) for dt in ingested}}
 
 
 def plan_rules(question: str) -> Plan:
@@ -124,6 +158,9 @@ def validate(plan: Plan, question: str, available: dict) -> None:
             if leg.query_name not in available["named_queries"]:
                 raise PlanError(f"leg {leg.name}: named query not in the catalog: {leg.query_name!r}")
             allowed = set(snowlane.NAMED_QUERIES[leg.query_name].get("params", {}))
+            bad_slots = set(leg.slots) - allowed
+            if bad_slots:
+                raise PlanError(f"leg {leg.name}: {leg.query_name} takes no {sorted(bad_slots)} parameter")
             bad = set(leg.params) - allowed
             if bad:
                 raise PlanError(f"leg {leg.name}: parameters not accepted by {leg.query_name}: {sorted(bad)}")
@@ -158,6 +195,175 @@ def _member_id_of(ctx: retrieval.Context) -> str | None:
     return ctx.record.get("member_id")
 
 
+# ---- the pinned planner model (Phase 3 decisions 2-4) --------------------
+
+PLANNER = os.environ.get("RAGLAB_PLANNER", "model")          # model | rules
+PLAN_CACHE = os.environ.get("RAGLAB_PLAN_CACHE", "on") != "off"
+PLANNER_MODEL = os.environ.get("RAGLAB_PLANNER_MODEL", "claude-haiku-4-5-20251001")  # pinned: the key of every stored plan
+PLANNER_TIMEOUT_S = float(os.environ.get("RAGLAB_PLANNER_TIMEOUT", "8"))
+
+PLAN_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["shape", "legs"],
+    "properties": {
+        "shape": {"type": "string", "enum": ["simple", "compound"]},
+        "legs": {  # the API's constrained decoding rejects minItems/maxItems: validate() enforces 1..MAX_LEGS
+            "type": "array",
+            "items": {
+                "type": "object", "additionalProperties": False,
+                "required": ["name", "kind", "text", "sources", "query_name", "slots", "required"],
+                "properties": {
+                    "name": {"type": "string"},
+                    "kind": {"type": "string", "enum": list(LEG_KINDS)},
+                    "text": {"type": ["string", "null"]},
+                    "sources": {"type": "array", "items": {"type": "string"}},
+                    "query_name": {"type": ["string", "null"]},
+                    "slots": {"type": "array", "items": {"type": "string", "enum": list(SLOT_NAMES)}},
+                    "required": {"type": "boolean"},
+                },
+            },
+        },
+    },
+}
+
+SYSTEM = """You plan how a governed retrieval platform for a health insurer answers one question. You never answer the question and never see any records.
+
+Decide the SHAPE: "simple" when one search or one catalog query answers it; "compound" when it needs more than one (at most three).
+
+Each leg is one of:
+- doc_probe: a search over documents. Give `text` — the sub-question this leg should rank on, written in the question's own words and tokens. `sources` is a list of document families to search (from the menu), or [] for every family the caller may see. `query_name` null, `slots` [].
+- member_query: one named warehouse query from the catalog (menu). Give `query_name`. `slots` lists which identifiers from the question it needs: member_id, claim_id, case_id, npi, plan_code, as_of. `text` null, `sources` [].
+
+Rules:
+- Identifiers appear as tokens like [MEMBER_ID-12], [CLAIM_ID-7], [CASE_ID-3], [PERSON-5], [DATE_TIME-9]. Never invent, alter, or expand a token; copy tokens exactly when a leg's text needs them. You never write identifier values — the platform binds them.
+- The warehouse catalog answers questions about facts in records: a claim's status or denial, costs, enrollment, providers, network status, when calls or appeals happened and how they were decided. Documents answer questions about what was WRITTEN: what a brochure or policy says, what a rep or clinician wrote, what an appeal file argues. "What did the member say/dispute/ask" is a call_note document; "when did the member call" is the call log.
+- `required` is true when the question cannot be answered without that leg; false for supporting context.
+- Prefer the fewest legs that cover the question. Never plan a leg the question did not ask for: "summarize / what does X say / what was written" is ONE doc_probe leg — do not add enrollment, claims, or call-log legs for background. Use member_query only when the question asks for a fact the catalog holds.
+- `slots` may list only identifier kinds the question actually contains AND that the named query accepts (its parameters are listed in the menu). Never add a slot the query does not take.
+Return only the JSON object."""
+
+
+def _menu_text(available: dict) -> str:
+    docs = available.get("source_docs") or {dt: dt for dt in available["sources"]}
+    families = "\n".join(f"  - {dt}: {desc}" for dt, desc in docs.items())
+    catalog = "\n".join(
+        f"  - {name} (parameters: {', '.join(sorted(set(snowlane.NAMED_QUERIES[name].get('params', {})) & set(SLOT_NAMES)) or ['none'])}): "
+        f"{snowlane.NAMED_QUERIES[name]['doc']}"
+        for name in available["named_queries"] if name in snowlane.NAMED_QUERIES)
+    return f"Document families (doc_probe sources):\n{families}\nNamed queries (member_query query_name):\n{catalog}"
+
+
+def _hash(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def menu_hash(available: dict) -> str:
+    return _hash(json.dumps({"sources": sorted(available["sources"]), "named_queries": sorted(available["named_queries"]),
+                             "source_docs": dict(sorted((available.get("source_docs") or {}).items())),
+                             "system": SYSTEM}, sort_keys=True))  # the instructions shape the plan too: edit them and plans recompute
+
+
+def translated_for_planning(conn: psycopg.Connection, question: str) -> str:
+    """What the model sees: the question with identifiers and names replaced
+    by vault tokens (decision 4). Planning runs on the owner connection
+    before any role drop, so the full translation is available; a token
+    tells the model the KIND of identifier, never the value."""
+    from raglab import deid
+    return deid.translate_query(conn, question)
+
+
+def plan_with_model(conn: psycopg.Connection, question: str, available: dict, client=None) -> Plan:
+    """Shape + legs from the pinned model in one constrained call — stored
+    plan first (decision 3), the live model on a miss, the rules plan on any
+    failure (timeout, invalid JSON, a plan that fails validation) with the
+    reason recorded. Never raises for model trouble."""
+    translated = translated_for_planning(conn, question)
+    key = (_hash(translated), menu_hash(available), PLANNER_MODEL)
+    if PLAN_CACHE:
+        row = _stored_plan(conn, key)
+        if row is not None:
+            return plan_from_dict(row["plan"], origin=row["origin"], model=PLANNER_MODEL)
+    t0 = time.perf_counter()
+    reason = None
+    try:
+        raw = _call_model(translated, available, client)
+        plan = plan_from_dict(raw, origin="model", model=PLANNER_MODEL)
+        validate(plan, question, available)
+    except Exception as exc:  # noqa: BLE001 — every model failure degrades to rules, and says why
+        reason = f"{type(exc).__name__}: {str(exc)[:200]}"
+        plan = plan_rules(question)
+        plan.model = PLANNER_MODEL
+    plan.fallback_reason = reason
+    if PLAN_CACHE:
+        _store_plan(conn, key, translated, plan, reason, (time.perf_counter() - t0) * 1000)
+    return plan
+
+
+def _call_model(translated: str, available: dict, client=None) -> dict:
+    import anthropic
+
+    client = client or anthropic.Anthropic(timeout=PLANNER_TIMEOUT_S, max_retries=1)
+    response = client.messages.create(
+        model=PLANNER_MODEL,
+        max_tokens=600,
+        system=SYSTEM,
+        messages=[{"role": "user", "content": f"Menu:\n{_menu_text(available)}\n\nQuestion: {translated}"}],
+        output_config={"format": {"type": "json_schema", "schema": PLAN_SCHEMA}},
+    )
+    text = next(b.text for b in response.content if b.type == "text")
+    return json.loads(text)
+
+
+def _stored_plan(conn, key) -> dict | None:
+    """Only a plan the MODEL produced is reused; a rules fallback is logged in
+    the same table but never answers for the model — otherwise one transient
+    timeout would pin a rules plan to that question for good."""
+    try:
+        with conn.transaction():
+            row = conn.execute("SELECT plan, origin FROM plans WHERE question_hash = %s AND menu_hash = %s AND model = %s "
+                               "AND origin = 'model'", key).fetchone()
+    except psycopg.Error:
+        return None
+    return {"plan": row[0], "origin": row[1]} if row else None
+
+
+def _store_plan(conn, key, translated: str, plan: Plan, reason: str | None, latency_ms: float) -> None:
+    try:
+        with conn.transaction():
+            conn.execute(
+                "INSERT INTO plans (question_hash, menu_hash, model, question, shape, origin, plan, fallback_reason, latency_ms) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (question_hash, menu_hash, model) DO UPDATE SET shape = EXCLUDED.shape, origin = EXCLUDED.origin, "
+                "plan = EXCLUDED.plan, fallback_reason = EXCLUDED.fallback_reason, latency_ms = EXCLUDED.latency_ms, created_at = now() "
+                "WHERE plans.origin <> 'model'",  # a model plan is never overwritten by a later fallback
+                (*key, translated, plan.shape, plan.origin, json.dumps(plan.to_dict()), reason, round(latency_ms, 1)))
+    except psycopg.Error:
+        pass  # the store is an accelerator and a log, never a gate on answering
+
+
+def plan_for(conn: psycopg.Connection, question: str, client=None) -> Plan:
+    """The plan the platform would execute for a question, by configuration:
+    the model (stored plan first) or the rules fast path."""
+    if PLANNER == "model":
+        return plan_with_model(conn, question, menu(conn), client)
+    return plan_rules(question)
+
+
+def replan(conn: psycopg.Connection, question: str, client=None) -> tuple[dict | None, Plan]:
+    """Ask the live model fresh and return (stored plan or None, fresh plan)
+    without touching the store — the non-gating drift report (decision 3)."""
+    available = menu(conn)
+    translated = translated_for_planning(conn, question)
+    stored = _stored_plan(conn, (_hash(translated), menu_hash(available), PLANNER_MODEL))
+    try:
+        fresh = plan_from_dict(_call_model(translated, available, client), origin="model", model=PLANNER_MODEL)
+        validate(fresh, question, available)
+    except Exception as exc:  # noqa: BLE001
+        fresh = plan_rules(question); fresh.fallback_reason = f"{type(exc).__name__}: {str(exc)[:200]}"
+    return (stored["plan"] if stored else None), fresh
+
+
 def compose(
     conn: psycopg.Connection,
     question: str,
@@ -180,7 +386,7 @@ def compose(
             else retrieval.Context(query=question)
         if member_id:
             ctx.record.setdefault("member_id", member_id)
-    plan = plan or plan_rules(question)
+    plan = plan or (plan_for(conn, question) if route.scope == "in_scope" else plan_rules(question))
     with watch.stage("plan"):
         validate(plan, question, menu(conn))
 

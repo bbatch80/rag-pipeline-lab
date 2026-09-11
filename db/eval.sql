@@ -57,3 +57,26 @@ CREATE TABLE IF NOT EXISTS rerank_scores (
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (model, query_hash, text_hash)
 );
+
+-- Stored plans (Phase 3 decision 3): a planner model's decision for a
+-- question is memoized on exactly what produced it — the sha256 of the
+-- TRANSLATED question (vault tokens, never raw identifiers), the sha256 of
+-- the menu it chose from (source families + named-query catalog), and the
+-- pinned model id. Edit the question, change the menu, or re-pin the model
+-- and the key changes; otherwise the CI gate reads the stored plan and never
+-- calls the model. The table doubles as the planner's decision log (decision
+-- 1: shape per question feeds the classifier trigger). RAGLAB_PLAN_CACHE=off
+-- bypasses it.
+CREATE TABLE IF NOT EXISTS plans (
+    question_hash   text NOT NULL,
+    menu_hash       text NOT NULL,
+    model           text NOT NULL,
+    question        text NOT NULL,          -- translated form: tokens, no PHI
+    shape           text NOT NULL,          -- simple | compound
+    origin          text NOT NULL,          -- model | rules (fallback)
+    plan            jsonb NOT NULL,
+    fallback_reason text,
+    latency_ms      real,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (question_hash, menu_hash, model)
+);

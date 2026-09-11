@@ -79,7 +79,7 @@ class _SharedSession:
 
 
 @mcp.tool()
-def compose_context(question: str, member_id: str | None = None) -> dict:
+def compose_context(question: str, member_id: str | None = None, module: str | None = None) -> dict:
     """Answer-ready context for ONE question that may span sources: the
     platform decides the legs (document probes over the governed corpus,
     named warehouse queries from the catalog — at most three, one pass),
@@ -89,6 +89,9 @@ def compose_context(question: str, member_id: str | None = None) -> dict:
     Use this for a question you have not already split yourself. Use
     `search_documents` / `query_member_data` when you know the exact leg.
 
+    `module` scopes the plan to a job-shaped menu — ask | agent_assist |
+    appeals_workbench | care_management | analyst_view — the way a surface
+    does; omit it only for exploration (the unscoped menu).
     `member_id` is the member context (the member the user has open).
     Identifiers in the question are resolved by the platform — never
     guessed; a well-formed ID that matches nobody is reported in
@@ -106,7 +109,7 @@ def compose_context(question: str, member_id: str | None = None) -> dict:
     with db.connect() as conn:
         ident = _identity(conn)
         caller = planner.Caller(persona=ident.persona, warehouse_role=ident.warehouse_role, user_id=ident.user_id)
-        return planner.compose(conn, question, caller, member_id=member_id, source="mcp",
+        return planner.compose(conn, question, caller, member_id=member_id, source="mcp", module=module,
                                sf_connect=lambda role: _SharedSession(_snowflake(role)))
 
 

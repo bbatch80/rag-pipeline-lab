@@ -390,6 +390,8 @@ def run_named_query(sf_conn, query_name: str, params: dict, payload_id: str | No
     bound = {"member_id": None, "last_name": None, "first_name": None, "limit": 20,
              "claim_id": None, "case_id": None, "npi": None, "name": None, "plan_code": None,
              "speciality": None, "zip_prefix": None}
+    bound.update({k: None for k in spec.get("params", {})})  # every declared parameter is bound, absent = no filter
+    bound["limit"] = 20
     bound.update({k: v for k, v in params.items() if v is not None})
     cur = sf_conn.cursor()
     role = cur.execute("SELECT CURRENT_ROLE()").fetchone()[0]

@@ -1170,7 +1170,8 @@ def snowflake_verify_cmd():
               help="public | employee | care_team | member_services | appeals (omit for admin full view)")
 @click.option("--member-id", default=None, help="Member context: the member the surface has open.")
 @click.option("--no-plan", is_flag=True, help="The v1 path: one document probe, spec 1.0.0 shape, no plan.")
-def query_cmd(prompt: str, persona: str | None, member_id: str | None, no_plan: bool):
+@click.option("--module", default=None, help="Job-shaped module whose menu bounds the plan: ask | agent_assist | appeals_workbench | care_management | analyst_view (omit = unscoped experiment).")
+def query_cmd(prompt: str, persona: str | None, member_id: str | None, no_plan: bool, module: str | None):
     """Run a prompt through the full funnel and print the context payload —
     exactly what a consuming model receives. Plans by default (Phase 3): the
     rules fast path today, the pinned planner model from P3-PR2."""
@@ -1184,7 +1185,7 @@ def query_cmd(prompt: str, persona: str | None, member_id: str | None, no_plan: 
             built = run_query(conn, prompt, persona=persona, source="interactive", member_id=member_id)
         else:
             built = planner.compose(conn, prompt, planner.Caller(persona=persona), member_id=member_id,
-                                    source="interactive")
+                                    source="interactive", module=module)
     click.echo(json.dumps(built, indent=2, default=str))
 
 

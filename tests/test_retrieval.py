@@ -224,13 +224,18 @@ def test_context_turns_identifiers_into_filters(db):
 
     if not _has_roster(db):
         pytest.skip("needs the synthea roster (not in CI's fresh database)")
-    case, patient, claim = db.execute("SELECT case_id, patient, claim_id FROM synthea.appeals LIMIT 1").fetchone()
+    case, patient, claim, policy = db.execute("SELECT case_id, patient, claim_id, policy_id FROM synthea.appeals LIMIT 1").fetchone()
     question = f"Why was appeal {case} overturned, and which policy applied?"
     ctx = retrieval.resolve_context(db, None, question)
-    assert ctx.member_key == str(patient) and ctx.record == {"case_id": case}
-    assert ctx.query == question, "the ranking query keeps the identifier (measured: stripping loses the ranker's cue)"
+    # A case names its claim and the policy applied (Phase 3 decision 5): all
+    # three are record context, bound by key before any search or plan.
+    assert ctx.member_key == str(patient)
+    assert ctx.record["case_id"] == case and ctx.record["claim_id"] == claim
+    assert ctx.record.get("policy_id") == policy if policy else "policy_id" not in ctx.record
+    assert ctx.query.startswith(question), "the ranking query keeps the identifier (measured: stripping loses the ranker's cue)"
+    assert ctx.as_of is not None, "the claim's date of service is bound from the case"
     ctx = retrieval.resolve_context(db, None, f"What happened with claim {claim}?")
-    assert ctx.record == {"claim_id": claim}
+    assert ctx.record["claim_id"] == claim and "case_id" not in ctx.record
 
 
 def test_context_can_strip_identifiers_for_the_ab(db, monkeypatch):

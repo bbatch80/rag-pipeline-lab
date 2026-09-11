@@ -67,9 +67,24 @@ class Route:
     # or None → the end of the routed year (undated → today's version).
     as_of: str | None = None
     change: bool = False  # change language: per-year / per-version search
+    # The coverage rule (Phase 3.5): the question named a level of a source's
+    # declared hierarchy but not the level beneath it — cover every key
+    # beneath (one search per key, best evidence per key, coverage stated).
+    # Today: program named, plan not -> cover_field 'plan_code', keys = that
+    # program's plan codes. Years are covered by the multi-year mechanism.
+    cover_field: str | None = None
+    cover_keys: tuple[str, ...] = ()
+    cover_asked: str | None = None  # the named level's value ('PSHB')
 
 
-def route(query: str) -> Route:
+# The registry declares these (sources.hierarchy, migration 024); the router
+# falls back to this copy when called without a registry (pure callers, tests).
+DEFAULT_HIERARCHIES = {"brochure": ("program", "plan_code", "year"), "clinical_policy": ("policy_id", "version"),
+                       "carrier_letter": ("year",), "rates": ("year",)}
+_FEHB = re.compile(r"\bfehb\b|\bfederal employees health benefits\b", re.IGNORECASE)
+
+
+def route(query: str, hierarchies: dict[str, tuple[str, ...]] | None = None) -> Route:
     reasons = []
 
     for carrier in _OTHER_CARRIERS:
@@ -136,6 +151,15 @@ def route(query: str) -> Route:
     as_of = as_of_date(query)
     if as_of:
         reasons.append(f"as of {as_of}")
+    cover_field, cover_keys, cover_asked = None, (), None
+    program = "PSHB" if _PSHB.search(query) else ("FEHB" if _FEHB.search(query) else None)
+    if program and not plans and "plan_code" in (hierarchies or DEFAULT_HIERARCHIES).get("brochure", ()):
+        # The coverage rule: a level named (program), the level beneath it not
+        # (plan) -> search every plan of that program and keep the best of each.
+        cover_field, cover_asked = "plan_code", program
+        cover_keys = tuple(dict.fromkeys(program_codes.values()))
+        plans = list(cover_keys)
+        reasons.append(f"program named, no plan -> cover every {program} plan {cover_keys}")
     return Route(
         scope="in_scope",
         years=years,
@@ -143,6 +167,9 @@ def route(query: str) -> Route:
         reasons=tuple(reasons),
         as_of=as_of,
         change=change,
+        cover_field=cover_field,
+        cover_keys=cover_keys,
+        cover_asked=cover_asked,
     )
 
 

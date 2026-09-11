@@ -329,6 +329,22 @@ def search(
     eval's sabotage passes a junk-vector function)."""
     from dataclasses import replace
 
+    if route.cover_field == "plan_code" and len(route.cover_keys) >= 2:
+        # The coverage rule: one search per covered plan, merged — one blended
+        # pool lets the plan with the most brochure text crowd the others out
+        # (the PSHB probe: three plans asked about, one answered).
+        per_key = max(15, fused_limit // len(route.cover_keys))
+        merged, seen = [], set()
+        for code in route.cover_keys:
+            sub = search(conn, query_text, query_vector,
+                         replace(route, plan_codes=(code,), cover_field=None, cover_keys=(), cover_asked=None),
+                         fused_limit=per_key, embed=embed, member_key=member_key, record=record)
+            for c in sub:
+                if c.chunk_id not in seen:
+                    merged.append(c)
+                    seen.add(c.chunk_id)
+        return merged
+
     if len(route.years) >= 2:
         from raglab import router as router_mod
 

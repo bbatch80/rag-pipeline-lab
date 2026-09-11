@@ -182,6 +182,7 @@ def rerank_text(c: Candidate) -> str:
 def rerank(
     query: str, candidates: list[Candidate], top_n: int = TOP_N_OUT,
     stratify_years: tuple[int, ...] = (),
+    stratify_plans: tuple[str, ...] = (),
 ) -> list[Candidate]:
     """Returns the top_n candidates by cross-encoder score, scores attached.
 
@@ -224,6 +225,11 @@ def rerank(
         candidate.rerank_score = score
     ordered = sorted(candidates, key=lambda c: c.rerank_score, reverse=True)
 
+    if len(stratify_plans) >= 2 and len(stratify_years) < 2:
+        # The coverage rule: every covered plan's best chunk near the top, by
+        # rank within its plan (scores ARE comparable here — same query).
+        return _interleave(ordered, {code: [c for c in ordered if c.plan_code == code] for code in stratify_plans}, top_n)
+
     if len(stratify_years) < 2:
         return ordered[:top_n]
 
@@ -231,15 +237,20 @@ def rerank(
     # scores are not comparable: interleave by RANK within each year, latest
     # year first, so the top of every year is near the top of the list.
     lanes = {year: [c for c in ordered if c.year == year] for year in sorted(stratify_years, reverse=True)}
+    return _interleave(ordered, lanes, top_n)
+
+
+def _interleave(ordered: list[Candidate], lanes: dict, top_n: int) -> list[Candidate]:
+    """Round-robin the lanes by rank so every lane's best is near the top;
+    chunks outside every lane fill the rest."""
     picked, picked_ids = [], set()
     while len(picked) < top_n and any(lanes.values()):
-        for year in list(lanes):
-            if lanes[year] and len(picked) < top_n:
-                c = lanes[year].pop(0)
+        for key in list(lanes):
+            if lanes[key] and len(picked) < top_n:
+                c = lanes[key].pop(0)
                 if c.chunk_id not in picked_ids:
                     picked.append(c)
                     picked_ids.add(c.chunk_id)
-    # Chunks with no year affinity (shouldn't exist post-filter) fill the rest.
     for c in ordered:
         if len(picked) >= top_n:
             break

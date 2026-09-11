@@ -31,6 +31,7 @@ class Source:
     cadence: str
     churn_eligible: bool
     status: str
+    hierarchy: tuple[str, ...] = ()  # declared metadata hierarchy, top level first (migration 024)
 
     def gate_rules(self) -> GateRules:
         median_range = None
@@ -46,11 +47,16 @@ class Source:
 _COLUMNS = (
     "source_id, key, display_name, department, lane, acl_tag, doc_type, dir, parser, "
     "chunk_profile, gate_min_chunks, gate_median_low, gate_median_high, "
-    "gate_expected_terms, phi, cadence, churn_eligible, status"
+    "gate_expected_terms, phi, cadence, churn_eligible, status, hierarchy"
 )
 
 
 class Registry:
+    def hierarchies(self) -> dict[str, tuple[str, ...]]:
+        """doc_type -> declared metadata hierarchy (top level first), for the
+        router's one coverage rule."""
+        return {s.doc_type: s.hierarchy for s in self.all if s.doc_type and s.hierarchy}
+
     """All sources, addressable by key or by doc_type."""
 
     def __init__(self, rows: list[Source]):
@@ -71,5 +77,5 @@ class Registry:
 def load(conn: psycopg.Connection) -> Registry:
     rows = conn.execute(f"SELECT {_COLUMNS} FROM sources ORDER BY source_id").fetchall()
     return Registry([
-        Source(*row[:13], tuple(row[13] or ()), *row[14:]) for row in rows
+        Source(*row[:13], tuple(row[13] or ()), *row[14:18], tuple(row[18] or ())) for row in rows
     ])

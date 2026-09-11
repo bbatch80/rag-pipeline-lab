@@ -228,7 +228,10 @@ def rerank(
     if len(stratify_plans) >= 2 and len(stratify_years) < 2:
         # The coverage rule: every covered plan's best chunk near the top, by
         # rank within its plan (scores ARE comparable here — same query).
-        return _interleave(ordered, {code: [c for c in ordered if c.plan_code == code] for code in stratify_plans}, top_n)
+        lanes = {code: [c for c in ordered if c.plan_code == code] for code in stratify_plans}
+        # strongest plan leads; every plan still gets its seat in the round-robin
+        lanes = dict(sorted(lanes.items(), key=lambda kv: -(kv[1][0].rerank_score if kv[1] else -1)))
+        return _interleave(ordered, lanes, top_n)
 
     if len(stratify_years) < 2:
         return ordered[:top_n]
@@ -266,6 +269,9 @@ def abstention_verdict(reranked: list[Candidate]) -> tuple[bool, float]:
     it; the payload maps it to insufficient_evidence."""
     if not reranked:
         return True, 0.0
-    best = reranked[0].rerank_score or 0.0
+    # The best score in the list, not the first chunk's: year and plan
+    # interleaving put a lane's top chunk first, and it understated
+    # confidence (0.33 shown with 0.67 in the list; backlog 9d).
+    best = max((c.rerank_score or 0.0) for c in reranked)
     cleared = any((c.rerank_score or 0.0) >= threshold_for(c.doc_type) for c in reranked)
     return not cleared, best

@@ -1274,6 +1274,9 @@ def trace_cmd(question: str, persona: str | None, module: str | None, member_id:
                 click.echo(f"    {ev['status']} — {ev['reason']}")
         elif st == "composed":
             click.echo(f"[{step}] COMPOSED — status {ev['status']}; missing {ev['missing'] or 'nothing'}; {ev['chunks']} chunks; confidence {ev['confidence']}; subject {ev['subject'] or 'none'}" + ("; policy date defaulted to today" if ev["as_of_defaulted"] else ""))
+            cov = ev.get("coverage")
+            if cov:
+                click.echo(f"    COVERAGE — {cov['asked']} has {len(cov['keys'])} plans {cov['keys']}; evidence here for {cov['with_evidence']}; in the corpus for these years {cov['in_corpus']}; missing from the corpus {cov['missing_from_corpus'] or 'none'}")
         elif st == "disclosed":
             tm = {k: v for k, v in (ev["timings"] or {}).items() if k != "host"}
             click.echo(f"[{step}] DISCLOSED — payload {ev['payload_id']} logged (source {ev['source']}); ms per stage {tm}")

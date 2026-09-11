@@ -496,7 +496,7 @@ def compose(
         built["member_context"] = member_id
         built["record_context"] = {**ctx.record, **({"as_of": ctx.as_of} if ctx.as_of else {})}
     _t(trace, "composed", status=built["status"], missing=list(built["missing"]), chunks=len(chunks),
-       confidence=built.get("confidence"), as_of_defaulted=as_of_defaulted, subject=built["subject"])
+       confidence=built.get("confidence"), as_of_defaulted=as_of_defaulted, subject=built["subject"], coverage=coverage)
     _disclose_and_commit(conn, built, all_reranked, source, caller.user_id, watch)
     _t(trace, "disclosed", payload_id=built["payload_id"], source=source, timings=built.get("timings"))
     return built

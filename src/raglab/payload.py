@@ -50,6 +50,7 @@ def build(
             "years": list(route.years),
             "plan_codes": list(route.plan_codes),
             "as_of": route.as_of,
+            "plan_from_enrollment": route.plan_from_enrollment,
         },
         "chunks": [
             {

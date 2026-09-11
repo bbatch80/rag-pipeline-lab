@@ -84,6 +84,7 @@ def _probe(conn, query: str, persona: str | None, ctx: retrieval.Context, watch:
         from raglab import deid
 
         decision = retrieval.expand_versions(conn, decision, ctx, query)
+        decision = retrieval.bind_enrollment_plan(decision, ctx)
         with watch.stage("translate"):
             if persona is None or persona == "care_team":
                 search_query = deid.translate_query(conn, query)

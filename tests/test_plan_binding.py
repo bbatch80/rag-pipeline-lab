@@ -1,0 +1,60 @@
+"""Phase 3.5 build 2: a member question that names no plan searches the
+member's OWN plan — looked up from enrollment by member id when the member
+key is bound, never taken from the screen and never guessed by a model. A
+named plan wins; no enrollment row leaves the route unchanged."""
+import pytest
+
+from raglab import retrieval, router
+from raglab.retrieval import Context
+
+
+def test_enrolled_plan_is_bound_when_the_question_names_none():
+    route = router.route("What's their copay for an urgent-care visit?")
+    ctx = Context(member_key="k", enrollment={2025: "71-018", 2026: "71-018"})
+    bound = retrieval.bind_enrollment_plan(route, ctx)
+    assert bound.plan_codes == ("71-018",) and bound.plan_from_enrollment is True
+    assert any("from enrollment" in r for r in bound.reasons)
+
+
+def test_a_named_plan_wins_and_no_enrollment_leaves_the_route_alone():
+    named = router.route("What does the High Option cover for urgent care?")
+    ctx = Context(member_key="k", enrollment={2026: "71-018"})
+    assert retrieval.bind_enrollment_plan(named, ctx).plan_codes == named.plan_codes  # the question's plan, not enrollment's
+    assert retrieval.bind_enrollment_plan(named, ctx).plan_from_enrollment is False
+    plain = router.route("What's their copay for an urgent-care visit?")
+    assert retrieval.bind_enrollment_plan(plain, Context(member_key="k")) is plain  # no enrollment row -> unchanged
+    assert retrieval.bind_enrollment_plan(plain, Context()) is plain               # no member -> unchanged
+
+
+def test_multi_year_questions_bind_each_routed_year_s_plan():
+    route = router.route("How did their urgent care copay change from last year?")
+    assert set(route.years) == {2025, 2026}
+    ctx = Context(member_key="k", enrollment={2025: "71-006", 2026: "71-018"})
+    assert set(retrieval.bind_enrollment_plan(route, ctx).plan_codes) == {"71-006", "71-018"}
+
+
+def test_probe_searches_only_the_members_plan(db, monkeypatch):
+    """Under the fixture: three 2026 brochures; the member is enrolled in
+    71-018; a member question returns 71-018 chunks only."""
+    from test_governance import _seed_tiers
+    from raglab import pipeline
+    _seed_tiers(db, per_tier=0, embed=True)
+    vec = "[" + ",".join(["0.5"] * 1536) + "]"
+    for code in ("71-006", "71-018", "71-021"):
+        doc = db.execute("INSERT INTO documents (source_path, title, content_hash, acl_tag, source_id) VALUES (%s, %s, 'h', 'public', 1) RETURNING id",
+                         (f"t/{code}.pdf", f"GEHA {code} 2026")).fetchone()[0]
+        db.execute("INSERT INTO chunks (document_id, chunk_index, content, acl_tag, year, plan_code, doc_type, embedding) "
+                   "VALUES (%s, 0, %s, 'public', 2026, %s, 'brochure', %s)", (doc, f"urgent care copay {code}", code, vec))
+    db.execute("SET LOCAL enable_indexscan = off")
+    monkeypatch.setattr("raglab.retrieval.embed_query", lambda t: vec)
+    monkeypatch.setattr(retrieval, "_enrollment_plans", lambda conn, key: {2026: "71-018"})
+    import raglab.rerank as rr
+
+    class _M:
+        def predict(self, pairs): return [0.9] * len(pairs)
+    monkeypatch.setattr(rr, "_model", _M())
+    ctx = retrieval.Context(member_key="00000000-0000-4000-8000-000000000001", enrollment={2026: "71-018"})
+    from raglab.timing import Stopwatch
+    probe = pipeline._probe(db, "urgent care copay", "public", ctx, Stopwatch())
+    assert probe.decision.plan_codes == ("71-018",) and probe.decision.plan_from_enrollment
+    assert {c.plan_code for c in probe.reranked} == {"71-018"}

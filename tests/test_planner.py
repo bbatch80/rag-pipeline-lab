@@ -124,6 +124,12 @@ def test_warehouse_leg_runs_as_the_callers_role_with_bound_parameters(db, monkey
     def connect(role):
         seen["role"] = role; return _SF()
 
+    # The claim resolves through the Synthea population, which CI's fresh
+    # database does not load: supply the resolved context so the test checks
+    # the binding path itself, not the population.
+    from raglab.retrieval import Context
+    monkeypatch.setattr(planner.retrieval, "resolve_context",
+                        lambda conn, member_id, q: Context(query=q, record={"claim_id": "CLM-1363781509"}, as_of="2024-08-01"))
     plan = _plan({"name": "adj", "kind": "member_query", "query_name": "claim_adjudication", "slots": ["claim_id"]})
     out = planner.compose(_NoCommit(db), "Was claim CLM-1363781509 denied?", _caller("appeals", "APPEALS_ANALYST"), plan=plan, sf_connect=connect)
     assert seen["role"] == "APPEALS_ANALYST" and seen["closed"]
@@ -131,6 +137,7 @@ def test_warehouse_leg_runs_as_the_callers_role_with_bound_parameters(db, monkey
     assert bound["claim_id"] == "CLM-1363781509"
     assert out["status"] == "ok" and out["warehouse_results"][0]["row_count"] == 1
     assert out["chunks"] == [] and out["plan"]["shape"] == "simple"
+    assert out["record_context"]["as_of"] == "2024-08-01"  # decision 5: bound before planning, from the lookup
 
 
 def test_widen_once_runs_only_on_insufficient_evidence_and_only_once(db, monkeypatch):

@@ -311,7 +311,14 @@ by shape, check digit, and lookup, and bound to every leg by the platform; a
 leg carrying an identifier the question did not is rejected before anything
 runs. Plans are one pass — no leg is decided from another's result — with a
 single widen-once retry for a hinted document leg that found nothing.
-`raglab query` plans by default; `--no-plan` runs the single-probe path.
+Composition is scoped to job-shaped modules over the one governed layer —
+`ask`, `agent_assist`, `appeals_workbench`, `care_management`,
+`analyst_view` — each a fixed menu of document families and named queries.
+The planner chooses only from the module's menu; the caller's entitlement
+trims it further at execution. A document leg searches the module's whole
+document menu, so a source hint can never hide a conflicting source.
+`raglab query --module <name>` plans within a module; `--no-plan` runs the
+single-probe path.
 
 The plan comes from a pinned model (Haiku 4.5) in one schema-constrained
 call: it sees the question with identifiers and names replaced by vault

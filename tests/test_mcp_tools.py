@@ -26,17 +26,23 @@ def test_unknown_query_name_refused_with_catalog():
     assert set(result["known_queries"]) == set(snowlane.NAMED_QUERIES)
 
 
-def test_golden_two_lane_schema():
-    """Offline: two-lane golden entries carry both decomposed halves and a
-    known identity (the live assertions run in test_two_lane_golden.py)."""
+def test_golden_compound_schema():
+    """Offline: compound golden entries carry a known identity and their
+    expected legs from the menu (the live execution runs in
+    test_two_lane_golden.py; routing accuracy in the eval)."""
     from raglab.ablation import load_golden
 
-    two_lane = [g for g in load_golden() if g["category"] == "two_lane"]
-    assert len(two_lane) == 7
-    for item in two_lane:
+    compound = [g for g in load_golden() if g["category"] == "compound"]
+    assert len(compound) >= 10
+    for item in compound:
         assert item["identity"] in IDENTITIES
-        assert item["doc_probe"] and item["doc_anchor"]
-        assert "query_name" in item["member_query"]
+        assert 1 <= len(item["expected_legs"]) <= 3
+        for leg in item["expected_legs"]:
+            assert leg["kind"] in ("doc_probe", "member_query")
+            if leg["kind"] == "member_query":
+                names = leg.get("query_name_any") or [leg["query_name"]]
+                assert set(names) <= set(snowlane.NAMED_QUERIES), names
+        assert item.get("required_evidence") or item.get("expect_status")
 
 
 def test_public_identity_gets_no_member_data(monkeypatch):
@@ -82,8 +88,8 @@ def test_compose_context_runs_as_the_session_identity_never_a_parameter(monkeypa
     monkeypatch.setattr(server, "PERSONA", "appeals")
     seen = {}
 
-    def fake_compose(conn, question, caller, member_id=None, plan=None, source="interactive", sf_connect=None):
-        seen.update(question=question, caller=caller, member_id=member_id, plan=plan, source=source)
+    def fake_compose(conn, question, caller, member_id=None, plan=None, source="interactive", sf_connect=None, module=None):
+        seen.update(question=question, caller=caller, member_id=member_id, plan=plan, source=source, module=module)
         session = sf_connect("APPEALS_ANALYST")
         session.close()  # a leg closes what it is handed
         seen["session"] = session
@@ -97,8 +103,8 @@ def test_compose_context_runs_as_the_session_identity_never_a_parameter(monkeypa
 
     monkeypatch.setattr(planner, "compose", fake_compose)
     monkeypatch.setattr(server, "_snowflake", lambda role: _Conn())
-    out = _fn(compose_context)("Was claim CLM-1363781509 denied, and did the member appeal it?", member_id="M344317862")
-    assert out["status"] == "ok"
+    out = _fn(compose_context)("Was claim CLM-1363781509 denied, and did the member appeal it?", member_id="M344317862", module="appeals_workbench")
+    assert out["status"] == "ok" and seen["module"] == "appeals_workbench"
     assert seen["caller"].persona == "appeals" and seen["caller"].warehouse_role == "APPEALS_ANALYST"
     assert seen["member_id"] == "M344317862" and seen["plan"] is None and seen["source"] == "mcp"
     assert seen["session"].cursor() == "cursor"

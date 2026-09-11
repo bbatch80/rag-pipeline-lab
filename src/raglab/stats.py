@@ -8,6 +8,7 @@ import math
 BINARY_METRICS = frozenset({
     "hit@5", "gate_correct", "wrong_abstention", "deny_clean", "scope_clean", "version_clean",
     "allow_answered", "allow_hit", "abstained", "shape_accuracy",
+    "routing_accuracy", "complete_recall", "widened_rescue", "adversarial_ok",
 })
 
 

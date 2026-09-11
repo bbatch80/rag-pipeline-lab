@@ -57,7 +57,7 @@ class Leg:
 
     def to_dict(self) -> dict:
         return {"name": self.name, "kind": self.kind, "text": self.text, "sources": list(self.sources),
-                "query_name": self.query_name, "slots": list(self.slots), "required": self.required}
+                "query_name": self.query_name, "slots": list(self.slots), "params": dict(self.params), "required": self.required}
 
 
 @dataclass
@@ -68,9 +68,10 @@ class Plan:
     model: str | None = None
     widened: bool = False
     fallback_reason: str | None = None
+    module: str | None = None
 
     def to_dict(self) -> dict:
-        return {"shape": self.shape, "origin": self.origin, "model": self.model, "widened": self.widened,
+        return {"shape": self.shape, "origin": self.origin, "model": self.model, "module": self.module, "widened": self.widened,
                 "fallback_reason": self.fallback_reason, "legs": [leg.to_dict() for leg in self.legs]}
 
 
@@ -80,6 +81,27 @@ class Caller:
     persona: str | None = None
     warehouse_role: str | None = None
     user_id: int | None = None
+
+
+# Job-shaped modules over the unified layer (Phase 3 decision 7): each
+# interface gets a fixed menu of document families and named queries. The
+# planner chooses ONLY from the module's menu; the caller's entitlement
+# (RLS, warehouse grants) trims it further at execution. module=None is the
+# unscoped menu — the MCP experiment and the eval's shape metric, never a
+# production surface.
+BENEFITS_DOCS = ("brochure", "rates", "sop", "bulletin", "formulary", "kb", "clinical_policy", "carrier_letter")
+MEMBER_QUERIES = ("member_calls", "member_recent_claims", "member_claims_summary", "member_enrollment",
+                  "claim_adjudication", "member_denials", "provider_lookup", "provider_network_status", "providers_by_specialty")
+MODULES = {
+    "ask": {"sources": BENEFITS_DOCS, "named_queries": ()},
+    "agent_assist": {"sources": ("call_note",) + BENEFITS_DOCS, "named_queries": MEMBER_QUERIES},
+    "appeals_workbench": {"sources": ("appeal", "call_note", "clinical_note") + BENEFITS_DOCS,
+                          "named_queries": ("appeal_case", "member_appeals") + MEMBER_QUERIES},
+    "care_management": {"sources": ("clinical_note", "clinical_policy", "brochure", "formulary"),
+                        "named_queries": ("member_claims_summary", "member_recent_claims", "member_enrollment")},
+    "analyst_view": {"sources": ("brochure", "rates", "clinical_policy", "carrier_letter", "formulary"),
+                     "named_queries": ("cost_by_condition", "providers_by_specialty", "provider_network_status")},
+}
 
 
 # What each document family CONTAINS, for the planner's menu — the registry
@@ -101,7 +123,7 @@ SOURCE_GUIDE = {
 }
 
 
-def menu(conn: psycopg.Connection) -> dict:
+def menu(conn: psycopg.Connection, module: str | None = None) -> dict:
     """The fixed menu a plan may choose from: document source families that
     are ingested (with the registry's one-line description, so the model can
     tell call NOTES — what was said — from the call LOG in the warehouse),
@@ -114,8 +136,14 @@ def menu(conn: psycopg.Connection) -> dict:
     except psycopg.Error:
         rows = []
     registry = {dt: f"{name} ({dept})" for dt, name, dept in rows}
-    return {"sources": ingested, "named_queries": tuple(snowlane.NAMED_QUERIES),
-            "source_docs": {dt: SOURCE_GUIDE.get(dt, registry.get(dt, dt)) for dt in ingested}}
+    sources, queries = ingested, tuple(snowlane.NAMED_QUERIES)
+    if module is not None:
+        if module not in MODULES:
+            raise PlanError(f"unknown module {module!r}; expected one of {sorted(MODULES)}")
+        sources = tuple(dt for dt in ingested if dt in MODULES[module]["sources"])
+        queries = tuple(q for q in MODULES[module]["named_queries"] if q in snowlane.NAMED_QUERIES)
+    return {"module": module, "sources": sources, "named_queries": queries,
+            "source_docs": {dt: SOURCE_GUIDE.get(dt, registry.get(dt, dt)) for dt in sources}}
 
 
 def plan_rules(question: str) -> Plan:
@@ -127,7 +155,7 @@ def plan_rules(question: str) -> Plan:
 def plan_from_dict(spec: dict, origin: str = "caller", model: str | None = None) -> Plan:
     legs = [Leg(name=l.get("name") or f"leg{i + 1}", kind=l["kind"], text=l.get("text"),
                 sources=tuple(l.get("sources") or ()), query_name=l.get("query_name"),
-                slots=tuple(l.get("slots") or ()), params=dict(l.get("params") or {}),
+                slots=tuple(l.get("slots") or ()), params={k: v for k, v in (l.get("params") or {}).items() if v is not None},
                 required=bool(l.get("required", True)))
             for i, l in enumerate(spec.get("legs", []))]
     return Plan(shape=spec.get("shape") or ("compound" if len(legs) > 1 else "simple"), legs=legs, origin=origin, model=model)
@@ -164,6 +192,8 @@ def validate(plan: Plan, question: str, available: dict) -> None:
             bad = set(leg.params) - allowed
             if bad:
                 raise PlanError(f"leg {leg.name}: parameters not accepted by {leg.query_name}: {sorted(bad)}")
+            if set(leg.params) & {"last_name", "first_name", "name"}:
+                raise PlanError(f"leg {leg.name}: a person's name is never a query parameter (names never resolve)")
             for k, v in leg.params.items():
                 if k in SLOT_NAMES or re.search(r"\d{7,}", str(v)):
                     raise PlanError(f"leg {leg.name}: {k} is bound from context, never written into a plan")
@@ -181,7 +211,18 @@ def bind_slots(leg: Leg, ctx: retrieval.Context, member_id: str | None, route: r
     values = {"member_id": member_id or _member_id_of(ctx), "claim_id": ctx.record.get("claim_id"),
               "case_id": ctx.record.get("case_id"), "plan_code": (route.plan_codes or (None,))[0],
               "as_of": ctx.as_of}
-    bound = dict(leg.params)
+    # Free-text params arrive as strings from a plan; the catalog declares each
+    # parameter's type (limit is int) — cast to it, or the SQL fails to compile.
+    declared = snowlane.NAMED_QUERIES.get(leg.query_name, {}).get("params", {})
+    bound = {}
+    for k, v in leg.params.items():
+        t = declared.get(k)
+        if t is int:
+            try:
+                v = int(str(v).strip())
+            except ValueError as exc:
+                raise PlanError(f"leg {leg.name}: {k} must be an integer, got {v!r}") from exc
+        bound[k] = v
     for slot in leg.slots:
         if slot not in values:
             raise PlanError(f"leg {leg.name}: unknown slot {slot!r}")
@@ -202,6 +243,12 @@ PLAN_CACHE = os.environ.get("RAGLAB_PLAN_CACHE", "on") != "off"
 PLANNER_MODEL = os.environ.get("RAGLAB_PLANNER_MODEL", "claude-haiku-4-5-20251001")  # pinned: the key of every stored plan
 PLANNER_TIMEOUT_S = float(os.environ.get("RAGLAB_PLANNER_TIMEOUT", "8"))
 
+# The catalog's free-text parameters (never identifiers, never names): the
+# closed set a plan's `params` object may carry.
+FREE_TEXT_PARAMS = tuple(sorted({
+    param for spec in snowlane.NAMED_QUERIES.values() for param in spec.get("params", {})
+} - set(SLOT_NAMES) - {"last_name", "first_name", "name"}))
+
 PLAN_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -212,7 +259,7 @@ PLAN_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object", "additionalProperties": False,
-                "required": ["name", "kind", "text", "sources", "query_name", "slots", "required"],
+                "required": ["name", "kind", "text", "sources", "query_name", "slots", "params", "required"],
                 "properties": {
                     "name": {"type": "string"},
                     "kind": {"type": "string", "enum": list(LEG_KINDS)},
@@ -220,6 +267,8 @@ PLAN_SCHEMA = {
                     "sources": {"type": "array", "items": {"type": "string"}},
                     "query_name": {"type": ["string", "null"]},
                     "slots": {"type": "array", "items": {"type": "string", "enum": list(SLOT_NAMES)}},
+                    "params": {"type": "object", "additionalProperties": False,  # the API's constrained decoding needs a closed object
+                               "properties": {name: {"type": ["string", "null"]} for name in FREE_TEXT_PARAMS}},
                     "required": {"type": "boolean"},
                 },
             },
@@ -233,7 +282,7 @@ Decide the SHAPE: "simple" when one search or one catalog query answers it; "com
 
 Each leg is one of:
 - doc_probe: a search over documents. Give `text` — the sub-question this leg should rank on, written in the question's own words and tokens. `sources` is a list of document families to search (from the menu), or [] for every family the caller may see. `query_name` null, `slots` [].
-- member_query: one named warehouse query from the catalog (menu). Give `query_name`. `slots` lists which identifiers from the question it needs: member_id, claim_id, case_id, npi, plan_code, as_of. `text` null, `sources` [].
+- member_query: one named warehouse query from the catalog (menu). Give `query_name`. `slots` lists which identifiers from the question it needs: member_id, claim_id, case_id, npi, plan_code, as_of. `params` carries the query's FREE-TEXT parameters only (e.g. description_like as an ILIKE pattern like '%asthma%', speciality, zip_prefix, limit) — never an identifier. `text` null, `sources` [].
 
 Rules:
 - Identifiers appear as tokens like [MEMBER_ID-12], [CLAIM_ID-7], [CASE_ID-3], [PERSON-5], [DATE_TIME-9]. Never invent, alter, or expand a token; copy tokens exactly when a leg's text needs them. You never write identifier values — the platform binds them.
@@ -248,7 +297,8 @@ def _menu_text(available: dict) -> str:
     docs = available.get("source_docs") or {dt: dt for dt in available["sources"]}
     families = "\n".join(f"  - {dt}: {desc}" for dt, desc in docs.items())
     catalog = "\n".join(
-        f"  - {name} (parameters: {', '.join(sorted(set(snowlane.NAMED_QUERIES[name].get('params', {})) & set(SLOT_NAMES)) or ['none'])}): "
+        f"  - {name} (slots: {', '.join(sorted(set(snowlane.NAMED_QUERIES[name].get('params', {})) & set(SLOT_NAMES)) or ['none'])}; "
+        f"free-text params: {', '.join(sorted(set(snowlane.NAMED_QUERIES[name].get('params', {})) - set(SLOT_NAMES) - {'last_name', 'first_name', 'name'}) or ['none'])}): "
         f"{snowlane.NAMED_QUERIES[name]['doc']}"
         for name in available["named_queries"] if name in snowlane.NAMED_QUERIES)
     return f"Document families (doc_probe sources):\n{families}\nNamed queries (member_query query_name):\n{catalog}"
@@ -259,7 +309,7 @@ def _hash(text: str) -> str:
 
 
 def menu_hash(available: dict) -> str:
-    return _hash(json.dumps({"sources": sorted(available["sources"]), "named_queries": sorted(available["named_queries"]),
+    return _hash(json.dumps({"module": available.get("module"), "sources": sorted(available["sources"]), "named_queries": sorted(available["named_queries"]),
                              "source_docs": dict(sorted((available.get("source_docs") or {}).items())),
                              "system": SYSTEM}, sort_keys=True))  # the instructions shape the plan too: edit them and plans recompute
 
@@ -342,18 +392,18 @@ def _store_plan(conn, key, translated: str, plan: Plan, reason: str | None, late
         pass  # the store is an accelerator and a log, never a gate on answering
 
 
-def plan_for(conn: psycopg.Connection, question: str, client=None) -> Plan:
+def plan_for(conn: psycopg.Connection, question: str, client=None, module: str | None = None) -> Plan:
     """The plan the platform would execute for a question, by configuration:
-    the model (stored plan first) or the rules fast path."""
+    the model (stored plan first) over the module's menu, or the rules fast path."""
     if PLANNER == "model":
-        return plan_with_model(conn, question, menu(conn), client)
+        return plan_with_model(conn, question, menu(conn, module), client)
     return plan_rules(question)
 
 
-def replan(conn: psycopg.Connection, question: str, client=None) -> tuple[dict | None, Plan]:
+def replan(conn: psycopg.Connection, question: str, client=None, module: str | None = None) -> tuple[dict | None, Plan]:
     """Ask the live model fresh and return (stored plan or None, fresh plan)
     without touching the store — the non-gating drift report (decision 3)."""
-    available = menu(conn)
+    available = menu(conn, module)
     translated = translated_for_planning(conn, question)
     stored = _stored_plan(conn, (_hash(translated), menu_hash(available), PLANNER_MODEL))
     try:
@@ -372,6 +422,7 @@ def compose(
     plan: Plan | None = None,
     source: str = "interactive",
     sf_connect=None,
+    module: str | None = None,
 ) -> dict:
     """Plan -> execute every leg as the caller -> compose one payload ->
     disclose once. `plan=None` takes the rules fast path (P3-PR2 inserts the
@@ -386,9 +437,11 @@ def compose(
             else retrieval.Context(query=question)
         if member_id:
             ctx.record.setdefault("member_id", member_id)
-    plan = plan or (plan_for(conn, question) if route.scope == "in_scope" else plan_rules(question))
+    available = menu(conn, module)
+    plan = plan or (plan_for(conn, question, module=module) if route.scope == "in_scope" else plan_rules(question))
     with watch.stage("plan"):
-        validate(plan, question, menu(conn))
+        validate(plan, question, available)
+        plan.module = module
 
     sub_results: list[dict] = []
     warehouse_results: list[dict] = []
@@ -397,7 +450,7 @@ def compose(
     as_of_defaulted = False
     for leg in plan.legs:
         if leg.kind == "doc_probe":
-            result, reranked, widened = _run_doc_leg(conn, leg, question, caller, ctx, route, watch)
+            result, reranked, widened = _run_doc_leg(conn, leg, question, caller, ctx, route, watch, available)
             plan.widened = plan.widened or widened
             start = len(chunks)
             built = payload_mod.build(leg.text, result.decision, reranked)
@@ -429,24 +482,38 @@ def _touches_policies(leg: Leg) -> bool:
     return not leg.sources or "clinical_policy" in leg.sources
 
 
-def _leg_route(leg: Leg, route: router.Route, ctx: retrieval.Context) -> router.Route:
-    """The leg's route: the question's filters (years, plan, scope) with the
-    leg's source hints and the bound as-of date (decision 5)."""
+def _leg_route(leg: Leg, route: router.Route, ctx: retrieval.Context, available: dict | None = None) -> router.Route:
+    """The leg's route: the question's filters (years, plan, scope), the
+    MODULE's whole document menu as the sources searched (decision 7: a
+    hint is recorded in the plan, never applied as a filter — a model guess
+    must not hide a source), and the bound as-of date (decision 5)."""
     from dataclasses import replace
     as_of = route.as_of or ctx.as_of
-    return replace(route, sources=tuple(leg.sources) or route.sources, as_of=as_of,
+    sources = tuple(available["sources"]) if available and available.get("module") else route.sources
+    return replace(route, sources=sources, as_of=as_of,
                    reasons=route.reasons + ((f"as_of bound from the claim's date of service {as_of}",) if ctx.as_of and not route.as_of else ()))
 
 
-def _run_doc_leg(conn, leg: Leg, question: str, caller: Caller, ctx: retrieval.Context, route: router.Route, watch: Stopwatch):
-    leg_route = _leg_route(leg, route, ctx)
-    probe = _probe(conn, leg.text, caller.persona, ctx, watch, decision=leg_route)
-    insufficient, _ = payload_mod.abstention_verdict(probe.reranked) if probe.reranked else (True, None)
-    if insufficient and leg.required and leg.sources:
-        # Widen once: same question, same identity, same policies, hints removed.
-        from dataclasses import replace
-        probe = _probe(conn, leg.text, caller.persona, ctx, watch, decision=replace(leg_route, sources=route.sources))
-        return probe, probe.reranked, True
+def _leg_text(conn, leg: Leg, ctx: retrieval.Context) -> str:
+    """The leg's ranking text — with the applied policy's title appended when
+    the question named a case or claim (record context, never the model) and
+    this leg may reach policies: the Phase 1 thin-question mechanism."""
+    text = leg.text or ""
+    if ctx.record.get("policy_id") and _touches_policies(leg):
+        title = retrieval.policy_title(conn, ctx.record["policy_id"])
+        if title and title.lower() not in text.lower():
+            text = f"{text} ({title})"
+    return text
+
+
+def _run_doc_leg(conn, leg: Leg, question: str, caller: Caller, ctx: retrieval.Context, route: router.Route, watch: Stopwatch,
+                 available: dict | None = None):
+    """One document leg over the module's document menu (or every visible
+    source when unscoped). Widen-once is retired with decision 7: nothing is
+    filtered by a hint, so there is nothing to widen."""
+    leg_route = _leg_route(leg, route, ctx, available)
+    text = _leg_text(conn, leg, ctx)
+    probe = _probe(conn, text, caller.persona, ctx, watch, decision=leg_route)
     return probe, probe.reranked, False
 
 
@@ -461,9 +528,14 @@ def _run_member_leg(leg: Leg, caller: Caller, ctx: retrieval.Context, member_id:
         return {**base, "status": "not_executed", "reason": str(exc)}
     connect = sf_connect or snowlane.connect
     with watch.stage(f"warehouse:{leg.name}"):
-        sf = connect(role=caller.warehouse_role)
+        try:
+            sf = connect(role=caller.warehouse_role)
+        except Exception as exc:  # noqa: BLE001 — the warehouse is unreachable: the leg is missing, the payload still composes
+            return {**base, "status": "not_executed", "reason": f"warehouse unavailable: {type(exc).__name__}"}
         try:
             result = snowlane.run_named_query(sf, leg.query_name, params)
+        except Exception as exc:  # noqa: BLE001 — e.g. the role has no grant on a table: the engine refused, the leg is missing
+            return {**base, "status": "not_executed", "reason": f"refused for this role: {type(exc).__name__}: {str(exc)[:120]}"}
         finally:
             try:
                 sf.close()

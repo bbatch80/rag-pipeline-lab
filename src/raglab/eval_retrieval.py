@@ -60,6 +60,16 @@ THRESHOLDS = {
     "scope_clean": 1.0,
     # Version precedence: no superseded policy version in a default top-10.
     "version_clean": 1.0,
+    # Phase 3 (decision 6): the planner's legs equal the item's expected legs
+    # (type + source/query, order-free) — plans are stored, so a miss is a
+    # defect in menu, prompt, or item, not variance. Absolute.
+    "routing_accuracy": 1.0,
+    # Every required leg returned its evidence (needs the warehouse: skipped
+    # where no credentials, reported as such).
+    "complete_recall": 0.9,
+    # Adversarial cases (D15): partial entitlement never answers from half;
+    # contradictory sources both surface.
+    "adversarial_ok": 1.0,
 }
 
 
@@ -159,8 +169,8 @@ def run(
         # per question) or from the rules path by configuration. Reported now;
         # routing accuracy against expected legs gates from P3-PR4.
         if category not in ("unanswerable",):
-            expected_shape = "compound" if category == "two_lane" else "simple"
-            plan = planner.plan_for(conn, item["question"])
+            expected_shape = item.get("expected_shape") or ("compound" if category == "compound" else "simple")
+            plan = planner.plan_for(conn, item["question"], module=item.get("module"))
             if replan:
                 stored, fresh = planner.replan(conn, item["question"])
                 if _legs_key(stored) != _legs_key(fresh.to_dict()):
@@ -169,8 +179,9 @@ def run(
                            {"shape": plan.shape, "origin": plan.origin, "legs": len(plan.legs),
                             "fallback": plan.fallback_reason}))
 
-        if category == "two_lane":
-            continue  # needs Snowflake; asserted in tests/test_two_lane_golden.py
+        if category in ("compound", "adversarial"):
+            scores.extend(_score_composed(conn, item))
+            continue
 
         if category == "version_negative":
             # A default (undated) question about a policy must not surface
@@ -355,7 +366,8 @@ def diff_runs(conn: psycopg.Connection, before: int, after: int) -> dict:
 
 
 _SLICE_METRICS = ("hit@5", "precision@5", "source_coverage", "gate_correct",
-                  "deny_clean", "allow_answered", "allow_hit", "scope_clean", "version_clean", "shape_accuracy")
+                  "deny_clean", "allow_answered", "allow_hit", "scope_clean", "version_clean", "shape_accuracy",
+                  "routing_accuracy", "complete_recall", "widened_rescue", "adversarial_ok")
 
 
 def _slice(rows: list[tuple]) -> dict:
@@ -438,6 +450,18 @@ def _summarize(run_id: int, scores: list[tuple]) -> RetrievalEvalResult:
         result.overall["scope_clean"] = scope
         if scope < THRESHOLDS["scope_clean"]:
             result.failures.append("member scope leaked: another member's record was returned")
+    # Phase 3 gates (decision 6): routing 1.0, complete recall 0.9, adversarial 1.0.
+    for metric, message in (("routing_accuracy", "planner routed a compound question to the wrong legs"),
+                            ("complete_recall", "a required leg did not return its evidence"),
+                            ("adversarial_ok", "adversarial case failed (answered from half, or a conflicting source hidden)")):
+        value = mean(metric, scores)
+        if value is not None:
+            result.overall[metric] = round(value, 3)
+            if value < THRESHOLDS[metric]:
+                result.failures.append(f"{message}: {metric} {value:.3f} < {THRESHOLDS[metric]}")
+    skipped = [q for q, _, m, _, _ in scores if m == "complete_recall_skipped"]
+    if skipped:
+        result.overall["complete_recall_skipped"] = len(skipped)
     for metric in ("deny_clean", "allow_answered"):
         value = mean(metric, scores)
         result.overall[metric] = value
@@ -456,3 +480,109 @@ def _legs_key(plan: dict | None) -> str:
         return "none"
     legs = sorted((leg["kind"], leg.get("query_name") or ",".join(sorted(leg.get("sources") or [])) or "*") for leg in plan.get("legs", []))
     return f"{plan.get('shape')}: " + "; ".join(f"{k}[{t}]" for k, t in legs)
+
+
+def _legs_multiset(legs: list[dict]) -> list[tuple]:
+    """(kind, source-or-query) per leg, order-free. A document leg with no
+    hints matches an expected leg on any source ('*')."""
+    out = []
+    for leg in legs:
+        if leg["kind"] == "member_query":
+            out.append(("member_query", leg.get("query_name")))
+        else:
+            out.append(("doc_probe", ",".join(sorted(leg.get("sources") or [])) or "*"))
+    return sorted(out)
+
+
+def _leg_matches(planned: dict, expected: dict) -> bool:
+    if planned["kind"] != expected["kind"]:
+        return False
+    if expected["kind"] == "member_query":
+        allowed = set(expected.get("query_name_any") or [expected.get("query_name")])
+        return planned.get("query_name") in allowed
+    got = set(planned.get("sources") or [])
+    want = set(expected.get("sources") or []) | set(expected.get("sources_any") or [])
+    return not got or not want or bool(got & want)  # a hint-less leg matches any expected source
+
+
+def _routing_matches(planned: list[dict], expected: list[dict], optional: list[dict] = ()) -> bool:
+    """Order-free: every expected leg is matched by a distinct planned leg
+    and nothing is left over. An expected member leg may name alternatives
+    (`query_name_any`) when more than one catalog query answers the same
+    part of the question."""
+    remaining = list(planned)
+    for exp in expected:
+        match = next((p for p in remaining if _leg_matches(p, exp)), None)
+        if match is None:
+            return False
+        remaining.remove(match)
+    # legs the item allows but does not require (a supporting warehouse row, a document beside the record)
+    for opt in optional:
+        match = next((p for p in remaining if _leg_matches(p, opt)), None)
+        if match is not None:
+            remaining.remove(match)
+    return not remaining
+
+
+def _score_composed(conn, item: dict) -> list[tuple]:
+    """Compound + adversarial items (Phase 3): the planner's ROUTING is scored
+    from the plan alone (no warehouse needed); EXECUTION — complete recall,
+    widened rescue, adversarial status — runs the composed path with the
+    model's plan as the identity's persona + warehouse role, and is skipped
+    (reported) where the warehouse is not reachable."""
+    import os
+
+    from raglab.mcp_server import IDENTITIES
+
+    qid, category = item["id"], item["category"]
+    persona, role = IDENTITIES[item["identity"]]
+    detail = {"source": "none", "identity": item["identity"]}
+    scores: list[tuple] = []
+    module = item.get("module")
+    detail["module"] = module
+    plan = planner.plan_for(conn, item["question"], module=module)
+    plan_dict = plan.to_dict()
+    if "expected_legs" in item:
+        scores.append((qid, category, "routing_accuracy",
+                       float(_routing_matches(plan_dict["legs"], item["expected_legs"], item.get("optional_legs", []))),
+                       {**detail, "planned": _legs_multiset(plan_dict["legs"]), "expected": _legs_multiset(item["expected_legs"]),
+                        "origin": plan.origin, "fallback": plan.fallback_reason}))
+    warehouse_needed = any(l["kind"] == "member_query" for l in plan_dict["legs"]) and role is not None
+    if warehouse_needed and not os.environ.get("SNOWFLAKE_ACCOUNT"):
+        scores.append((qid, category, "complete_recall_skipped", 1.0, {**detail, "reason": "no warehouse credentials"}))
+        return scores
+    payload = planner.compose(conn, item["question"], planner.Caller(persona=persona, warehouse_role=role),
+                              member_id=item.get("member_id"), source="eval", module=module)
+    titles = [c["source"]["title"] for c in payload.get("chunks", [])]
+    doc_types = {c["source"].get("doc_type") for c in payload.get("chunks", [])}
+    if category == "compound":
+        need = item.get("required_evidence", {})
+        anchors_ok = all(any(a in t for t in titles) for a in need.get("doc_anchors", []))
+        sources_ok = all(src in doc_types for src in need.get("doc_sources", []))
+        # rows_min keys may be "a|b": any listed query satisfying the minimum counts
+        rows_ok = all(any(w.get("query_name") in q.split("|") and (w.get("row_count") or 0) >= n for w in payload.get("warehouse_results", []))
+                      for q, n in need.get("rows_min", {}).items())
+        scores.append((qid, category, "complete_recall", float(payload["status"] == "ok" and anchors_ok and sources_ok and rows_ok),
+                       {**detail, "status": payload["status"], "missing": payload.get("missing"), "anchors_ok": anchors_ok,
+                        "sources_ok": sources_ok, "rows_ok": rows_ok}))
+        scores.append((qid, category, "widened_rescue", float(payload["plan"].get("widened", False)), detail))
+    else:
+        ok = True
+        if "expect_status_any" in item:
+            ok &= payload["status"] in item["expect_status_any"]
+        elif "expect_status" in item:
+            ok &= payload["status"] == item["expect_status"]
+        if "expect_never_source" in item:
+            ok &= item["expect_never_source"] not in doc_types
+        if "expect_sources_present" in item:
+            ok &= all(src in doc_types for src in item["expect_sources_present"])
+        if "expect_never_query" in item:
+            ok &= all(w.get("query_name") != item["expect_never_query"] for w in payload.get("warehouse_results", []))
+            ok &= all(l.get("query_name") != item["expect_never_query"] for l in plan_dict["legs"])
+        if "expect_missing_query" in item:
+            ok &= any(w.get("query_name") == item["expect_missing_query"] and w.get("status") != "ok"
+                      for w in payload.get("warehouse_results", []))
+        scores.append((qid, category, "adversarial_ok", float(ok),
+                       {**detail, "kind": item.get("kind"), "status": payload["status"], "doc_types": sorted(t for t in doc_types if t),
+                        "missing": payload.get("missing")}))
+    return scores

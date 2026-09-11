@@ -162,6 +162,23 @@ Key adjudication changes for the GEHA Benefit Plan effective 2026-01-01:
 """,
     ),
     InternalDoc(
+        "bulletins/bulletin_2026_004.md", "employee", "bulletin",
+        "Claims Bulletin 2026-004: Accidental Injury Waiver Window",
+        """# Claims Bulletin 2026-004 — Accidental Injury Waiver Window
+
+**Issued:** 2026-02-03 · **Audience:** all examiners
+
+- Effective for claims received on or after 2026-02-03, the Emergency Room
+  accidental-injury cost-share waiver applies when services are rendered
+  within 72 hours of the accident. Bulletin 2026-002 stated 48 hours; this
+  bulletin supersedes that instruction for examiner handling.
+- Use the accident date/time on the claim; when it is missing, request it
+  before adjudicating rather than denying.
+- The plan brochure is not reissued mid-year: members will read 48 hours.
+  Route member-facing questions about the window to the benefits team.
+""",
+    ),
+    InternalDoc(
         "bulletins/bulletin_2026_003.md", "employee", "bulletin",
         "Claims Bulletin 2026-003: PSHB Claims Routing",
         """# Claims Bulletin 2026-003 — PSHB Program Claims Routing

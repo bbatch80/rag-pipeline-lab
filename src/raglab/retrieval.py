@@ -104,23 +104,6 @@ def resolve_context(conn: psycopg.Connection, member_id: str | None, query_text:
             if canon:
                 candidates.append((kind, canon, m.group(0)))
                 break
-    # A policy id names a record with a human title: a thin question ("CP-0003
-    # criteria as of ...") ranks on the id token alone (0.13 against the right
-    # chunk); with the record's title appended it ranks on the subject
-    # (0.97). The title comes from the record, never from a model.
-    if "policy_id" in ctx.record:
-        try:
-            with conn.transaction():
-                row = conn.execute(
-                    "SELECT title FROM documents WHERE title LIKE %s ORDER BY title LIMIT 1",
-                    (ctx.record["policy_id"] + " %",),
-                ).fetchone()
-        except psycopg.Error:
-            row = None
-        if row:
-            title = re.sub(r"\s+v\d+$", "", row[0])
-            if title.lower() not in ctx.query.lower():
-                ctx.query = f"{ctx.query} ({title})"
     stripped = ctx.query
     for kind, canon, surface in candidates:
         table, column = _ID_LOOKUP[kind]
@@ -141,10 +124,29 @@ def resolve_context(conn: psycopg.Connection, member_id: str | None, query_text:
         ctx.member_key = ctx.member_key or str(row[0])
         if kind in _RECORD_FIELD:
             ctx.record.setdefault(_RECORD_FIELD[kind], canon)
+        if kind in ("case_id", "claim_id"):
+            # A case names its claim and the policy applied; a claim names the
+            # policy applied (Phase 3 decision 5): fixed lookups by key before
+            # planning, so a policy leg is filtered to the policy that mattered.
+            claim, policy = _record_keys(conn, kind, canon)
+            if claim and "claim_id" not in ctx.record:
+                ctx.record["claim_id"] = claim
+            if policy and "policy_id" not in ctx.record:
+                ctx.record["policy_id"] = policy
         if kind in ("claim_id", "case_id") and ctx.as_of is None:
             ctx.as_of = _date_of_service(conn, kind, canon)
         if surface:
             stripped = stripped.replace(surface, " ", 1)
+    # A policy id names a record with a human title: a thin question ("CP-0003
+    # criteria as of ...") ranks on the id token alone (0.13 against the right
+    # chunk); with the record's title appended it ranks on the subject
+    # (0.97). The title comes from the record, never from a model. Runs after
+    # the lookups so a policy bound from a case or claim gets it too.
+    if "policy_id" in ctx.record:
+        title = policy_title(conn, ctx.record["policy_id"])
+        if title and title.lower() not in ctx.query.lower():
+            ctx.query = f"{ctx.query} ({title})"
+            stripped = f"{stripped} ({title})"
     ends_q = stripped.rstrip().endswith("?")
     stripped = re.sub(r"\s+", " ", stripped).strip(" ,.;:?") + ("?" if ends_q else "")
     # A question that was only an identifier keeps its original text.
@@ -152,6 +154,31 @@ def resolve_context(conn: psycopg.Connection, member_id: str | None, query_text:
     if STRIP_IDS:
         ctx.query = stripped if len(re.findall(r"[A-Za-z]{2,}", stripped)) >= 2 else ctx.query
     return ctx
+
+
+def policy_title(conn: psycopg.Connection, policy_id: str) -> str | None:
+    """The human title of a policy record (version suffix dropped), or None."""
+    try:
+        with conn.transaction():
+            row = conn.execute("SELECT title FROM documents WHERE title LIKE %s ORDER BY title LIMIT 1",
+                               (policy_id + " %",)).fetchone()
+    except psycopg.Error:
+        return None
+    return re.sub(r"\s+v\d+$", "", row[0]) if row else None
+
+
+def _record_keys(conn: psycopg.Connection, kind: str, canon: str) -> tuple[str | None, str | None]:
+    """(claim_id, policy_id) named by a case or a claim, or (None, None)."""
+    sql = {
+        "case_id": "SELECT claim_id, policy_id FROM synthea.appeals WHERE case_id = %s",
+        "claim_id": "SELECT claim_id, policy_id FROM synthea.claim_adjudication WHERE claim_id = %s",
+    }[kind]
+    try:
+        with conn.transaction():
+            row = conn.execute(sql, (canon,)).fetchone()
+    except psycopg.Error:
+        return None, None
+    return (row[0], row[1]) if row else (None, None)
 
 
 def _date_of_service(conn: psycopg.Connection, kind: str, canon: str) -> str | None:

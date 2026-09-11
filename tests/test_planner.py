@@ -140,25 +140,37 @@ def test_warehouse_leg_runs_as_the_callers_role_with_bound_parameters(db, monkey
     assert out["record_context"]["as_of"] == "2024-08-01"  # decision 5: bound before planning, from the lookup
 
 
-def test_widen_once_runs_only_on_insufficient_evidence_and_only_once(db, monkeypatch):
-    """A required document leg with source hints that finds nothing is re-run
-    once without hints, same identity; a leg that found evidence is not."""
+def test_module_menu_bounds_the_plan_and_hints_never_filter(db, monkeypatch):
+    """Decision 7: the planner chooses only from the module's menu — an
+    off-menu query is rejected before execution — and a document leg searches
+    the module's whole document menu: a source hint is recorded, never a
+    filter, so a wrongly hinted leg still finds evidence in another family."""
     _seed_tiers(db, per_tier=1, embed=True); _fake_models(monkeypatch); _exact_scan(db)
     from raglab import pipeline
-    calls = []
+    routes = []
     real = pipeline._probe
 
-    def counting(conn, query, persona, ctx, watch, decision=None):
-        calls.append((tuple(decision.sources) if decision else None, persona)); return real(conn, query, persona, ctx, watch, decision)
-    monkeypatch.setattr(planner, "_probe", counting)
-    # hinted at a source the employee cannot see: nothing found -> widened to every visible source
-    plan = _plan({"name": "docs", "kind": "doc_probe", "text": "what do the secret facts say", "sources": ["clinical_note"]})
-    out = planner.compose(_NoCommit(db), "what do the secret facts say", _caller("employee"), plan=plan)
+    def spy(conn, query, persona, ctx, watch, decision=None):
+        routes.append(tuple(decision.sources) if decision else None); return real(conn, query, persona, ctx, watch, decision)
+    monkeypatch.setattr(planner, "_probe", spy)
+    # hinted at a family the employee cannot see, inside the 'ask' module: the leg searches ask's whole menu and still answers
+    plan = _plan({"name": "docs", "kind": "doc_probe", "text": "what do the secret facts say", "sources": ["clinical_policy"]})
+    out = planner.compose(_NoCommit(db), "what do the secret facts say", _caller("employee"), plan=plan, module="ask")
     db.execute("RESET ROLE")
-    assert [c[0] for c in calls] == [("clinical_note",), ()] and {c[1] for c in calls} == {"employee"}
-    assert out["plan"]["widened"] is True and out["sub_results"][0]["widened"] is True and out["status"] == "ok"
-    calls.clear()
-    plan = _plan({"name": "docs", "kind": "doc_probe", "text": "what do the secret facts say", "sources": ["sop"]})
-    out = planner.compose(_NoCommit(db), "what do the secret facts say", _caller("employee"), plan=plan)
-    db.execute("RESET ROLE")
-    assert len(calls) == 1 and out["plan"]["widened"] is False
+    assert out["status"] == "ok" and out["plan"]["widened"] is False and out["plan"]["module"] == "ask"
+    assert set(routes[-1]) >= {"brochure", "sop"} and "call_note" not in routes[-1], "the module's document menu, not the hint"
+    # an off-menu query for the module is rejected before anything runs
+    plan = _plan({"name": "x", "kind": "member_query", "query_name": "appeal_case", "slots": ["case_id"]})
+    with pytest.raises(PlanError, match="not in the catalog"):
+        planner.compose(_NoCommit(db), "What did appeal APL-1020254 decide?", _caller("member_services", "MEMBER_SERVICES_REP"), plan=plan, module="agent_assist")
+    with pytest.raises(PlanError, match="unknown module"):
+        planner.compose(_NoCommit(db), "q", _caller("employee"), module="payroll")
+
+
+def test_modules_are_a_closed_menu_over_the_catalog():
+    from raglab import snowlane
+    for name, spec in planner.MODULES.items():
+        assert set(spec["named_queries"]) <= set(snowlane.NAMED_QUERIES), name
+        assert set(spec["sources"]) <= set(planner.SOURCE_GUIDE), name
+    assert planner.MODULES["ask"]["named_queries"] == ()  # Ask never reaches the warehouse
+    assert "member_appeals" not in planner.MODULES["agent_assist"]["named_queries"]  # the rep has no grant on APPEALS

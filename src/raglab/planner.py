@@ -442,6 +442,11 @@ def compose(
             else retrieval.Context(query=question)
         if member_id:
             ctx.record.setdefault("member_id", member_id)
+        # The member's enrolled plan binds ONCE here, so warehouse legs (slot
+        # plan_code) and document legs (plan filter) both see it. Probe 6: it
+        # was bound inside the document step only, and 'which doctors are in
+        # network for this member' was refused for want of a plan code.
+        route = retrieval.bind_enrollment_plan(route, ctx)
     _t(trace, "question", text=question, persona=caller.persona or "admin", warehouse_role=caller.warehouse_role,
        member_id=member_id, module=module)
     _t(trace, "route", scope=route.scope, years=list(route.years), plan_codes=list(route.plan_codes), as_of=route.as_of,
@@ -493,7 +498,9 @@ def compose(
     with watch.stage("payload"):
         built = payload_mod.compose(question, plan.to_dict(), sub_results, warehouse_results, chunks,
                                     subject=member_id or _member_id_of(ctx), unresolved=ctx.unresolved,
-                                    as_of_defaulted=as_of_defaulted, coverage=coverage)
+                                    as_of_defaulted=as_of_defaulted, coverage=coverage,
+                                    router={"years": list(route.years), "plan_codes": list(route.plan_codes), "as_of": route.as_of,
+                                            "plan_from_enrollment": route.plan_from_enrollment})
         built["payload_id"] = str(uuid.uuid4())
         built["persona"] = caller.persona or "admin"
         built["member_context"] = member_id

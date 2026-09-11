@@ -85,6 +85,7 @@ def compose(
     unresolved: list[dict],
     as_of_defaulted: bool,
     coverage: dict | None = None,
+    router: dict | None = None,
 ) -> dict:
     """The composed payload (spec 1.1.0, Phase 3): one question, one plan, the
     legs' results, one status. Status is worst-of-required — `ok` only if
@@ -103,7 +104,8 @@ def compose(
         "status": "ok" if not missing else "insufficient_evidence",
         "confidence": round(min(confidences), 4) if confidences else 0.0,
         "retrieved_at": retrieved_at,
-        "router": next((r.get("router") for r in sub_results if r.get("router")), {"years": [], "plan_codes": [], "as_of": None}),
+        "router": router or next((r.get("router") for r in sub_results if r.get("router")),
+                                 {"years": [], "plan_codes": [], "as_of": None, "plan_from_enrollment": False}),
         "chunks": chunks,
         "plan": plan,
         "sub_results": sub_results,

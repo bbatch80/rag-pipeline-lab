@@ -75,3 +75,32 @@ def test_resolver_reads_the_members_enrollment_from_the_real_table(db):
     assert ctx.enrollment and all(isinstance(y, int) and code for y, code in ctx.enrollment.items())
     bound = retrieval.bind_enrollment_plan(router.route("What is their urgent care copay?"), ctx)
     assert bound.plan_from_enrollment and bound.plan_codes
+
+
+def test_composer_binds_the_enrolled_plan_for_warehouse_slots(db, monkeypatch):
+    """Probe 6: a warehouse leg whose slot is plan_code fills it from the
+    member's enrollment, the same binding the document legs get."""
+    from raglab import planner
+    from test_governance import _seed_tiers
+    from test_identical_question_control import _NoCommit, _exact_scan, _fake_models
+    _seed_tiers(db, per_tier=1, embed=True); _fake_models(monkeypatch); _exact_scan(db)
+    monkeypatch.setattr(planner.retrieval, "resolve_context",
+                        lambda conn, member_id, q: retrieval.Context(query=q, member_key="k", record={"member_id": member_id}, enrollment={2026: "71-018"}))
+    seen = {}
+
+    class _SF:
+        def cursor(self): return self
+        def execute(self, sql, params=None):
+            if isinstance(params, dict): seen["bound"] = params
+            self.description = [("PROVIDER_NAME",)]; return self
+        def fetchone(self): return ("MEMBER_SERVICES_REP",)
+        def fetchall(self): return [("Dr A",)]
+        def close(self): pass
+
+    plan = planner.plan_from_dict({"shape": "compound", "legs": [
+        {"name": "enrollment", "kind": "member_query", "query_name": "member_enrollment", "slots": ["member_id"]},
+        {"name": "network", "kind": "member_query", "query_name": "providers_by_specialty", "slots": ["plan_code"]}]})
+    out = planner.compose(_NoCommit(db), "Which doctors are in network for this member?", planner.Caller(persona="member_services", warehouse_role="MEMBER_SERVICES_REP"),
+                          member_id="M982263550", plan=plan, module="agent_assist", sf_connect=lambda role: _SF())
+    assert out["status"] == "ok" and seen["bound"]["plan_code"] == "71-018"
+    assert out["router"]["plan_from_enrollment"] is True

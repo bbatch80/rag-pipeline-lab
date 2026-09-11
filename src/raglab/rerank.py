@@ -229,7 +229,13 @@ def rerank(
         # The coverage rule: every covered plan's best chunk near the top, by
         # rank within its plan (scores ARE comparable here — same query).
         lanes = {code: [c for c in ordered if c.plan_code == code] for code in stratify_plans}
-        # strongest plan leads; every plan still gets its seat in the round-robin
+        # Chunks the rule does not classify — sources with no plan (bulletins,
+        # letters, policies, records) — keep their own lane and compete on
+        # score: the rule arranges the covered source, it never demotes the
+        # others (P4: a claims bulletin fell outside every plan lane and was
+        # dropped, blocking an entitled answer).
+        lanes["*"] = [c for c in ordered if c.plan_code not in stratify_plans]
+        # strongest lane leads; every lane still gets its seat in the round-robin
         lanes = dict(sorted(lanes.items(), key=lambda kv: -(kv[1][0].rerank_score if kv[1] else -1)))
         return _interleave(ordered, lanes, top_n)
 

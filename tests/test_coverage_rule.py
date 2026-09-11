@@ -51,6 +51,18 @@ def test_rerank_interleaves_covered_plans_so_each_plan_leads(monkeypatch):
     assert [c.plan_code for c in plain[:3]] == ["71-021", "71-021", "71-021"], "without the rule the dominant plan fills the top"
 
 
+def test_interleave_never_demotes_chunks_from_sources_without_a_plan(monkeypatch):
+    """P4 regression: a claims bulletin (no plan code) scoring highest must
+    lead the list even when the rule covers three plans."""
+    monkeypatch.setattr(rerank, "score_pairs", lambda model, pairs: [0.95, 0.8, 0.7, 0.6, 0.5])
+    monkeypatch.setattr(rerank, "_get_model", lambda: object())
+    bulletin = _cand(9, None, 0); bulletin.doc_type = "bulletin"
+    pool = [bulletin, _cand(1, "71-021", 0), _cand(2, "71-021", 0), _cand(3, "71-026", 0), _cand(4, "71-022", 0)]
+    out = rerank.rerank("q", pool, top_n=4, stratify_plans=("71-021", "71-022", "71-026"))
+    assert out[0].chunk_id == 9, "the strongest chunk leads even with no plan"
+    assert {c.plan_code for c in out} >= {"71-021", "71-022", "71-026"}, "every covered plan still has its seat"
+
+
 def test_payload_coverage_note_validates_and_names_the_gap():
     r = router.route("How many chiropractic services are allowed on the PSHB plan?")
     note = {"field": "plan_code", "asked": "PSHB", "keys": list(r.cover_keys), "in_corpus": ["71-021", "71-026"],

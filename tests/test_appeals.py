@@ -28,7 +28,8 @@ def test_appeals_follow_denied_claims_and_preceding_calls(db, tmp_path):
     journeys.generate(db, members=8, target_calls=120, seed=3, calls_dir=tmp_path / "calls", manifest_path=tmp_path / "calls.jsonl")
     stats = appeals.generate(db, cases=20, letters=3, seed=5, appeals_dir=tmp_path / "appeals",
                              pdf_src_dir=tmp_path / "appeals_pdf_src", manifest_path=tmp_path / "appeals.jsonl",
-                             calls_dir=tmp_path / "calls", clinical_manifest=tmp_path / "none.jsonl")
+                             calls_dir=tmp_path / "calls", clinical_manifest=tmp_path / "none.jsonl",
+                             pdf_dir=tmp_path / "appeals_pdf")
     assert stats["adjudication_denied"] > 0 and stats["cases"] >= 1
     # every claim line from 2024 on has exactly one adjudication row
     assert db.execute("SELECT count(*) FROM synthea.encounters WHERE start >= '2024-01-01'").fetchone()[0] \
@@ -123,3 +124,18 @@ def test_letters_render_one_pdf_per_source_text(tmp_path):
         (src / f"letter_{i:04d}.txt").write_text("GEHA APPEALS DETERMINATION\nDate: January 1, 2026\n\nDear Member,\n\nUpheld.\n")
     assert appeals.render_letters(src, tmp_path / "pdf") == 3
     assert sorted(p.name for p in (tmp_path / "pdf").glob("*.pdf")) == ["letter_0000.pdf", "letter_0001.pdf", "letter_0002.pdf"]
+
+
+def test_generate_with_temporary_folders_never_touches_the_real_pdf_folder(db, tmp_path, monkeypatch):
+    """Regression for the vanishing letters (2026-09-10 and 2026-09-11): the
+    generator's cleanup used the real PDF folder even when every other path
+    was temporary. Now the real folder must be untouched by a tmp run."""
+    real = tmp_path / "pretend_real_pdf_dir"; real.mkdir(); (real / "letter_0001.pdf").write_bytes(b"%PDF-1.4 keep me")
+    monkeypatch.setattr(appeals, "PDF_DIR", real)  # what the old code deleted from
+    _seed_population(db)
+    journeys.generate(db, members=8, target_calls=120, seed=3, calls_dir=tmp_path / "calls", manifest_path=tmp_path / "calls.jsonl")
+    appeals.generate(db, cases=10, letters=2, seed=5, appeals_dir=tmp_path / "appeals",
+                     pdf_src_dir=tmp_path / "appeals_pdf_src", manifest_path=tmp_path / "appeals.jsonl",
+                     calls_dir=tmp_path / "calls", clinical_manifest=tmp_path / "none.jsonl",
+                     pdf_dir=tmp_path / "appeals_pdf")
+    assert (real / "letter_0001.pdf").exists(), "a temporary-folder run deleted from the real PDF folder"

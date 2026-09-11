@@ -436,7 +436,8 @@ def compose(
         raise ValueError(f"unknown persona {caller.persona!r}; expected one of {PERSONAS}")
     watch = Stopwatch()
     with watch.stage("resolve"):
-        route = router.route(question)
+        from raglab.pipeline import _hierarchies, coverage_note
+        route = router.route(question, hierarchies=_hierarchies(conn))
         ctx = retrieval.resolve_context(conn, member_id, question) if route.scope == "in_scope" \
             else retrieval.Context(query=question)
         if member_id:
@@ -463,12 +464,14 @@ def compose(
     chunks: list[dict] = []
     all_reranked: list = []
     as_of_defaulted = False
+    coverage = None
     for leg in plan.legs:
         if leg.kind == "doc_probe":
             result, reranked, widened = _run_doc_leg(conn, leg, question, caller, ctx, route, watch, available, trace)
             plan.widened = plan.widened or widened
             start = len(chunks)
-            built = payload_mod.build(leg.text, result.decision, reranked)
+            built = payload_mod.build(leg.text, result.decision, reranked, coverage=coverage_note(conn, result.decision, reranked))
+            coverage = coverage or built.get("coverage")
             _t(trace, "leg_verdict", leg=leg.name, status=built["status"], confidence=built.get("confidence"),
                thresholds={"prose": rerank.ABSTAIN_THRESHOLD, **rerank.ABSTAIN_BY_SOURCE})
             for c in built["chunks"]:
@@ -490,7 +493,7 @@ def compose(
     with watch.stage("payload"):
         built = payload_mod.compose(question, plan.to_dict(), sub_results, warehouse_results, chunks,
                                     subject=member_id or _member_id_of(ctx), unresolved=ctx.unresolved,
-                                    as_of_defaulted=as_of_defaulted)
+                                    as_of_defaulted=as_of_defaulted, coverage=coverage)
         built["payload_id"] = str(uuid.uuid4())
         built["persona"] = caller.persona or "admin"
         built["member_context"] = member_id

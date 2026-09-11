@@ -180,7 +180,11 @@ def run(
                             "fallback": plan.fallback_reason}))
 
         if category in ("compound", "adversarial"):
-            scores.extend(_score_composed(conn, item))
+            # Composition runs the real funnel per leg; a sabotage run breaks the
+            # retrieval ARMS and must see only junk inputs, so these are skipped
+            # there like the persona items are.
+            if not sabotage:
+                scores.extend(_score_composed(conn, item))
             continue
 
         if category == "version_negative":

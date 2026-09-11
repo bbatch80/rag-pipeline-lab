@@ -142,7 +142,12 @@ def resolve_context(conn: psycopg.Connection, member_id: str | None, query_text:
     # chunk); with the record's title appended it ranks on the subject
     # (0.97). The title comes from the record, never from a model. Runs after
     # the lookups so a policy bound from a case or claim gets it too.
-    if "policy_id" in ctx.record:
+    # Only when the caller TYPED the policy id: a policy bound from a case or
+    # claim is record context for filtering and for an explicit policy leg
+    # (planner._leg_text), not a cue to rank every question on the policy —
+    # appending it to a referral-note question pulled policy chunks above
+    # the note (P9, run 399).
+    if ctx.record.get("policy_id") and re.search(r"(?i)\bCP-\d{4}\b", query_text or ""):
         title = policy_title(conn, ctx.record["policy_id"])
         if title and title.lower() not in ctx.query.lower():
             ctx.query = f"{ctx.query} ({title})"

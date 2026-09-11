@@ -499,7 +499,7 @@ def _leg_text(conn, leg: Leg, ctx: retrieval.Context) -> str:
     the question named a case or claim (record context, never the model) and
     this leg may reach policies: the Phase 1 thin-question mechanism."""
     text = leg.text or ""
-    if ctx.record.get("policy_id") and _touches_policies(leg):
+    if ctx.record.get("policy_id") and "clinical_policy" in leg.sources:  # an EXPLICIT policy leg only
         title = retrieval.policy_title(conn, ctx.record["policy_id"])
         if title and title.lower() not in text.lower():
             text = f"{text} ({title})"

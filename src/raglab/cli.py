@@ -1189,6 +1189,104 @@ def query_cmd(prompt: str, persona: str | None, member_id: str | None, no_plan: 
     click.echo(json.dumps(built, indent=2, default=str))
 
 
+@main.command("trace")
+@click.argument("question")
+@click.option("--persona", default=None, help="public | employee | care_team | member_services | appeals (omit = admin)")
+@click.option("--module", default=None, help="ask | agent_assist | appeals_workbench | care_management | analyst_view (omit = unscoped)")
+@click.option("--member-id", default=None, help="The member the screen has open.")
+@click.option("--generate", is_flag=True, help="Also hand the composed payload to both answer models and print their answers.")
+def trace_cmd(question: str, persona: str | None, module: str | None, member_id: str | None, generate: bool):
+    """Every stage of the planned pipeline for ONE question, in order: what
+    was found in the question, the route, the menu, the plan, each document
+    leg's two searches and rerank, each warehouse leg's rows, the composed
+    result, the disclosure — and, with --generate, the answers."""
+    import json
+
+    from raglab import planner
+    from raglab.mcp_server import IDENTITIES
+
+    role = IDENTITIES.get(persona or "", (None, None))[1] if persona else None
+    events: list = []
+    with db.connect() as conn:
+        built = planner.compose(conn, question, planner.Caller(persona=persona, warehouse_role=role),
+                                member_id=member_id, source="trace", module=module, trace=events)
+    step = 0
+    for ev in events:
+        step += 1
+        st = ev["stage"]
+        click.echo("")
+        if st == "question":
+            click.echo(f"[{step}] QUESTION as {ev['persona']} (warehouse role: {ev['warehouse_role'] or 'none'}; screen: {ev['module'] or 'unscoped'}; member: {ev['member_id'] or 'none'})")
+            click.echo(f"    {ev['text']}")
+        elif st == "route":
+            click.echo(f"[{step}] ROUTE — rules read the question before any model")
+            click.echo(f"    scope: {ev['scope']}   years: {ev['years'] or 'any'}   plan codes: {ev['plan_codes'] or 'any'}   as-of date in question: {ev['as_of'] or 'none'}")
+            for r in ev["reasons"]:
+                click.echo(f"    - {r}")
+        elif st == "identifiers":
+            click.echo(f"[{step}] IDENTIFIERS — found by shape + check digit, looked up in the record tables")
+            click.echo(f"    member key: {ev['member_key'] or 'none'}   record keys: {ev['record'] or '{}'}   date of service: {ev['as_of'] or 'none'}")
+            if ev["unresolved"]:
+                click.echo(f"    well-formed but matching nobody: {ev['unresolved']}")
+        elif st == "menu":
+            click.echo(f"[{step}] MENU — what this screen may look in")
+            click.echo(f"    documents: {', '.join(ev['sources'])}")
+            click.echo(f"    warehouse queries: {', '.join(ev['named_queries']) or 'none'}")
+        elif st == "translated_for_planner":
+            click.echo(f"[{step}] WHAT THE PLANNER MODEL SEES — identifiers and names replaced by vault tokens")
+            click.echo(f"    {ev['text']}")
+        elif st == "plan":
+            src = "stored plan (no model call)" if ev["stored"] else ("the model, live" if ev["origin"] == "model" else "rules fast path")
+            click.echo(f"[{step}] PLAN — {ev['shape']}, from {src}" + (f"; fallback because: {ev['fallback_reason']}" if ev["fallback_reason"] else ""))
+            for i, leg in enumerate(ev["legs"], 1):
+                if leg["kind"] == "doc_probe":
+                    click.echo(f"    leg {i} '{leg['name']}': search documents — text: \"{leg['text']}\"  hints: {leg['sources'] or 'none'}  required: {leg['required']}")
+                else:
+                    click.echo(f"    leg {i} '{leg['name']}': warehouse query {leg['query_name']}  fills from context: {leg['slots'] or 'none'}  free-text params: {leg.get('params') or 'none'}  required: {leg['required']}")
+        elif st == "doc_leg":
+            click.echo(f"[{step}] DOCUMENT LEG '{ev['leg']}' as {ev['persona']}")
+            click.echo(f"    ranking text: {ev['ranking_text']}")
+            if ev["search_text"] != ev["ranking_text"]:
+                click.echo(f"    after vault translation: {ev['search_text']}")
+            f = ev["filters"]
+            click.echo(f"    searched: {', '.join(ev['sources_searched']) or 'every visible source'}   filters: years {f['years'] or 'any'}, plan {f['plan_codes'] or 'any'}, as-of {f['as_of'] or 'none'}, member {f['member_key'] or 'none'}, record {f['record'] or '{}'}")
+            click.echo(f"    pool: {ev['pool_size']} candidates by source {ev['pool_by_source']}")
+            click.echo("    (each source has its own pool: v# = vector rank within that source, k# = keyword rank within that source; rrf fuses the two)")
+            for label, key in (("vector lane, best per source", "vector_top"), ("keyword lane, best per source", "bm25_top"), ("fused top 5 across sources", "fused_top")):
+                click.echo(f"    {label}:")
+                for c in ev[key]:
+                    click.echo(f"      v#{c['vector_rank'] or '-'} k#{c['text_rank'] or '-'} rrf {c['rrf']}  {c['title'][:38]} [{c['doc_type']}] {c['section'][:28]!r}")
+            click.echo("    reranked top (score vs threshold):")
+            for c in ev["rerank_top"]:
+                click.echo(f"      {c['rerank']:.4f}  {c['title'][:38]} [{c['doc_type']}] — {c['text'][:110]}")
+        elif st == "leg_verdict":
+            records = {k: v for k, v in ev["thresholds"].items() if k != "prose"}
+            click.echo(f"    → {ev['status']} (best {ev['confidence']}; a chunk answers when its score clears its source's bar: prose {ev['thresholds']['prose']}, records {records})")
+        elif st == "warehouse_leg":
+            click.echo(f"[{step}] WAREHOUSE LEG '{ev['leg']}' — {ev['query_name']} as {ev['role']}")
+            click.echo(f"    bound parameters: {ev['bound'] or 'none'}")
+            if ev["status"] == "ok":
+                click.echo(f"    {ev['row_count']} rows; masked for this role: {ev['masked_columns'] or 'none'}")
+                for row in ev["rows"]:
+                    click.echo(f"      {dict(zip(ev['columns'], row))}")
+            else:
+                click.echo(f"    {ev['status']} — {ev['reason']}")
+        elif st == "composed":
+            click.echo(f"[{step}] COMPOSED — status {ev['status']}; missing {ev['missing'] or 'nothing'}; {ev['chunks']} chunks; confidence {ev['confidence']}; subject {ev['subject'] or 'none'}" + ("; policy date defaulted to today" if ev["as_of_defaulted"] else ""))
+        elif st == "disclosed":
+            tm = {k: v for k, v in (ev["timings"] or {}).items() if k != "host"}
+            click.echo(f"[{step}] DISCLOSED — payload {ev['payload_id']} logged (source {ev['source']}); ms per stage {tm}")
+    if generate:
+        from raglab.generators import GENERATORS
+
+        click.echo(f"\n[{step + 1}] ANSWERS — the same payload to both models")
+        for g in GENERATORS:
+            click.echo(f"    ──── {g.name} ────")
+            for line in g.generate(built).splitlines():
+                click.echo(f"    {line}")
+    click.echo("")
+
+
 @main.command("payload")
 @click.argument("payload_id")
 def payload_cmd(payload_id: str):

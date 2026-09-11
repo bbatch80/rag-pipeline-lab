@@ -64,6 +64,7 @@ class Probe:
     decision: Route
     reranked: list
     search_query: str
+    candidates: list = None  # the fused pool before reranking (for traces)
 
 
 def _probe(conn, query: str, persona: str | None, ctx: retrieval.Context, watch: Stopwatch,
@@ -71,6 +72,7 @@ def _probe(conn, query: str, persona: str | None, ctx: retrieval.Context, watch:
     with watch.stage("route"):
         decision = decision or router.route(query)
     reranked: list = []
+    candidates: list = []
     search_query = query
     if decision.scope == "in_scope":
         # Re-identification is itself an entitlement: queries are translated
@@ -101,7 +103,7 @@ def _probe(conn, query: str, persona: str | None, ctx: retrieval.Context, watch:
         finally:
             if persona is not None:
                 conn.execute("RESET ROLE")
-    return Probe(decision=decision, reranked=reranked, search_query=search_query)
+    return Probe(decision=decision, reranked=reranked, search_query=search_query, candidates=candidates)
 
 
 def _disclose_and_commit(conn, built: dict, reranked, source: str, user_id: int | None, watch: Stopwatch) -> None:

@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 import psycopg
 
 from raglab import payload as payload_mod
-from raglab import retrieval, router, snowlane
+from raglab import rerank, retrieval, router, snowlane
 from raglab.pipeline import PERSONAS, _disclose_and_commit, _probe
 from raglab.timing import Stopwatch
 
@@ -69,6 +69,7 @@ class Plan:
     widened: bool = False
     fallback_reason: str | None = None
     module: str | None = None
+    stored: bool = False  # reused from the plans table (no model call this time)
 
     def to_dict(self) -> dict:
         return {"shape": self.shape, "origin": self.origin, "model": self.model, "module": self.module, "widened": self.widened,
@@ -333,7 +334,9 @@ def plan_with_model(conn: psycopg.Connection, question: str, available: dict, cl
     if PLAN_CACHE:
         row = _stored_plan(conn, key)
         if row is not None:
-            return plan_from_dict(row["plan"], origin=row["origin"], model=PLANNER_MODEL)
+            plan = plan_from_dict(row["plan"], origin=row["origin"], model=PLANNER_MODEL)
+            plan.stored = True
+            return plan
     t0 = time.perf_counter()
     reason = None
     try:
@@ -423,6 +426,7 @@ def compose(
     source: str = "interactive",
     sf_connect=None,
     module: str | None = None,
+    trace: list | None = None,
 ) -> dict:
     """Plan -> execute every leg as the caller -> compose one payload ->
     disclose once. `plan=None` takes the rules fast path (P3-PR2 inserts the
@@ -437,11 +441,22 @@ def compose(
             else retrieval.Context(query=question)
         if member_id:
             ctx.record.setdefault("member_id", member_id)
+    _t(trace, "question", text=question, persona=caller.persona or "admin", warehouse_role=caller.warehouse_role,
+       member_id=member_id, module=module)
+    _t(trace, "route", scope=route.scope, years=list(route.years), plan_codes=list(route.plan_codes), as_of=route.as_of,
+       reasons=list(route.reasons))
+    _t(trace, "identifiers", member_key=ctx.member_key, record=dict(ctx.record), as_of=ctx.as_of,
+       unresolved=list(ctx.unresolved))
     available = menu(conn, module)
+    _t(trace, "menu", module=module, sources=list(available["sources"]), named_queries=list(available["named_queries"]))
+    if route.scope == "in_scope" and plan is None:
+        _t(trace, "translated_for_planner", text=translated_for_planning(conn, question) if PLANNER == "model" else None)
     plan = plan or (plan_for(conn, question, module=module) if route.scope == "in_scope" else plan_rules(question))
     with watch.stage("plan"):
         validate(plan, question, available)
         plan.module = module
+    _t(trace, "plan", origin=plan.origin, stored=plan.stored, model=plan.model, shape=plan.shape,
+       fallback_reason=plan.fallback_reason, legs=[leg.to_dict() for leg in plan.legs])
 
     sub_results: list[dict] = []
     warehouse_results: list[dict] = []
@@ -450,10 +465,12 @@ def compose(
     as_of_defaulted = False
     for leg in plan.legs:
         if leg.kind == "doc_probe":
-            result, reranked, widened = _run_doc_leg(conn, leg, question, caller, ctx, route, watch, available)
+            result, reranked, widened = _run_doc_leg(conn, leg, question, caller, ctx, route, watch, available, trace)
             plan.widened = plan.widened or widened
             start = len(chunks)
             built = payload_mod.build(leg.text, result.decision, reranked)
+            _t(trace, "leg_verdict", leg=leg.name, status=built["status"], confidence=built.get("confidence"),
+               thresholds={"prose": rerank.ABSTAIN_THRESHOLD, **rerank.ABSTAIN_BY_SOURCE})
             for c in built["chunks"]:
                 c["leg"] = leg.name
             chunks.extend(built["chunks"])
@@ -464,7 +481,11 @@ def compose(
                                 "router": built.get("router", {}), "chunk_indexes": list(range(start, len(chunks))),
                                 "widened": widened, "reason": None if built["status"] == "ok" else built["status"]})
         else:
-            warehouse_results.append(_run_member_leg(leg, caller, ctx, member_id, route, watch, sf_connect))
+            w = _run_member_leg(leg, caller, ctx, member_id, route, watch, sf_connect)
+            warehouse_results.append(w)
+            _t(trace, "warehouse_leg", leg=leg.name, query_name=leg.query_name, role=caller.warehouse_role,
+               status=w["status"], reason=w.get("reason"), row_count=w.get("row_count"), columns=w.get("columns"),
+               rows=(w.get("rows") or [])[:3], masked_columns=w.get("masked_columns"), bound=w.get("bound"))
 
     with watch.stage("payload"):
         built = payload_mod.compose(question, plan.to_dict(), sub_results, warehouse_results, chunks,
@@ -474,8 +495,18 @@ def compose(
         built["persona"] = caller.persona or "admin"
         built["member_context"] = member_id
         built["record_context"] = {**ctx.record, **({"as_of": ctx.as_of} if ctx.as_of else {})}
+    _t(trace, "composed", status=built["status"], missing=list(built["missing"]), chunks=len(chunks),
+       confidence=built.get("confidence"), as_of_defaulted=as_of_defaulted, subject=built["subject"])
     _disclose_and_commit(conn, built, all_reranked, source, caller.user_id, watch)
+    _t(trace, "disclosed", payload_id=built["payload_id"], source=source, timings=built.get("timings"))
     return built
+
+
+def _t(trace: list | None, stage: str, **data) -> None:
+    """Record one stage of a composition for `raglab trace` — nothing is
+    computed for the trace that the pipeline did not compute anyway."""
+    if trace is not None:
+        trace.append({"stage": stage, **data})
 
 
 def _touches_policies(leg: Leg) -> bool:
@@ -507,13 +538,29 @@ def _leg_text(conn, leg: Leg, ctx: retrieval.Context) -> str:
 
 
 def _run_doc_leg(conn, leg: Leg, question: str, caller: Caller, ctx: retrieval.Context, route: router.Route, watch: Stopwatch,
-                 available: dict | None = None):
+                 available: dict | None = None, trace: list | None = None):
     """One document leg over the module's document menu (or every visible
     source when unscoped). Widen-once is retired with decision 7: nothing is
     filtered by a hint, so there is nothing to widen."""
     leg_route = _leg_route(leg, route, ctx, available)
     text = _leg_text(conn, leg, ctx)
     probe = _probe(conn, text, caller.persona, ctx, watch, decision=leg_route)
+    if trace is not None:
+        pool = probe.candidates or []
+        def line(c):
+            return {"title": c.doc_title, "doc_type": c.doc_type, "section": c.section, "vector_rank": c.vector_rank,
+                    "text_rank": c.text_rank, "rrf": round(c.rrf_score, 4), "rerank": None if c.rerank_score is None else round(c.rerank_score, 4),
+                    "text": (c.index_text or c.content)[:160]}
+        by_vec = sorted([c for c in pool if c.vector_rank], key=lambda c: c.vector_rank)[:5]
+        by_txt = sorted([c for c in pool if c.text_rank], key=lambda c: c.text_rank)[:5]
+        fused = sorted(pool, key=lambda c: -c.rrf_score)[:5]
+        _t(trace, "doc_leg", leg=leg.name, leg_text=leg.text, ranking_text=text, search_text=probe.search_query,
+           persona=caller.persona or "admin", sources_searched=list(leg_route.sources), hints=list(leg.sources),
+           filters={"years": list(leg_route.years), "plan_codes": list(leg_route.plan_codes), "as_of": leg_route.as_of,
+                    "member_key": ctx.member_key, "record": dict(ctx.record)},
+           pool_size=len(pool), pool_by_source={dt: sum(1 for c in pool if c.doc_type == dt) for dt in sorted({c.doc_type for c in pool})},
+           vector_top=[line(c) for c in by_vec], bm25_top=[line(c) for c in by_txt], fused_top=[line(c) for c in fused],
+           rerank_top=[line(c) for c in probe.reranked[:5]])
     return probe, probe.reranked, False
 
 
@@ -546,4 +593,4 @@ def _run_member_leg(leg: Leg, caller: Caller, ctx: retrieval.Context, member_id:
     return {**base, "status": "ok" if result["row_count"] else "insufficient_evidence",
             "reason": None if result["row_count"] else "no rows",
             "columns": result["columns"], "rows": result["rows"], "row_count": result["row_count"],
-            "masked_columns": result["masked_columns"]}
+            "masked_columns": result["masked_columns"], "bound": params}

@@ -801,6 +801,9 @@ def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool, categories: tuple
                 receipt.add(metric, f"{value:.3f}" + (f"  95% CI [{ci[0]:.3f}, {ci[1]:.3f}]" if ci else ""))
         for category, metrics in sorted(result.by_category.items()):
             receipt.add(f"  {category}", _fmt_slice(metrics))
+        for number, w in sorted(result.by_work.items()):
+            unverified = f"  unverified={w['unverified']}" if w["unverified"] else ""
+            receipt.add(f"  work {number}: {w['name']}", f"pass {w['passed']}/{w['n']}{unverified}")
         for slice_name, metrics in sorted(result.by_source.items()):
             receipt.add(f"  source:{slice_name}", _fmt_slice(metrics))
         for stage, pct in result.latency.items():
@@ -822,6 +825,12 @@ def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool, categories: tuple
                 receipt.fail(f"THRESHOLD: {failure}")
             else:
                 receipt.add("below threshold", failure)
+        if not sabotage and not categories:
+            # A full run rewrites the dashboard so the page and the store never disagree.
+            from raglab import dashboard
+
+            with db.connect() as conn:
+                receipt.add("dashboard", str(dashboard.render(conn)))
     except Exception as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()

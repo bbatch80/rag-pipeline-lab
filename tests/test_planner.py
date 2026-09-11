@@ -174,3 +174,16 @@ def test_modules_are_a_closed_menu_over_the_catalog():
         assert set(spec["sources"]) <= set(planner.SOURCE_GUIDE), name
     assert planner.MODULES["ask"]["named_queries"] == ()  # Ask never reaches the warehouse
     assert "member_appeals" not in planner.MODULES["agent_assist"]["named_queries"]  # the rep has no grant on APPEALS
+
+
+def test_compose_records_every_stage_in_order(db, monkeypatch):
+    _seed_tiers(db, per_tier=1, embed=True); _fake_models(monkeypatch); _exact_scan(db)
+    events = []
+    plan = _plan({"name": "docs", "kind": "doc_probe", "text": "what do the secret facts say"},
+                 {"name": "adj", "kind": "member_query", "query_name": "claim_adjudication", "slots": ["claim_id"]})
+    planner.compose(_NoCommit(db), "what do the secret facts say about claim CLM-1363781509", _caller("employee"), plan=plan, module="agent_assist", trace=events)
+    db.execute("RESET ROLE")
+    assert [e["stage"] for e in events] == ["question", "route", "identifiers", "menu", "plan", "doc_leg", "leg_verdict", "warehouse_leg", "composed", "disclosed"]
+    doc = next(e for e in events if e["stage"] == "doc_leg")
+    assert doc["vector_top"] and doc["rerank_top"] and set(doc["sources_searched"]) >= {"brochure", "sop"}
+    assert events[-1]["payload_id"] and events[-2]["status"] in ("ok", "insufficient_evidence")

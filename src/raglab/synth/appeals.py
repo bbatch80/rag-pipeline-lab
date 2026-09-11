@@ -251,7 +251,7 @@ def _statement(doc: Doc, member: dict, claim_txt: str, dos: str, desc: str, reas
 def generate(conn: psycopg.Connection, cases: int = 300, letters: int = 40, seed: int = 42,
              appeals_dir: Path = APPEALS_DIR, pdf_src_dir: Path = PDF_SRC_DIR,
              manifest_path: Path = MANIFEST_PATH, calls_dir: Path = CALLS_DIR,
-             clinical_manifest: Path = CLINICAL_MANIFEST) -> dict:
+             clinical_manifest: Path = CLINICAL_MANIFEST, pdf_dir: Path = PDF_DIR) -> dict:
     rng = random.Random(seed)
     counts = adjudicate(conn, calls_dir)
     candidates = conn.execute(
@@ -293,7 +293,12 @@ def generate(conn: psycopg.Connection, cases: int = 300, letters: int = 40, seed
     appeals_dir.mkdir(parents=True, exist_ok=True)
     pdf_src_dir.mkdir(parents=True, exist_ok=True)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    for old in list(appeals_dir.glob("appeal_*.md")) + list(pdf_src_dir.glob("letter_*.txt")) + list(PDF_DIR.glob("letter_*.pdf")):
+    # Every directory this touches is a parameter: a caller that passes
+    # temporary folders (the tests) must never reach the real ones. The
+    # rendered PDFs used a hard-coded path here until 2026-09-11 — each full
+    # test run emptied data/internal/appeals_pdf and the next ingest deleted
+    # the 40 determination letters.
+    for old in list(appeals_dir.glob("appeal_*.md")) + list(pdf_src_dir.glob("letter_*.txt")) + list(pdf_dir.glob("letter_*.pdf")):
         old.unlink()
 
     stats = {"cases": 0, "letters_pdf": 0, "clinical_citations": 0, "policy_citations": 0}

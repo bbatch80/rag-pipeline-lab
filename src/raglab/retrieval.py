@@ -69,6 +69,8 @@ class Context:
     member_key: str | None = None
     record: dict = field(default_factory=dict)  # metadata field -> value (case_id, claim_id)
     query: str = ""  # the question with resolved identifiers removed
+    as_of: str | None = None  # the claim's date of service (Phase 3 decision 5): bound before planning
+    unresolved: list = field(default_factory=list)  # well-formed identifiers that match no record: [{kind, value}]
 
 
 STRIP_IDS = os.environ.get("RAGLAB_STRIP_IDS", "off") == "on"  # measured 2026-09-09: stripping loses the ranker its strongest signal
@@ -131,10 +133,16 @@ def resolve_context(conn: psycopg.Connection, member_id: str | None, query_text:
         except psycopg.errors.UndefinedTable:  # no synthea schema (CI): no context
             return ctx
         if not row:
+            # Passes shape + check digit, exists for nobody: fail closed (no
+            # context) and SAY SO — a surface must distinguish "no member
+            # given" from "no such member" (Phase 3, payload 1.1.0).
+            ctx.unresolved.append({"kind": kind, "value": canon})
             continue
         ctx.member_key = ctx.member_key or str(row[0])
         if kind in _RECORD_FIELD:
             ctx.record.setdefault(_RECORD_FIELD[kind], canon)
+        if kind in ("claim_id", "case_id") and ctx.as_of is None:
+            ctx.as_of = _date_of_service(conn, kind, canon)
         if surface:
             stripped = stripped.replace(surface, " ", 1)
     ends_q = stripped.rstrip().endswith("?")
@@ -144,6 +152,24 @@ def resolve_context(conn: psycopg.Connection, member_id: str | None, query_text:
     if STRIP_IDS:
         ctx.query = stripped if len(re.findall(r"[A-Za-z]{2,}", stripped)) >= 2 else ctx.query
     return ctx
+
+
+def _date_of_service(conn: psycopg.Connection, kind: str, canon: str) -> str | None:
+    """The claim's date of service, read by key before any leg runs (Phase 3
+    decision 5): a policy leg is judged against the version in effect that
+    day. A case names its claim; a claim names its encounter. A fixed lookup,
+    not a chain — nothing is decided from it."""
+    sql = {
+        "claim_id": "SELECT e.start::date FROM synthea.claim_adjudication a JOIN synthea.encounters e ON e.id = a.encounter WHERE a.claim_id = %s",
+        "case_id": "SELECT e.start::date FROM synthea.appeals ap JOIN synthea.claim_adjudication a ON a.claim_id = ap.claim_id "
+                   "JOIN synthea.encounters e ON e.id = a.encounter WHERE ap.case_id = %s",
+    }[kind]
+    try:
+        with conn.transaction():
+            row = conn.execute(sql, (canon,)).fetchone()
+    except psycopg.Error:
+        return None
+    return row[0].isoformat() if row and row[0] else None
 
 
 def expand_versions(conn: psycopg.Connection, route: Route, ctx: Context, query_text: str) -> Route:

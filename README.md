@@ -297,6 +297,22 @@ the receipt's exit code. Verified scenarios: single-document surgical sync
 (290 skipped / 1 reingested / 1 embedded), deletion propagation (source gone
 → rows cascade out), full backfill with post-rebuild re-baseline.
 
+## Composed context (Phase 3)
+
+A question that spans sources becomes one plan of up to three legs — document
+probes over the governed corpus and named warehouse queries from a fixed
+catalog — executed as the caller's identity and returned as one payload
+(spec 1.1.0) with one status and one disclosure record. Status is
+worst-of-required: `ok` only when every required leg returned evidence,
+otherwise `insufficient_evidence` with `missing[]` naming the legs; there is
+no partial status. Identifiers never come from a plan: the member key,
+record keys, and the claim's date of service are resolved from the question
+by shape, check digit, and lookup, and bound to every leg by the platform; a
+leg carrying an identifier the question did not is rejected before anything
+runs. Plans are one pass — no leg is decided from another's result — with a
+single widen-once retry for a hinted document leg that found nothing.
+`raglab query` plans by default; `--no-plan` runs the single-probe path.
+
 ## Governance
 
 Two lanes, enforcement in the engine — application code never filters

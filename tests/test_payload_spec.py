@@ -61,3 +61,28 @@ def test_schema_rejects_missing_acl_basis():
     del built["chunks"][0]["acl_basis"]
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(built, SCHEMA)
+
+
+def test_composed_payload_validates_and_is_worst_of_required():
+    plan = {"shape": "compound", "origin": "caller", "model": None, "widened": False, "legs": [
+        {"name": "docs", "kind": "doc_probe", "text": "q", "sources": ["appeal"], "query_name": None, "slots": [], "required": True},
+        {"name": "adj", "kind": "member_query", "text": None, "sources": [], "query_name": "claim_adjudication", "slots": ["claim_id"], "required": True},
+    ]}
+    docs_ok = {"leg": "docs", "status": "ok", "confidence": 0.9, "router": {"years": [2026], "plan_codes": [], "as_of": None}, "chunk_indexes": [0], "widened": False, "reason": None}
+    adj_missing = {"leg": "adj", "status": "not_executed", "query_name": "claim_adjudication", "reason": "no warehouse identity"}
+    chunk = payload.build("q", IN_SCOPE, [_candidate(0.9)])["chunks"][0]
+    composed = payload.compose("q", plan, [docs_ok], [adj_missing], [chunk], subject="M344317862", unresolved=[], as_of_defaulted=False)
+    jsonschema.validate(composed, SCHEMA)
+    assert composed["spec_version"] == "1.1.0" and composed["status"] == "insufficient_evidence" and composed["missing"] == ["adj"]
+    adj_ok = {**adj_missing, "status": "ok", "reason": None, "columns": ["CLAIM_ID"], "rows": [["CLM-1"]], "row_count": 1, "masked_columns": []}
+    composed = payload.compose("q", plan, [docs_ok], [adj_ok], [chunk], subject=None, unresolved=[{"kind": "member_id", "value": "M999900004"}], as_of_defaulted=True)
+    jsonschema.validate(composed, SCHEMA)
+    assert composed["status"] == "ok" and composed["missing"] == [] and composed["as_of_defaulted"] is True
+    assert "partial" not in {composed["status"]}  # no partial status: derived by the surface, never declared
+
+
+def test_one_point_zero_shape_still_validates():
+    built = payload.build("q", IN_SCOPE, [_candidate(0.9)])
+    built["spec_version"] = "1.0.0"
+    del built["chunks"][0]["source"]["doc_type"]
+    jsonschema.validate(built, SCHEMA)

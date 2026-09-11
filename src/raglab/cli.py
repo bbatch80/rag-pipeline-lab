@@ -1159,16 +1159,24 @@ def snowflake_verify_cmd():
 @main.command("query")
 @click.argument("prompt")
 @click.option("--persona", default=None,
-              help="public | employee | care_team (omit for admin full view)")
-def query_cmd(prompt: str, persona: str | None):
+              help="public | employee | care_team | member_services | appeals (omit for admin full view)")
+@click.option("--member-id", default=None, help="Member context: the member the surface has open.")
+@click.option("--no-plan", is_flag=True, help="The v1 path: one document probe, spec 1.0.0 shape, no plan.")
+def query_cmd(prompt: str, persona: str | None, member_id: str | None, no_plan: bool):
     """Run a prompt through the full funnel and print the context payload —
-    exactly what a consuming model receives."""
+    exactly what a consuming model receives. Plans by default (Phase 3): the
+    rules fast path today, the pinned planner model from P3-PR2."""
     import json
 
     from raglab.pipeline import run_query
+    from raglab import planner
 
     with db.connect() as conn:
-        built = run_query(conn, prompt, persona=persona, source="interactive")
+        if no_plan:
+            built = run_query(conn, prompt, persona=persona, source="interactive", member_id=member_id)
+        else:
+            built = planner.compose(conn, prompt, planner.Caller(persona=persona), member_id=member_id,
+                                    source="interactive")
     click.echo(json.dumps(built, indent=2, default=str))
 
 

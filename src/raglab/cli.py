@@ -771,10 +771,14 @@ def ablation_cmd():
 @click.option("--sabotage", is_flag=True, help="Discrimination check: junk query vectors.")
 @click.option("--category", "categories", multiple=True,
               help="Only these golden categories (iteration aid; partial runs never gate).")
-def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool, categories: tuple[str, ...]):
+@click.option("--replan", is_flag=True,
+              help="Ask the live planner model fresh for every golden question and report plans that differ from the stored ones (reported, never gated).")
+def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool, categories: tuple[str, ...], replan: bool):
     """Tier-1 deterministic retrieval eval over the golden set (free)."""
     if categories and gate:
         raise click.UsageError("--gate needs the whole golden set; drop --category")
+    if replan and gate:
+        raise click.UsageError("--replan is a drift report, not a gate; drop --gate")
     from raglab import eval_retrieval
     from raglab.timing import BUDGET_P95_MS
 
@@ -782,7 +786,7 @@ def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool, categories: tuple
     try:
         with db.connect() as conn:
             result = eval_retrieval.run(conn, config_label=label, sabotage=sabotage,
-                                        categories=tuple(categories))
+                                        categories=tuple(categories), replan=replan)
         receipt.add("run id", result.run_id)
         receipt.add("corpus", result.corpus_hash[:12])
         from raglab import rerank as rerank_mod
@@ -808,6 +812,10 @@ def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool, categories: tuple
                                 _fmt_diff(d))
             else:
                 receipt.add(f"vs run {result.diff_against}", "no question flipped")
+        if replan:
+            receipt.add("replan", f"{len(result.replan)} plan(s) the live model would change")
+            for qid, stored, fresh in result.replan[:20]:
+                receipt.add(f"  {qid}", f"stored {stored}  ->  fresh {fresh}")
         for failure in result.failures:
             if gate and not sabotage:
                 receipt.fail(f"THRESHOLD: {failure}")

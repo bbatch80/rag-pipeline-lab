@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 
 import psycopg
 
+from raglab import planner
 from raglab import ablation, config, deid, rerank, retrieval, router, sources, stats
 from raglab.timing import BUDGET_P95_MS, Stopwatch, percentile
 
@@ -73,6 +74,7 @@ class RetrievalEvalResult:
     latency: dict = field(default_factory=dict)     # stage -> {p50, p95} ms over the golden set
     diff_against: int | None = None
     failures: list = field(default_factory=list)
+    replan: list = field(default_factory=list)  # [(qid, stored shape/legs, fresh shape/legs)] — plans the live model would change
     corpus_hash: str = ""
 
 
@@ -119,6 +121,7 @@ def run(
     config_label: str = "baseline",
     sabotage: bool = False,
     categories: tuple[str, ...] = (),
+    replan: bool = False,
 ) -> RetrievalEvalResult:
     """categories: run only those golden categories (iteration aid; the
     run is labelled partial and never gates a merge).
@@ -138,6 +141,7 @@ def run(
     ).fetchone()[0]
 
     scores: list[tuple] = []  # (qid, category, metric, value, detail)
+    replans: list[tuple] = []
     registry = sources.load(conn)
     junk_vector = "[" + ",".join(["0.01"] * 1536) + "]"
     junk_text = "zzqx zzqv zzqw"  # matches no chunk: the lexical arm returns nothing
@@ -148,6 +152,22 @@ def run(
             continue
         if category == "named_query":  # warehouse-only assertions live in tests/test_named_queries.py
             continue
+
+        # Planner shape (Phase 3): every golden item has an expected shape —
+        # compound for the two-lane items, simple for everything else. The
+        # planner's decision is read from the stored plan (the model ran once
+        # per question) or from the rules path by configuration. Reported now;
+        # routing accuracy against expected legs gates from P3-PR4.
+        if category not in ("unanswerable",):
+            expected_shape = "compound" if category == "two_lane" else "simple"
+            plan = planner.plan_for(conn, item["question"])
+            if replan:
+                stored, fresh = planner.replan(conn, item["question"])
+                if _legs_key(stored) != _legs_key(fresh.to_dict()):
+                    replans.append((qid, _legs_key(stored), _legs_key(fresh.to_dict())))
+            scores.append((qid, category, "shape_accuracy", float(plan.shape == expected_shape),
+                           {"shape": plan.shape, "origin": plan.origin, "legs": len(plan.legs),
+                            "fallback": plan.fallback_reason}))
 
         if category == "two_lane":
             continue  # needs Snowflake; asserted in tests/test_two_lane_golden.py
@@ -180,8 +200,12 @@ def run(
             person = conn.execute(
                 "SELECT id FROM synthea.patients WHERE member_id = %s", (item["member_id"],)
             ).fetchone()
-            payload = run_query(conn, item["question"], persona=item.get("persona", "member_services"), source="eval",
-                                member_id=item.get("member_id"))
+            # The governance gates test the WALLS under the composed path (one
+            # payload, one disclosure, spec 1.1.0), not routing: the plan is the
+            # rules plan — one document probe on the question. Routing quality is
+            # its own metric (shape_accuracy now; routing accuracy in P3-PR4).
+            payload = planner.compose(conn, item["question"], planner.Caller(persona=item.get("persona", "member_services")),
+                                      member_id=item.get("member_id"), plan=planner.plan_rules(item["question"]), source="eval")
             hashes = [c["source"]["content_hash"] for c in payload.get("chunks", [])]
             others = 0
             if hashes:
@@ -202,10 +226,10 @@ def run(
                 continue
             from raglab.pipeline import run_query
 
-            denied = run_query(conn, item["question"], persona=item["persona_deny"],
-                               source="eval", member_id=item.get("member_id"))
-            allowed = run_query(conn, item["question"], persona=item["persona_allow"],
-                                source="eval", member_id=item.get("member_id"))
+            denied = planner.compose(conn, item["question"], planner.Caller(persona=item["persona_deny"]),
+                                     member_id=item.get("member_id"), plan=planner.plan_rules(item["question"]), source="eval")
+            allowed = planner.compose(conn, item["question"], planner.Caller(persona=item["persona_allow"]),
+                                      member_id=item.get("member_id"), plan=planner.plan_rules(item["question"]), source="eval")
             titles = [c["source"]["title"] for c in allowed.get("chunks", [])]
             denied_titles = [c["source"]["title"] for c in denied.get("chunks", [])]
             leaked = [t for t in denied_titles if any(e in t for e in item["allow_titles"])]
@@ -331,7 +355,7 @@ def diff_runs(conn: psycopg.Connection, before: int, after: int) -> dict:
 
 
 _SLICE_METRICS = ("hit@5", "precision@5", "source_coverage", "gate_correct",
-                  "deny_clean", "allow_answered", "allow_hit", "scope_clean", "version_clean")
+                  "deny_clean", "allow_answered", "allow_hit", "scope_clean", "version_clean", "shape_accuracy")
 
 
 def _slice(rows: list[tuple]) -> dict:
@@ -424,3 +448,11 @@ def _summarize(run_id: int, scores: list[tuple]) -> RetrievalEvalResult:
                 else "entitled persona was wrongly blocked"
             )
     return result
+
+
+def _legs_key(plan: dict | None) -> str:
+    """Order-free summary of a plan for the replan report: shape + (kind, source/query) per leg."""
+    if not plan:
+        return "none"
+    legs = sorted((leg["kind"], leg.get("query_name") or ",".join(sorted(leg.get("sources") or [])) or "*") for leg in plan.get("legs", []))
+    return f"{plan.get('shape')}: " + "; ".join(f"{k}[{t}]" for k, t in legs)

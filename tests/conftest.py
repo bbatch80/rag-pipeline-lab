@@ -1,6 +1,8 @@
 import os
 os.environ.setdefault("RAGLAB_EMBED_CACHE", "off")  # tests patch the embedder; the cache must not answer for it
 os.environ.setdefault("RAGLAB_RERANK_CACHE", "off")  # tests patch the reranker; same reason
+os.environ.setdefault("RAGLAB_PLANNER", "rules")  # tests never call the planner model; model tests inject a fake client
+os.environ.setdefault("RAGLAB_PLAN_CACHE", "off")
 import pytest
 
 from raglab import db as raglab_db

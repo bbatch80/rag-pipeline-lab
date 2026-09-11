@@ -7,7 +7,7 @@ import math
 # [0, 1] values and are reported as means only.
 BINARY_METRICS = frozenset({
     "hit@5", "gate_correct", "wrong_abstention", "deny_clean", "scope_clean", "version_clean",
-    "allow_answered", "allow_hit", "abstained",
+    "allow_answered", "allow_hit", "abstained", "shape_accuracy",
 })
 
 

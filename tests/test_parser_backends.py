@@ -1,9 +1,5 @@
 """Backend normalization contract: every backend parses the same PDF into
-valid normalized Elements that the chunker accepts.
-
-The Docling test is skipped when docling is not installed (the fast CI job);
-the dedicated docling CI job runs it on every push.
-"""
+valid normalized Elements that the chunker accepts."""
 
 import pytest
 
@@ -53,9 +49,3 @@ def test_unstructured_backend_normalizes(sample_pdf):
 
     _assert_normalized(UnstructuredBackend().parse(sample_pdf))
 
-
-def test_docling_backend_normalizes(sample_pdf):
-    pytest.importorskip("docling")
-    from raglab.parsing.docling_backend import DoclingBackend
-
-    _assert_normalized(DoclingBackend().parse(sample_pdf))

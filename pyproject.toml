@@ -28,9 +28,6 @@ dev = [
     "jsonschema>=4.26.0",
     "pytest>=8.0",
 ]
-docling = [
-    "docling>=2.121.0",
-]
 phi = [
     "en-core-web-lg",
     "presidio-analyzer>=2.2.364",

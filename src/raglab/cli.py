@@ -936,22 +936,6 @@ def eval_diff_cmd(before: int, after: int):
     receipt.finish()
 
 
-@main.command("bakeoff")
-@click.argument("backend_kind", type=click.Choice(["docling", "fast"]))
-def bakeoff_cmd(backend_kind: str):
-    """Re-ingest the table-heavy 2026 brochures with the chosen parser."""
-    from raglab import experiments
-
-    receipt = Receipt(f"raglab bakeoff {backend_kind}")
-    try:
-        with db.connect() as conn:
-            for line in experiments.bakeoff_reingest(conn, backend_kind):
-                receipt.add("reingested", line)
-    except Exception as exc:
-        receipt.fail(f"{type(exc).__name__}: {exc}")
-    receipt.finish()
-
-
 @main.command("eval-generation")
 @click.option("--label", default="demo", help="config_label recorded with the run.")
 def eval_generation_cmd(label: str):

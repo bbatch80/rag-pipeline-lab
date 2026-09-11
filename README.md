@@ -53,9 +53,6 @@ only the chunks whose copy changed; `raglab embed && raglab index` finish
 it in about three minutes. Metadata alone is refreshed in place by the
 ingest's skip path.
 
-The Docling parser backend is optional locally: `uv sync --group docling`,
-then `uv run docling-tools models download` (one-time, explicit model fetch).
-
 ## Vector index benchmark
 
 HNSW (`m=16`, `ef_construction=64`, cosine) vs exact scan. Corpus: 11,022

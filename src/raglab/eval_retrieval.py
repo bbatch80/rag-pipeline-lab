@@ -190,7 +190,7 @@ def run(
         if category == "version_negative":
             # A default (undated) question about a policy must not surface
             # its superseded version; a dated one must not surface the other.
-            decision = router.route(item["question"])
+            decision = router.route(item["question"], hierarchies=registry.hierarchies())
             ctx = retrieval.resolve_context(conn, None, item["question"])
             decision = retrieval.expand_versions(conn, decision, ctx, item["question"])
             question = deid.translate_query(conn, ctx.query)
@@ -198,7 +198,8 @@ def run(
             candidates = retrieval.search(conn, junk_text if sabotage else question, vector, decision,
                                           embed=(lambda t: junk_vector) if sabotage else (lambda t: retrieval.embed_cached(conn, t)),
                                           member_key=ctx.member_key, record=ctx.record)
-            reranked = rerank.rerank(question, candidates, top_n=10, stratify_years=decision.years)
+            reranked = rerank.rerank(question, candidates, top_n=10, stratify_years=decision.years,
+                                     stratify_plans=decision.cover_keys if decision.cover_field == "plan_code" else ())
             titles = [c.doc_title for c in reranked[:10]]
             leaked = [t for t in titles if any(a in t for a in item["absent_titles"])]
             scores.append((qid, category, "version_clean", float(not leaked), {"leaked": leaked, "as_of": decision.as_of}))
@@ -263,7 +264,7 @@ def run(
                            {"expected": item["allow_titles"]}))
             continue
 
-        decision = router.route(item["question"])
+        decision = router.route(item["question"], hierarchies=registry.hierarchies())
         # Member context, like the pipeline: the item's member_id field (the
         # member a rep would have open) or an identifier in the question.
         ctx = retrieval.resolve_context(conn, item.get("member_id"), item["question"])
@@ -300,6 +301,7 @@ def run(
             reranked = rerank.rerank(
                 question, candidates, top_n=10,
                 stratify_years=decision.years,
+                stratify_plans=decision.cover_keys if decision.cover_field == "plan_code" else (),
             )
         abstained, best = rerank.abstention_verdict(reranked)
         snap = watch.snapshot()

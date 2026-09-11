@@ -703,7 +703,8 @@ def explain_cmd(query: str, persona: str | None, generate: bool):
         t = f"1/(60+{c.text_rank})" if c.text_rank else "0"
         click.echo(_line(c, f"{c.rrf_score:.4f} = {v} + {t}  "))
 
-    reranked = rerank.rerank(search_query, candidates, stratify_years=decision.years)
+    reranked = rerank.rerank(search_query, candidates, stratify_years=decision.years,
+                             stratify_plans=decision.cover_keys if decision.cover_field == "plan_code" else ())
     click.echo(f"\n[5] RERANK ({rerank.RERANKER}: {rerank.MODEL_NAME}) top 5"
                + (" — year-stratified" if len(decision.years) > 1 else ""))
     for c in reranked[:5]:

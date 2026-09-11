@@ -25,6 +25,7 @@ def build(
     route: Route,
     reranked: list[Candidate],
     max_chunks: int = 8,
+    coverage: dict | None = None,
 ) -> dict:
     retrieved_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     if route.scope != "in_scope":
@@ -41,6 +42,7 @@ def build(
     return {
         "spec_version": SPEC_VERSION,
         "query": query,
+        **({"coverage": coverage} if coverage else {}),
         "status": "insufficient_evidence" if insufficient else "ok",
         "confidence": round(best or 0.0, 4),
         "retrieved_at": retrieved_at,
@@ -81,6 +83,7 @@ def compose(
     subject: str | None,
     unresolved: list[dict],
     as_of_defaulted: bool,
+    coverage: dict | None = None,
 ) -> dict:
     """The composed payload (spec 1.1.0, Phase 3): one question, one plan, the
     legs' results, one status. Status is worst-of-required — `ok` only if
@@ -108,6 +111,7 @@ def compose(
         "subject": subject,
         "unresolved_identifiers": unresolved,
         "as_of_defaulted": as_of_defaulted,
+        **({"coverage": coverage} if coverage else {}),
     }
 
 

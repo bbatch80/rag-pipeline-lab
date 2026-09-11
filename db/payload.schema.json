@@ -390,6 +390,52 @@
     "timings": {
       "type": "object",
       "description": "Per-stage ms + total (D5)"
+    },
+    "coverage": {
+      "type": "object",
+      "required": [
+        "field",
+        "keys",
+        "in_corpus",
+        "with_evidence",
+        "missing_from_corpus"
+      ],
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "asked": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "in_corpus": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "with_evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "missing_from_corpus": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "The coverage rule fired: the question named a level (e.g. a program) but not the level beneath (its plans); every key beneath was searched \u2014 which have evidence here, which the corpus lacks"
     }
   },
   "allOf": [

@@ -8,10 +8,12 @@ ranking; this module never filters content in application code.
 """
 
 import json
+from dataclasses import dataclass
 import uuid
 
 import psycopg
 
+from raglab.router import Route
 from raglab import payload as payload_mod
 from raglab import rerank, retrieval, router
 from raglab.timing import Stopwatch
@@ -40,10 +42,36 @@ def run_query(
         raise ValueError(f"unknown persona {persona!r}; expected one of {PERSONAS}")
 
     watch = Stopwatch()
+    ctx = retrieval.resolve_context(conn, member_id, query) if router.route(query).scope == "in_scope" \
+        else retrieval.Context(query=query)
+    probe = _probe(conn, query, persona, ctx, watch)
+    with watch.stage("payload"):
+        built = payload_mod.build(query, probe.decision, probe.reranked)
+        built["payload_id"] = str(uuid.uuid4())
+        built["persona"] = persona or "admin"
+        built["member_context"] = member_id
+        built["record_context"] = ctx.record
+        built["unresolved_identifiers"] = ctx.unresolved
+    _disclose_and_commit(conn, built, probe.reranked, source, user_id, watch)
+    return built
+
+
+@dataclass
+class Probe:
+    """One document search under one identity: the v1 funnel minus payload
+    and disclosure, so a composed plan (Phase 3) can run several probes and
+    disclose once."""
+    decision: Route
+    reranked: list
+    search_query: str
+
+
+def _probe(conn, query: str, persona: str | None, ctx: retrieval.Context, watch: Stopwatch,
+           decision: Route | None = None) -> Probe:
     with watch.stage("route"):
-        decision = router.route(query)
-    reranked = []
-    ctx = retrieval.Context(query=query)
+        decision = decision or router.route(query)
+    reranked: list = []
+    search_query = query
     if decision.scope == "in_scope":
         # Re-identification is itself an entitlement: queries are translated
         # (name -> vault pseudonym) only for sessions entitled to the vault —
@@ -52,38 +80,34 @@ def run_query(
         # cannot read the vault.
         from raglab import deid
 
-        # Resolved on the raw question: translation would replace the
-        # identifiers this looks for.
-        ctx = retrieval.resolve_context(conn, member_id, query)
         decision = retrieval.expand_versions(conn, decision, ctx, query)
         with watch.stage("translate"):
             if persona is None or persona == "care_team":
-                search_query = deid.translate_query(conn, ctx.query)
+                search_query = deid.translate_query(conn, query)
             else:  # identifiers only: a key the caller typed is not re-identification
-                search_query = deid.translate_query(conn, ctx.query, deid.IDENTIFIER_TYPES)
+                search_query = deid.translate_query(conn, query, deid.IDENTIFIER_TYPES)
         # Embedding happens before the role switch: the cache table is the
         # owner's, and a vector does not depend on who is asking.
         with watch.stage("embed"):
             vector = retrieval.embed_cached(conn, search_query)
         if persona is not None:
             conn.execute(f"SET LOCAL ROLE persona_{persona}")
-        with watch.stage("search"):
-            candidates = retrieval.search(conn, search_query, vector, decision, member_key=ctx.member_key,
-                                          record=ctx.record, embed=lambda t: retrieval.embed_cached(conn, t))
-        with watch.stage("rerank"):
-            reranked = rerank.rerank(
-                search_query, candidates, stratify_years=decision.years
-            )
-        if persona is not None:
-            conn.execute("RESET ROLE")
+        try:
+            with watch.stage("search"):
+                candidates = retrieval.search(conn, search_query, vector, decision, member_key=ctx.member_key,
+                                              record=ctx.record, embed=lambda t: retrieval.embed_cached(conn, t))
+            with watch.stage("rerank"):
+                reranked = rerank.rerank(search_query, candidates, stratify_years=decision.years)
+        finally:
+            if persona is not None:
+                conn.execute("RESET ROLE")
+    return Probe(decision=decision, reranked=reranked, search_query=search_query)
 
-    with watch.stage("payload"):
-        built = payload_mod.build(query, decision, reranked)
-        built["payload_id"] = str(uuid.uuid4())
-        built["persona"] = persona or "admin"
-        built["member_context"] = member_id
-        built["record_context"] = ctx.record
 
+def _disclose_and_commit(conn, built: dict, reranked, source: str, user_id: int | None, watch: Stopwatch) -> None:
+    """Fail-closed (D10): disclosure INSERT -> timings -> COMMIT, one
+    transaction. If the disclosure row cannot be written, nothing is
+    committed and the caller gets no payload."""
     with watch.stage("disclose"):
         try:
             _disclose(conn, built, reranked, source, user_id)
@@ -93,12 +117,12 @@ def run_query(
             raise RuntimeError("context withheld: disclosure record failed") from exc
     # The disclose stage is measured after the row exists; stamp the full
     # picture onto the same row before the commit that makes it real.
+    built["timings"] = watch.snapshot()
     conn.execute(
         "UPDATE disclosure_log SET timings = %s WHERE payload_id = %s",
-        (json.dumps(watch.snapshot()), built["payload_id"]),
+        (json.dumps(built["timings"]), built["payload_id"]),
     )
     conn.commit()
-    return built
 
 
 DISCLOSURE_FAILURES = {"count": 0}  # process memory: a DB that can't take the row can't take the count

@@ -58,3 +58,20 @@ def test_probe_searches_only_the_members_plan(db, monkeypatch):
     probe = pipeline._probe(db, "urgent care copay", "public", ctx, Stopwatch())
     assert probe.decision.plan_codes == ("71-018",) and probe.decision.plan_from_enrollment
     assert {c.plan_code for c in probe.reranked} == {"71-018"}
+
+
+@pytest.mark.readonly
+def test_resolver_reads_the_members_enrollment_from_the_real_table(db):
+    """Against the live enrollment table (skipped where the Synthea schema is
+    absent): the fake in the probe test cannot hide a broken lookup — the
+    first version compared a text column to a uuid and silently found nothing."""
+    try:
+        row = db.execute("SELECT member_id, patient FROM synthea.enrollment WHERE plan_code IS NOT NULL LIMIT 1").fetchone()
+    except Exception:  # noqa: BLE001
+        pytest.skip("no synthea.enrollment here")
+    member_id, patient = row
+    ctx = retrieval.resolve_context(db, member_id, "What is their urgent care copay?")
+    assert ctx.member_key == str(patient)
+    assert ctx.enrollment and all(isinstance(y, int) and code for y, code in ctx.enrollment.items())
+    bound = retrieval.bind_enrollment_plan(router.route("What is their urgent care copay?"), ctx)
+    assert bound.plan_from_enrollment and bound.plan_codes

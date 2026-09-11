@@ -180,8 +180,8 @@ def _enrollment_plans(conn: psycopg.Connection, member_key: str) -> dict[int, st
     lookup by key at resolve time (not surface context, not a leg's result)."""
     try:
         with conn.transaction():
-            rows = conn.execute("SELECT year, plan_code FROM synthea.enrollment WHERE patient = %s::uuid ORDER BY year",
-                                (member_key,)).fetchall()
+            rows = conn.execute("SELECT year, plan_code FROM synthea.enrollment WHERE patient::text = %s ORDER BY year",
+                                (str(member_key),)).fetchall()
     except psycopg.Error:
         return {}
     return {int(y): code for y, code in rows if code}

@@ -1250,7 +1250,8 @@ def trace_cmd(question: str, persona: str | None, module: str | None, member_id:
             if ev["search_text"] != ev["ranking_text"]:
                 click.echo(f"    after vault translation: {ev['search_text']}")
             f = ev["filters"]
-            click.echo(f"    searched: {', '.join(ev['sources_searched']) or 'every visible source'}   filters: years {f['years'] or 'any'}, plan {f['plan_codes'] or 'any'}, as-of {f['as_of'] or 'none'}, member {f['member_key'] or 'none'}, record {f['record'] or '{}'}")
+            plan_txt = (f"{f['plan_codes']} (the member's enrolled plan, from enrollment)" if f.get("plan_from_enrollment") else (f['plan_codes'] or 'any'))
+            click.echo(f"    searched: {', '.join(ev['sources_searched']) or 'every visible source'}   filters: years {f['years'] or 'any'}, plan {plan_txt}, as-of {f['as_of'] or 'none'}, member {f['member_key'] or 'none'}, record {f['record'] or '{}'}")
             click.echo(f"    pool: {ev['pool_size']} candidates by source {ev['pool_by_source']}")
             click.echo("    (each source has its own pool: v# = vector rank within that source, k# = keyword rank within that source; rrf fuses the two)")
             for label, key in (("vector lane, best per source", "vector_top"), ("keyword lane, best per source", "bm25_top"), ("fused top 5 across sources", "fused_top")):

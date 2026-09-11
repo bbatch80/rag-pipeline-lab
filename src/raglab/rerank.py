@@ -182,6 +182,7 @@ def rerank_text(c: Candidate) -> str:
 def rerank(
     query: str, candidates: list[Candidate], top_n: int = TOP_N_OUT,
     stratify_years: tuple[int, ...] = (),
+    stratify_plans: tuple[str, ...] = (),
 ) -> list[Candidate]:
     """Returns the top_n candidates by cross-encoder score, scores attached.
 
@@ -224,6 +225,20 @@ def rerank(
         candidate.rerank_score = score
     ordered = sorted(candidates, key=lambda c: c.rerank_score, reverse=True)
 
+    if len(stratify_plans) >= 2 and len(stratify_years) < 2:
+        # The coverage rule: every covered plan's best chunk near the top, by
+        # rank within its plan (scores ARE comparable here — same query).
+        lanes = {code: [c for c in ordered if c.plan_code == code] for code in stratify_plans}
+        # Chunks the rule does not classify — sources with no plan (bulletins,
+        # letters, policies, records) — keep their own lane and compete on
+        # score: the rule arranges the covered source, it never demotes the
+        # others (P4: a claims bulletin fell outside every plan lane and was
+        # dropped, blocking an entitled answer).
+        lanes["*"] = [c for c in ordered if c.plan_code not in stratify_plans]
+        # strongest lane leads; every lane still gets its seat in the round-robin
+        lanes = dict(sorted(lanes.items(), key=lambda kv: -(kv[1][0].rerank_score if kv[1] else -1)))
+        return _interleave(ordered, lanes, top_n)
+
     if len(stratify_years) < 2:
         return ordered[:top_n]
 
@@ -231,15 +246,20 @@ def rerank(
     # scores are not comparable: interleave by RANK within each year, latest
     # year first, so the top of every year is near the top of the list.
     lanes = {year: [c for c in ordered if c.year == year] for year in sorted(stratify_years, reverse=True)}
+    return _interleave(ordered, lanes, top_n)
+
+
+def _interleave(ordered: list[Candidate], lanes: dict, top_n: int) -> list[Candidate]:
+    """Round-robin the lanes by rank so every lane's best is near the top;
+    chunks outside every lane fill the rest."""
     picked, picked_ids = [], set()
     while len(picked) < top_n and any(lanes.values()):
-        for year in list(lanes):
-            if lanes[year] and len(picked) < top_n:
-                c = lanes[year].pop(0)
+        for key in list(lanes):
+            if lanes[key] and len(picked) < top_n:
+                c = lanes[key].pop(0)
                 if c.chunk_id not in picked_ids:
                     picked.append(c)
                     picked_ids.add(c.chunk_id)
-    # Chunks with no year affinity (shouldn't exist post-filter) fill the rest.
     for c in ordered:
         if len(picked) >= top_n:
             break
@@ -255,6 +275,9 @@ def abstention_verdict(reranked: list[Candidate]) -> tuple[bool, float]:
     it; the payload maps it to insufficient_evidence."""
     if not reranked:
         return True, 0.0
-    best = reranked[0].rerank_score or 0.0
+    # The best score in the list, not the first chunk's: year and plan
+    # interleaving put a lane's top chunk first, and it understated
+    # confidence (0.33 shown with 0.67 in the list; backlog 9d).
+    best = max((c.rerank_score or 0.0) for c in reranked)
     cleared = any((c.rerank_score or 0.0) >= threshold_for(c.doc_type) for c in reranked)
     return not cleared, best

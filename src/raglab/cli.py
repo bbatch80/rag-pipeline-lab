@@ -703,7 +703,8 @@ def explain_cmd(query: str, persona: str | None, generate: bool):
         t = f"1/(60+{c.text_rank})" if c.text_rank else "0"
         click.echo(_line(c, f"{c.rrf_score:.4f} = {v} + {t}  "))
 
-    reranked = rerank.rerank(search_query, candidates, stratify_years=decision.years)
+    reranked = rerank.rerank(search_query, candidates, stratify_years=decision.years,
+                             stratify_plans=decision.cover_keys if decision.cover_field == "plan_code" else ())
     click.echo(f"\n[5] RERANK ({rerank.RERANKER}: {rerank.MODEL_NAME}) top 5"
                + (" — year-stratified" if len(decision.years) > 1 else ""))
     for c in reranked[:5]:
@@ -1273,6 +1274,9 @@ def trace_cmd(question: str, persona: str | None, module: str | None, member_id:
                 click.echo(f"    {ev['status']} — {ev['reason']}")
         elif st == "composed":
             click.echo(f"[{step}] COMPOSED — status {ev['status']}; missing {ev['missing'] or 'nothing'}; {ev['chunks']} chunks; confidence {ev['confidence']}; subject {ev['subject'] or 'none'}" + ("; policy date defaulted to today" if ev["as_of_defaulted"] else ""))
+            cov = ev.get("coverage")
+            if cov:
+                click.echo(f"    COVERAGE — {cov['asked']} has {len(cov['keys'])} plans {cov['keys']}; evidence here for {cov['with_evidence']}; in the corpus for these years {cov['in_corpus']}; missing from the corpus {cov['missing_from_corpus'] or 'none'}")
         elif st == "disclosed":
             tm = {k: v for k, v in (ev["timings"] or {}).items() if k != "host"}
             click.echo(f"[{step}] DISCLOSED — payload {ev['payload_id']} logged (source {ev['source']}); ms per stage {tm}")

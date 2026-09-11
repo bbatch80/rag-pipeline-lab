@@ -71,6 +71,7 @@ class Context:
     query: str = ""  # the question with resolved identifiers removed
     as_of: str | None = None  # the claim's date of service (Phase 3 decision 5): bound before planning
     unresolved: list = field(default_factory=list)  # well-formed identifiers that match no record: [{kind, value}]
+    enrollment: dict = field(default_factory=dict)  # year -> plan_code from the member's enrollment (Phase 3.5 build 2): looked up, never assumed
 
 
 STRIP_IDS = os.environ.get("RAGLAB_STRIP_IDS", "off") == "on"  # measured 2026-09-09: stripping loses the ranker its strongest signal
@@ -122,6 +123,8 @@ def resolve_context(conn: psycopg.Connection, member_id: str | None, query_text:
             ctx.unresolved.append({"kind": kind, "value": canon})
             continue
         ctx.member_key = ctx.member_key or str(row[0])
+        if not ctx.enrollment:
+            ctx.enrollment = _enrollment_plans(conn, ctx.member_key)
         if kind in _RECORD_FIELD:
             ctx.record.setdefault(_RECORD_FIELD[kind], canon)
         if kind in ("case_id", "claim_id"):
@@ -170,6 +173,35 @@ def policy_title(conn: psycopg.Connection, policy_id: str) -> str | None:
     except psycopg.Error:
         return None
     return re.sub(r"\s+v\d+$", "", row[0]) if row else None
+
+
+def _enrollment_plans(conn: psycopg.Connection, member_key: str) -> dict[int, str]:
+    """year -> plan_code for the member, from the enrollment table — a fixed
+    lookup by key at resolve time (not surface context, not a leg's result)."""
+    try:
+        with conn.transaction():
+            rows = conn.execute("SELECT year, plan_code FROM synthea.enrollment WHERE patient::text = %s ORDER BY year",
+                                (str(member_key),)).fetchall()
+    except psycopg.Error:
+        return {}
+    return {int(y): code for y, code in rows if code}
+
+
+def bind_enrollment_plan(route: Route, ctx: Context) -> Route:
+    """A member question that names no plan searches the member's OWN plan
+    (Phase 3.5 build 2): the plan codes the member was enrolled in for the
+    routed years, looked up from enrollment when the member key was bound.
+    A named plan wins; no enrollment row -> unchanged. Probe 5: without this,
+    a High Option children's clause leaked into an Elevate Plus member's
+    answer because other plans' near-identical chunks outranked theirs."""
+    from dataclasses import replace
+    if route.plan_codes or not ctx.enrollment or route.scope != "in_scope":
+        return route
+    codes = tuple(sorted({ctx.enrollment[y] for y in route.years if y in ctx.enrollment}))
+    if not codes:
+        return route
+    return replace(route, plan_codes=codes, plan_from_enrollment=True,
+                   reasons=route.reasons + (f"member question, no plan named -> the member's enrolled plan {codes} (from enrollment)",))
 
 
 def _record_keys(conn: psycopg.Connection, kind: str, canon: str) -> tuple[str | None, str | None]:

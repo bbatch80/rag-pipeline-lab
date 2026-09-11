@@ -558,8 +558,9 @@ def _run_doc_leg(conn, leg: Leg, question: str, caller: Caller, ctx: retrieval.C
         by_txt = sorted([c for c in pool if c.text_rank], key=lambda c: c.text_rank)[:5]
         fused = sorted(pool, key=lambda c: -c.rrf_score)[:5]
         _t(trace, "doc_leg", leg=leg.name, leg_text=leg.text, ranking_text=text, search_text=probe.search_query,
-           persona=caller.persona or "admin", sources_searched=list(leg_route.sources), hints=list(leg.sources),
-           filters={"years": list(leg_route.years), "plan_codes": list(leg_route.plan_codes), "as_of": leg_route.as_of,
+           persona=caller.persona or "admin", sources_searched=list(probe.decision.sources), hints=list(leg.sources),
+           filters={"years": list(probe.decision.years), "plan_codes": list(probe.decision.plan_codes), "as_of": probe.decision.as_of,
+                    "plan_from_enrollment": probe.decision.plan_from_enrollment,
                     "member_key": ctx.member_key, "record": dict(ctx.record)},
            pool_size=len(pool), pool_by_source={dt: sum(1 for c in pool if c.doc_type == dt) for dt in sorted({c.doc_type for c in pool})},
            vector_top=[line(c) for c in by_vec], bm25_top=[line(c) for c in by_txt], fused_top=[line(c) for c in fused],

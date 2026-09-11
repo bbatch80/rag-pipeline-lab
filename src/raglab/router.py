@@ -75,6 +75,7 @@ class Route:
     cover_field: str | None = None
     cover_keys: tuple[str, ...] = ()
     cover_asked: str | None = None  # the named level's value ('PSHB')
+    plan_from_enrollment: bool = False  # the plan filter came from the member's enrollment, not the question
 
 
 # The registry declares these (sources.hierarchy, migration 024); the router

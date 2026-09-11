@@ -193,6 +193,7 @@ def run(
             decision = router.route(item["question"], hierarchies=registry.hierarchies())
             ctx = retrieval.resolve_context(conn, None, item["question"])
             decision = retrieval.expand_versions(conn, decision, ctx, item["question"])
+            decision = retrieval.bind_enrollment_plan(decision, ctx)
             question = deid.translate_query(conn, ctx.query)
             vector = junk_vector if sabotage else retrieval.embed_cached(conn, question)
             candidates = retrieval.search(conn, junk_text if sabotage else question, vector, decision,
@@ -269,6 +270,7 @@ def run(
         # member a rep would have open) or an identifier in the question.
         ctx = retrieval.resolve_context(conn, item.get("member_id"), item["question"])
         decision = retrieval.expand_versions(conn, decision, ctx, item["question"])
+        decision = retrieval.bind_enrollment_plan(decision, ctx)
         member_key, record = ctx.member_key, ctx.record
         # The eval runs as admin, which is entitled to the vault: translate
         # like the pipeline does (names -> pseudonyms); resolved identifiers
@@ -568,9 +570,12 @@ def _score_composed(conn, item: dict) -> list[tuple]:
         # rows_min keys may be "a|b": any listed query satisfying the minimum counts
         rows_ok = all(any(w.get("query_name") in q.split("|") and (w.get("row_count") or 0) >= n for w in payload.get("warehouse_results", []))
                       for q, n in need.get("rows_min", {}).items())
-        scores.append((qid, category, "complete_recall", float(payload["status"] == "ok" and anchors_ok and sources_ok and rows_ok),
+        only_plan_ok = ("expect_only_plan" not in item) or all(
+            c["source"].get("plan_code") == item["expect_only_plan"] for c in payload.get("chunks", []) if c["source"].get("doc_type") == "brochure")
+        scores.append((qid, category, "complete_recall", float(payload["status"] == "ok" and anchors_ok and sources_ok and rows_ok and only_plan_ok),
                        {**detail, "status": payload["status"], "missing": payload.get("missing"), "anchors_ok": anchors_ok,
-                        "sources_ok": sources_ok, "rows_ok": rows_ok}))
+                        "sources_ok": sources_ok, "rows_ok": rows_ok, "only_plan_ok": only_plan_ok,
+                        "plans_seen": sorted({c["source"].get("plan_code") for c in payload.get("chunks", []) if c["source"].get("plan_code")})}))
         scores.append((qid, category, "widened_rescue", float(payload["plan"].get("widened", False)), detail))
     else:
         ok = True
@@ -578,6 +583,9 @@ def _score_composed(conn, item: dict) -> list[tuple]:
             ok &= payload["status"] in item["expect_status_any"]
         elif "expect_status" in item:
             ok &= payload["status"] == item["expect_status"]
+        if "expect_only_plan" in item:  # every brochure chunk is the member's own plan
+            ok &= all(c["source"].get("plan_code") == item["expect_only_plan"]
+                      for c in payload.get("chunks", []) if c["source"].get("doc_type") == "brochure")
         if "expect_never_source" in item:
             ok &= item["expect_never_source"] not in doc_types
         if "expect_sources_present" in item:

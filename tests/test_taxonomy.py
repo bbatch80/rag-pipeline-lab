@@ -19,6 +19,11 @@ def test_every_golden_item_carries_both_axes():
             f"{item['id']}: a designed-out category cannot have gated items")
 
 
+def test_groups_are_numbered_like_the_categories():
+    numbers = [g.number for g in taxonomy.GROUPS.values()]
+    assert numbers == list(range(1, len(numbers) + 1))
+
+
 def test_descriptions_stay_general():
     """The category text must not name the corpus: it has to read the same
     after the corpus grows."""

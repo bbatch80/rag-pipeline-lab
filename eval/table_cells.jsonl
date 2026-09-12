@@ -1,0 +1,8 @@
+{"plan_code": "71-006", "year": 2026, "printed_page": 138, "value": "195.29", "row": "Self Only", "column": "Share", "from": "T1", "note": "rates table; the page text renders the header as Gov't / Your Share fragments"}
+{"plan_code": "71-006", "year": 2026, "printed_page": 138, "value": "313", "row": "Self Plus One", "column": "High", "from": "T2"}
+{"plan_code": "71-006", "year": 2026, "printed_page": 134, "value": "$400", "row": "Non-preferred", "column": "High Option", "from": "T3"}
+{"plan_code": "71-006", "year": 2026, "printed_page": 135, "value": "25%", "row": "Outpatient", "column": "Standard Option", "from": "T4"}
+{"plan_code": "71-014", "year": 2026, "printed_page": 138, "value": "$12,000", "row": "Self Plus One", "column": "In-network", "from": "T5"}
+{"plan_code": "71-018", "year": 2026, "printed_page": 125, "value": "$30", "row": "Specialist", "column": "Elevate", "from": "T6"}
+{"plan_code": "71-018", "year": 2026, "printed_page": 125, "value": "100%", "row": "Non-preferred", "column": "Elevate", "from": "T7"}
+{"plan_code": "71-018", "year": 2026, "printed_page": 125, "value": "Not available", "row": "Mail order", "column": "Elevate", "from": "T8"}

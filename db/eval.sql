@@ -80,3 +80,19 @@ CREATE TABLE IF NOT EXISTS plans (
     created_at      timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (question_hash, menu_hash, model)
 );
+
+-- Parser bake-off scratch (Phase 3.5, 2026-09-12): every parser's chunks
+-- for the same documents, side by side, so a comparison stays open while
+-- the golden set is rebuilt. Never read by the pipeline; nothing here is
+-- embedded or searched. Promotion of a winner is a separate, backed-up step.
+CREATE TABLE IF NOT EXISTS chunks_bakeoff (
+    parser       text NOT NULL,
+    source_path  text NOT NULL,
+    chunk_index  int  NOT NULL,
+    section      text NOT NULL DEFAULT '',
+    pages        int[] NOT NULL DEFAULT '{}',
+    categories   text[] NOT NULL DEFAULT '{}',
+    content      text NOT NULL,
+    parse_ms     real,
+    PRIMARY KEY (parser, source_path, chunk_index)
+);

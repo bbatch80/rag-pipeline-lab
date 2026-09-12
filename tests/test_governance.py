@@ -11,6 +11,9 @@ import pytest
 SOURCE_FOR_TAG = {"public": 1, "employee": 3, "care_team": 7, "member_services": 8, "appeals": 9}
 DOC_TYPE_FOR_TAG = {"public": "brochure", "employee": "sop", "care_team": "clinical_note",
                     "member_services": "call_note", "appeals": "appeal"}
+# The ingest writes every versioned source's effective window into chunk
+# metadata (migration 025: sops, bulletins, formulary); fixtures do the same.
+WINDOW_2026 = '{"record": {"effective_from": "2026-01-01", "effective_to": null}}'
 
 from raglab.pipeline import run_query
 
@@ -27,10 +30,10 @@ def _seed_tiers(db, per_tier=3, embed=False):
         doc_ids[tag] = doc_id
         for i in range(per_tier):
             db.execute(
-                "INSERT INTO chunks (document_id, chunk_index, content, acl_tag, year, doc_type, embedding) "
-                "VALUES (%s, %s, %s, %s, 2026, %s, %s)",
+                "INSERT INTO chunks (document_id, chunk_index, content, acl_tag, year, doc_type, embedding, metadata) "
+                "VALUES (%s, %s, %s, %s, 2026, %s, %s, %s)",
                 (doc_id, i, f"{tag} secret fact {i}", tag, DOC_TYPE_FOR_TAG[tag],
-                 vec if embed else None),
+                 vec if embed else None, WINDOW_2026),  # versioned types (sop) carry an effective window
             )
     return doc_ids
 

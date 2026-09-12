@@ -7,7 +7,9 @@ abstention question); Jardiance is the answerable mirror twin.
 formulary_core.md is golden-anchored: the churn simulator must never touch it.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
+import json
+import re
 from pathlib import Path
 
 from raglab import config
@@ -20,6 +22,9 @@ GOLDEN_ANCHORED = {
     "formulary/formulary_core.md",
     "kb/kb_mail_order.md",
     "kb/kb_specialist_visits.md",
+    "bulletins/bulletin_2026_001.md",
+    "sops/sop_prior_authorization.md",
+    "sops/sop_claims_escalation.md",
 }
 
 
@@ -30,6 +35,8 @@ class InternalDoc:
     doc_type: str
     title: str
     content: str
+    year: int = 2026          # the plan year of the content (the year column)
+    record: dict = field(default_factory=dict)  # issued / effective window / supersession → chunk metadata
 
 
 SOPS = [
@@ -355,12 +362,58 @@ RATES_CSV = InternalDoc(
 """,
 )
 
-ALL_DOCS = SOPS + BULLETINS + FORMULARY + KB_ARTICLES + [RATES_CSV]
+# The documents above are the 2026 current versions. Their records name the
+# version chain the series module continues (archived SOP versions, the
+# bulletin a later bulletin supersedes).
+_RECORDS = {
+    "sops/sop_deductible_verification.md": {"sop_id": "sop_deductible_verification", "version": 2, "supersedes": "sop_deductible_verification_v1"},
+    "sops/sop_prior_authorization.md": {"sop_id": "sop_prior_authorization", "version": 2, "supersedes": "sop_prior_authorization_v1"},
+    "sops/sop_claims_escalation.md": {"sop_id": "sop_claims_escalation", "version": 2, "supersedes": "sop_claims_escalation_v1"},
+    "sops/sop_cob_medicare.md": {"sop_id": "sop_cob_medicare", "version": 2, "supersedes": "sop_cob_medicare_v1"},
+    "bulletins/bulletin_2026_001.md": {"bulletin_id": "2026-001"},
+    "bulletins/bulletin_2026_002.md": {"bulletin_id": "2026-002", "effective_to": "2026-02-03", "status": "superseded"},
+    "bulletins/bulletin_2026_003.md": {"bulletin_id": "2026-003", "supersedes": "2025-001"},
+    "bulletins/bulletin_2026_004.md": {"bulletin_id": "2026-004", "supersedes": "2026-002"},
+    "formulary/formulary_core.md": {"formulary_year": 2026},
+    "formulary/formulary_updates.md": {"formulary_year": 2026},
+}
+
+_DATE_IN_HEAD = re.compile(r"\*\*(?:Issued|Effective):\*\* (\d{4}-\d{2}-\d{2})")
+
+
+def _with_record(doc: InternalDoc) -> InternalDoc:
+    """Fill the record: an explicit override, else the issued/effective date
+    in the document head, else January 1 of the content year."""
+    record = {**_RECORDS.get(doc.relpath, {}), **doc.record}
+    if doc.doc_type in ("sop", "bulletin", "formulary") and not record.get("effective_from"):
+        m = _DATE_IN_HEAD.search(doc.content)
+        record["effective_from"] = m.group(1) if m else f"{doc.year}-01-01"
+    if doc.doc_type in ("sop", "bulletin", "formulary"):
+        record.setdefault("effective_to", None)
+        record.setdefault("status", "superseded" if record["effective_to"] else "current")
+    return replace(doc, record=record) if record != doc.record else doc
+
+
+from raglab.synth.internal_series import SERIES_DOCS  # noqa: E402  (needs InternalDoc above)
+
+ALL_DOCS = [_with_record(d) for d in SOPS + BULLETINS + FORMULARY + KB_ARTICLES + [RATES_CSV] + SERIES_DOCS]
+
+# doc_type -> registry source key: the ingest reads data/internal/manifests/<key>.jsonl
+_MANIFEST_KEYS = {"sop": "sops", "bulletin": "bulletins", "kb": "kb", "formulary": "formulary"}
 
 
 def write_all(base_dir: Path = INTERNAL_DIR) -> int:
+    manifests: dict[str, list[str]] = {}
     for doc in ALL_DOCS:
         path = base_dir / doc.relpath
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(doc.content)
+        key = _MANIFEST_KEYS.get(doc.doc_type)
+        if key:
+            manifests.setdefault(key, []).append(json.dumps(
+                {"doc": Path(doc.relpath).name, "title": doc.title, "year": doc.year, **doc.record}))
+    manifest_dir = base_dir / "manifests"
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    for key, lines in manifests.items():
+        (manifest_dir / f"{key}.jsonl").write_text("\n".join(lines) + "\n")
     return len(ALL_DOCS)

@@ -63,9 +63,9 @@ def test_each_source_ranks_within_its_own_index(corpus, db):
         "VALUES ('t/s.md', 'S', 'h', 3, 'employee') RETURNING id"
     ).fetchone()[0]
     db.execute(
-        "INSERT INTO chunks (document_id, chunk_index, content, year, doc_type, embedding) "
-        "VALUES (%s, 0, 'Procedure: verify the HDHP deductible before adjudication.', 2026, 'sop', %s::vector)",
-        (sop, _vec(3.0)),
+        "INSERT INTO chunks (document_id, chunk_index, content, year, doc_type, embedding, metadata) "
+        "VALUES (%s, 0, 'Procedure: verify the HDHP deductible before adjudication.', 2026, 'sop', %s::vector, %s::jsonb)",
+        (sop, _vec(3.0), '{"record": {"effective_from": "2026-01-01", "effective_to": null}}'),  # sops are versioned
     )
     pool = retrieval.search(db, "deductible HDHP", _vec(1.0), router.Route(scope="in_scope", years=(2026,)))
     by_type = {c.doc_type: c.text_rank for c in pool if c.text_rank == 1}

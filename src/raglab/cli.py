@@ -369,7 +369,7 @@ def synth_appeals_cmd(cases: int, letters: int, seed: int):
 
 @synth_group.command("policies")
 def synth_policies_cmd():
-    """Clinical policies CP-0001..CP-0020 (ten with a second version) and their manifest."""
+    """Clinical policies CP-0001..CP-0040 (versioned, up to three versions each) and their manifest."""
     from raglab.synth import policies
 
     receipt = Receipt("raglab synth policies")

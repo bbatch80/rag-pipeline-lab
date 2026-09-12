@@ -25,10 +25,11 @@ def test_floor_keeps_a_crowded_out_source_in_the_pool(db, monkeypatch):
     ).fetchone()[0]
     with db.cursor() as cur:
         cur.executemany(
-            "INSERT INTO chunks (document_id, chunk_index, content, year, doc_type, embedding) "
-            "VALUES (%s, %s, %s, 2026, %s, %s::vector)",
-            [(brochure, i, f"brochure text {i}", "brochure", _vec(0.01 * i)) for i in range(60)]
-            + [(sop, i, f"procedure text {i}", "sop", _vec(5.0 + i)) for i in range(3)],
+            "INSERT INTO chunks (document_id, chunk_index, content, year, doc_type, embedding, metadata) "
+            "VALUES (%s, %s, %s, 2026, %s, %s::vector, %s::jsonb)",
+            [(brochure, i, f"brochure text {i}", "brochure", _vec(0.01 * i), "{}") for i in range(60)]
+            + [(sop, i, f"procedure text {i}", "sop", _vec(5.0 + i),
+                '{"record": {"effective_from": "2026-01-01", "effective_to": null}}') for i in range(3)],  # sops are versioned
         )
     route = router.Route(scope="in_scope", years=(2026,))
     # The fixture's DELETE leaves the live corpus's ~21k vectors in the HNSW

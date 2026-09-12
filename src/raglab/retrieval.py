@@ -50,7 +50,7 @@ LEXICAL_MERGE = os.environ.get("RAGLAB_LEXICAL_MERGE", "rank")
 POOLS = os.environ.get("RAGLAB_POOLS", "per_source")
 _ID_TOKEN = re.compile(
     r"\b(?:MRN\s*[- ]?\s*\d{7}|M\s*[- ]?\s*\d{3}\s*[- ]?\s*\d{3}\s*[- ]?\s*\d{3}"
-    r"|CLM[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{4}|APL[\s-]?\d{7}|CP-\d{4})\b", re.I)
+    r"|CLM[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{4}|APL[\s-]?\d{7}|CP-\d{4}|Bulletin\s+20\d{2}-\d{3})\b", re.I)
 # identifier kind -> (table, column) that maps it to a person key
 _ID_LOOKUP = {
     "member_id": ("synthea.patients", "member_id"),
@@ -77,7 +77,7 @@ class Context:
 STRIP_IDS = os.environ.get("RAGLAB_STRIP_IDS", "off") == "on"  # measured 2026-09-09: stripping loses the ranker its strongest signal
 # identifier kind -> the chunk-metadata field it filters on (member ids and
 # MRNs resolve to the member key, a typed column)
-_RECORD_FIELD = {"claim_id": "claim_id", "case_id": "case_id", "policy_id": "policy_id"}
+_RECORD_FIELD = {"claim_id": "claim_id", "case_id": "case_id", "policy_id": "policy_id", "bulletin_id": "bulletin_id"}
 
 
 def resolve_context(conn: psycopg.Connection, member_id: str | None, query_text: str = "") -> Context:
@@ -98,6 +98,9 @@ def resolve_context(conn: psycopg.Connection, member_id: str | None, query_text:
     for m in _ID_TOKEN.finditer(query_text or ""):
         if re.fullmatch(r"(?i)CP-\d{4}", m.group(0)):  # a policy id: a record key, no member behind it
             ctx.record.setdefault("policy_id", m.group(0).upper())
+            continue
+        if m.group(0).lower().startswith("bulletin"):  # a bulletin number: names one issuance
+            ctx.record.setdefault("bulletin_id", m.group(0).split()[-1])
             continue
         compact = re.sub(r"[\s-]", "", m.group(0))
         for kind in ("member_id", "mrn", "claim_id", "case_id"):
@@ -261,12 +264,18 @@ def resolve_member(conn: psycopg.Connection, member_id: str | None, query_text: 
     return resolve_context(conn, member_id, query_text).member_key
 
 
-def _source_flags(conn: psycopg.Connection) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-    """(member-scoped, event, versioned doc_types) from the sources registry."""
+def _source_flags(conn: psycopg.Connection) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """(member-scoped, event, versioned doc_types, leaf record keys) from the
+    sources registry. A leaf key is the LAST level of a versioned source's
+    declared hierarchy with nothing beneath it (bulletin_id): typing it names
+    one document, so the version window must not hide that document.
+    policy_id is not a leaf — 'version' lies beneath it."""
     rows = conn.execute(
-        "SELECT doc_type, member_scoped, event, versioned FROM sources WHERE doc_type IS NOT NULL"
+        "SELECT doc_type, member_scoped, event, versioned, hierarchy FROM sources WHERE doc_type IS NOT NULL"
     ).fetchall()
-    return (tuple(r[0] for r in rows if r[1]), tuple(r[0] for r in rows if r[2]), tuple(r[0] for r in rows if r[3]))
+    leaf_keys = tuple(sorted({r[4][-1] for r in rows if r[3] and r[4] and len(r[4]) == 1}))
+    return (tuple(r[0] for r in rows if r[1]), tuple(r[0] for r in rows if r[2]),
+            tuple(r[0] for r in rows if r[3]), leaf_keys)
 PER_METHOD_LIMIT = 100
 FUSED_LIMIT = int(os.environ.get("RAGLAB_FUSED_LIMIT", "50"))
 EF_SEARCH = 40  # Phase 2 benchmark operating point
@@ -296,7 +305,8 @@ class Candidate:
 
 def _filters(route: Route, member_key: str | None = None,
              member_scoped: tuple[str, ...] = (), events: tuple[str, ...] = (),
-             record: dict | None = None, versioned: tuple[str, ...] = ()) -> tuple[str, list]:
+             record: dict | None = None, versioned: tuple[str, ...] = (),
+             leaf_keys: tuple[str, ...] = ()) -> tuple[str, list]:
     clauses, params = [], []
     # Record context: an identifier in the question (case, claim, policy)
     # narrows every chunk that carries that key in its record metadata to
@@ -309,11 +319,16 @@ def _filters(route: Route, member_key: str | None = None,
         # (explicit, else the end of the routed year). A hard filter, never
         # a boost — a superseded version is the near-duplicate distractor.
         as_of = route.as_of or f"{max(route.years) if route.years else CURRENT_YEAR}-12-31"
+        # A typed leaf key (a bulletin number) names one issuance: the record
+        # clause above already narrowed such chunks to it, and the window
+        # must not hide a superseded document the question asked for by name.
+        pinned = [k for k in (record or {}) if k in leaf_keys]
+        bypass = "".join(" OR c.metadata->'record'->>%s IS NOT NULL" for _ in pinned)
         clauses.append(
-            "(c.doc_type <> ALL(%s) OR (c.metadata->'record'->>'effective_from' <= %s "
+            "(c.doc_type <> ALL(%s)" + bypass + " OR (c.metadata->'record'->>'effective_from' <= %s "
             "AND (c.metadata->'record'->>'effective_to' IS NULL OR c.metadata->'record'->>'effective_to' > %s)))"
         )
-        params += [list(versioned), as_of, as_of]
+        params += [list(versioned), *pinned, as_of, as_of]
     if route.years:
         # An edition filter: event sources (a call has a date, not an
         # edition) pass regardless of year.
@@ -398,8 +413,8 @@ def search(
                     seen.add(candidate.chunk_id)
         return merged
 
-    member_scoped, events, versioned = _source_flags(conn)
-    where, filter_params = _filters(route, member_key, member_scoped, events, record, versioned)
+    member_scoped, events, versioned, leaf_keys = _source_flags(conn)
+    where, filter_params = _filters(route, member_key, member_scoped, events, record, versioned, leaf_keys)
     lexical = query_text
     lexical_weight = LEXICAL_WEIGHT_ID if ID_SHAPED.search(query_text) else 1.0
     lexical_sources = route.sources or _ingested_sources(conn)

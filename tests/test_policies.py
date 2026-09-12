@@ -8,23 +8,26 @@ from raglab.synth import policies
 
 def test_policies_cover_the_cited_ids_and_versions(tmp_path):
     stats = policies.generate(tmp_path / "policies", tmp_path / "m.jsonl")
-    assert stats == {"policies": 20, "with_second_version": 10, "documents": 30}
+    assert stats == {"policies": 40, "with_second_version": 32, "with_third_version": 14, "documents": 86}
     recs = [json.loads(l) for l in (tmp_path / "m.jsonl").read_text().splitlines()]
-    assert {r["policy_id"] for r in recs} == {f"CP-{i:04d}" for i in range(1, 21)}
+    assert {r["policy_id"] for r in recs} == {f"CP-{i:04d}" for i in range(1, 41)}
     by_policy = {}
     for r in recs:
         by_policy.setdefault(r["policy_id"], []).append(r)
     for pid, versions in by_policy.items():
         versions.sort(key=lambda r: r["version"])
-        if len(versions) == 2:
-            v1, v2 = versions
-            assert v1["status"] == "superseded" and v1["effective_to"] == v2["effective_from"], pid
-            assert v2["status"] == "current" and v2["effective_to"] is None and v2["supersedes"] == f"{pid}_v1"
-            t1 = (tmp_path / "policies" / v1["doc"]).read_text(); t2 = (tmp_path / "policies" / v2["doc"]).read_text()
+        for earlier, later in zip(versions, versions[1:]):  # a chain: each version ends where the next begins
+            assert earlier["status"] == "superseded" and earlier["effective_to"] == later["effective_from"], pid
+            assert later["supersedes"] == f"{pid}_v{earlier['version']}"
+            t1 = (tmp_path / "policies" / earlier["doc"]).read_text(); t2 = (tmp_path / "policies" / later["doc"]).read_text()
             assert t1 != t2 and "Revision history" in t2 and "criterion changed" in t2
-        else:
-            assert versions[0]["status"] == "current"
+        assert versions[-1]["status"] == "current" and versions[-1]["effective_to"] is None
         assert all(r["year"] == int(r["effective_from"][:4]) for r in versions)
+    # The golden-cited policies keep the versions the labels name.
+    assert [r["version"] for r in by_policy["CP-0003"]] == [1, 2]
+    assert [r["version"] for r in by_policy["CP-0011"]] == [1]
+    v3 = (tmp_path / "policies" / "CP-0038_v3.md").read_text()
+    assert "Version 3, effective 2026-01-01" in v3 and "'6 months' to '3 months'" in v3
     assert stats == policies.generate(tmp_path / "p2", tmp_path / "m2.jsonl") and (tmp_path / "m.jsonl").read_text() == (tmp_path / "m2.jsonl").read_text()
 
 

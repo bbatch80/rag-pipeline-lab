@@ -140,6 +140,7 @@ SKIP_MARKERS = frozenset({"complete_recall_skipped"})
 # Open defects, each pinned to the work category it blocks. Closing a defect
 # means removing its line in the PR that fixes it.
 DEFECTS: tuple[tuple[int, str], ...] = (
+    (1, "A member's own call notes rank below generic CSR prose on a claim-status question (C12, since the corpus growth)."),
     (2, "Chiropractic rule split across chunk boundaries (PSHB probe)."),
     (1, "Name translation ate “Puerto Rico” (blind faq-26)."),
     (1, "Medicare scope gate blocked an IRMAA question the brochure answers (blind faq-18)."),

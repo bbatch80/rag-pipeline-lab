@@ -1,476 +1,507 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "raglab context payload",
-  "description": "Hand-off contract between the retrieval layer and any consuming application. spec_version follows semver; consumers pin against it.",
-  "type": "object",
-  "required": [
-    "spec_version",
-    "query",
-    "status",
-    "retrieved_at",
-    "chunks"
-  ],
-  "properties": {
-    "spec_version": {
-      "type": "string",
-      "pattern": "^1\\.[01]\\.0$",
-      "description": "1.0.0 (single probe) or 1.1.0 (adds doc_type on sources and the composed fields; all 1.0.0 fields unchanged)"
-    },
-    "query": {
-      "type": "string"
-    },
-    "status": {
-      "enum": [
-        "ok",
-        "insufficient_evidence",
-        "out_of_scope"
-      ]
-    },
-    "confidence": {
-      "type": "number",
-      "minimum": 0,
-      "maximum": 1,
-      "description": "Best reranker score. Informs the consumer; does not authorize. Absent on out_of_scope."
-    },
-    "boundary_response": {
-      "type": "string",
-      "description": "Definitive corpus-boundary statement. Present only on out_of_scope; the consumer relays it verbatim."
-    },
-    "retrieved_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "router": {
-      "type": "object",
-      "required": [
-        "years",
-        "plan_codes"
-      ],
-      "properties": {
-        "years": {
-          "type": "array",
-          "items": {
-            "type": "integer"
-          }
-        },
-        "plan_codes": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    "chunks": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": [
-          "text",
-          "source",
-          "acl_basis",
-          "scores"
-        ],
-        "properties": {
-          "text": {
-            "type": "string"
-          },
-          "source": {
-            "type": "object",
-            "required": [
-              "title",
-              "path",
-              "year",
-              "pages",
-              "section",
-              "content_hash"
-            ],
-            "properties": {
-              "title": {
-                "type": "string"
-              },
-              "path": {
-                "type": "string"
-              },
-              "plan_code": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "year": {
-                "type": "integer"
-              },
-              "pages": {
-                "type": "array",
-                "items": {
-                  "type": "integer"
-                }
-              },
-              "section": {
-                "type": "string"
-              },
-              "content_hash": {
-                "type": "string",
-                "description": "Source document fingerprint (bytes + processing recipe): lineage to the exact version retrieved."
-              },
-              "record": {
-                "type": "object",
-                "description": "For member records: the record system's required fields (case id, claim id, call id, dates, codes) \u2014 metadata, never extracted from text."
-              },
-              "doc_type": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              }
-            }
-          },
-          "acl_basis": {
-            "enum": [
-              "public",
-              "employee",
-              "care_team",
-              "member_services",
-              "appeals"
-            ],
-            "description": "The ACL tier that entitled the caller to this chunk."
-          },
-          "scores": {
-            "type": "object",
-            "required": [
-              "rrf",
-              "rerank"
-            ],
-            "properties": {
-              "rrf": {
-                "type": "number"
-              },
-              "rerank": {
-                "type": "number"
-              }
-            }
-          }
-        }
-      }
-    },
-    "payload_id": {
-      "type": "string",
-      "description": "UUID; joins to the disclosure log."
-    },
-    "persona": {
-      "type": "string"
-    },
-    "member_context": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "record_context": {
-      "type": "object"
-    },
-    "unresolved_identifiers": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": [
-          "kind",
-          "value"
-        ],
-        "properties": {
-          "kind": {
-            "type": "string"
-          },
-          "value": {
-            "type": "string"
-          }
-        }
-      },
-      "description": "Well-formed identifiers (shape + check digit) that match no record: the caller typed an ID that exists for nobody"
-    },
-    "as_of_defaulted": {
-      "type": "boolean",
-      "description": "True when a policy leg ran with today's date because no claim in the question supplied a date of service"
-    },
-    "subject": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "description": "The member ID this context is about, when member-scoped (masked by role at the surface)"
-    },
-    "plan": {
-      "type": "object",
-      "required": [
-        "shape",
-        "origin",
-        "legs"
-      ],
-      "properties": {
-        "shape": {
-          "enum": [
-            "simple",
-            "compound"
-          ]
-        },
-        "origin": {
-          "enum": [
-            "rules",
-            "caller",
-            "model"
-          ]
-        },
-        "widened": {
-          "type": "boolean"
-        },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "legs": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 3,
-          "items": {
-            "type": "object",
-            "required": [
-              "name",
-              "kind",
-              "required"
-            ],
-            "properties": {
-              "name": {
-                "type": "string"
-              },
-              "kind": {
-                "enum": [
-                  "doc_probe",
-                  "member_query"
-                ]
-              },
-              "text": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "sources": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "query_name": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "slots": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "required": {
-                "type": "boolean"
-              }
-            }
-          }
-        }
-      }
-    },
-    "sub_results": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": [
-          "leg",
-          "status"
-        ],
-        "properties": {
-          "leg": {
-            "type": "string"
-          },
-          "status": {
-            "enum": [
-              "ok",
-              "insufficient_evidence",
-              "out_of_scope",
-              "not_executed"
-            ]
-          },
-          "confidence": {
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "reason": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "router": {
-            "type": "object"
-          },
-          "chunk_indexes": {
-            "type": "array",
-            "items": {
-              "type": "integer"
-            }
-          },
-          "widened": {
-            "type": "boolean"
-          }
-        }
-      }
-    },
-    "warehouse_results": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": [
-          "leg",
-          "status"
-        ],
-        "properties": {
-          "leg": {
-            "type": "string"
-          },
-          "status": {
-            "enum": [
-              "ok",
-              "insufficient_evidence",
-              "not_executed",
-              "unknown_query"
-            ]
-          },
-          "query_name": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "reason": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "columns": {
-            "type": "array"
-          },
-          "rows": {
-            "type": "array"
-          },
-          "row_count": {
-            "type": "integer"
-          },
-          "masked_columns": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        }
-      }
-    },
-    "missing": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "Required legs that did not return evidence (worst-of-required)"
-    },
-    "timings": {
-      "type": "object",
-      "description": "Per-stage ms + total (D5)"
-    },
-    "coverage": {
-      "type": "object",
-      "required": [
-        "field",
-        "keys",
-        "in_corpus",
-        "with_evidence",
-        "missing_from_corpus"
-      ],
-      "properties": {
-        "field": {
-          "type": "string"
-        },
-        "asked": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "keys": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "in_corpus": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "with_evidence": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "missing_from_corpus": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-     "not_offered": {"type": "array", "items": {"type": "string"}, "description": "keys the registry declares as not offered in the routed years"}
-        }
-      },
-      "description": "The coverage rule fired: the question named a level (e.g. a program) but not the level beneath (its plans); every key beneath was searched \u2014 which have evidence here, which the corpus lacks"
-    }
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "title": "raglab context payload",
+ "description": "Hand-off contract between the retrieval layer and any consuming application. spec_version follows semver; consumers pin against it.",
+ "type": "object",
+ "required": [
+  "spec_version",
+  "query",
+  "status",
+  "retrieved_at",
+  "chunks"
+ ],
+ "properties": {
+  "spec_version": {
+   "type": "string",
+   "pattern": "^1\\.[01]\\.0$",
+   "description": "1.0.0 (single probe) or 1.1.0 (adds doc_type on sources and the composed fields; all 1.0.0 fields unchanged)"
   },
-  "allOf": [
-    {
-      "if": {
-        "properties": {
-          "status": {
-            "const": "out_of_scope"
-          }
-        }
-      },
-      "then": {
-        "required": [
-          "boundary_response"
-        ]
-      }
+  "query": {
+   "type": "string"
+  },
+  "status": {
+   "enum": [
+    "ok",
+    "insufficient_evidence",
+    "out_of_scope"
+   ]
+  },
+  "confidence": {
+   "type": "number",
+   "minimum": 0,
+   "maximum": 1,
+   "description": "Best reranker score. Informs the consumer; does not authorize. Absent on out_of_scope."
+  },
+  "boundary_response": {
+   "type": "string",
+   "description": "Definitive corpus-boundary statement. Present only on out_of_scope; the consumer relays it verbatim."
+  },
+  "retrieved_at": {
+   "type": "string",
+   "format": "date-time"
+  },
+  "router": {
+   "type": "object",
+   "required": [
+    "years",
+    "plan_codes"
+   ],
+   "properties": {
+    "years": {
+     "type": "array",
+     "items": {
+      "type": "integer"
+     }
     },
-    {
-      "if": {
-        "properties": {
-          "status": {
-            "enum": [
-              "ok",
-              "insufficient_evidence"
-            ]
-          }
-        }
-      },
-      "then": {
-        "required": [
-          "confidence",
-          "router"
-        ]
-      }
+    "plan_codes": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
     }
-  ]
+   }
+  },
+  "chunks": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "required": [
+     "text",
+     "source",
+     "acl_basis",
+     "scores"
+    ],
+    "properties": {
+     "text": {
+      "type": "string"
+     },
+     "source": {
+      "type": "object",
+      "required": [
+       "title",
+       "path",
+       "year",
+       "pages",
+       "section",
+       "content_hash"
+      ],
+      "properties": {
+       "title": {
+        "type": "string"
+       },
+       "path": {
+        "type": "string"
+       },
+       "plan_code": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "year": {
+        "type": "integer"
+       },
+       "pages": {
+        "type": "array",
+        "items": {
+         "type": "integer"
+        }
+       },
+       "section": {
+        "type": "string"
+       },
+       "content_hash": {
+        "type": "string",
+        "description": "Source document fingerprint (bytes + processing recipe): lineage to the exact version retrieved."
+       },
+       "record": {
+        "type": "object",
+        "description": "For member records: the record system's required fields (case id, claim id, call id, dates, codes) — metadata, never extracted from text."
+       },
+       "doc_type": {
+        "type": [
+         "string",
+         "null"
+        ]
+       }
+      }
+     },
+     "acl_basis": {
+      "enum": [
+       "public",
+       "employee",
+       "care_team",
+       "member_services",
+       "appeals"
+      ],
+      "description": "The ACL tier that entitled the caller to this chunk."
+     },
+     "scores": {
+      "type": "object",
+      "required": [
+       "rrf",
+       "rerank"
+      ],
+      "properties": {
+       "rrf": {
+        "type": "number"
+       },
+       "rerank": {
+        "type": "number"
+       }
+      }
+     }
+    }
+   }
+  },
+  "payload_id": {
+   "type": "string",
+   "description": "UUID; joins to the disclosure log."
+  },
+  "persona": {
+   "type": "string"
+  },
+  "member_context": {
+   "type": [
+    "string",
+    "null"
+   ]
+  },
+  "record_context": {
+   "type": "object"
+  },
+  "unresolved_identifiers": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "required": [
+     "kind",
+     "value"
+    ],
+    "properties": {
+     "kind": {
+      "type": "string"
+     },
+     "value": {
+      "type": "string"
+     }
+    }
+   },
+   "description": "Well-formed identifiers (shape + check digit) that match no record: the caller typed an ID that exists for nobody"
+  },
+  "as_of_defaulted": {
+   "type": "boolean",
+   "description": "True when a policy leg ran with today's date because no claim in the question supplied a date of service"
+  },
+  "subject": {
+   "type": [
+    "string",
+    "null"
+   ],
+   "description": "The member ID this context is about, when member-scoped (masked by role at the surface)"
+  },
+  "plan": {
+   "type": "object",
+   "required": [
+    "shape",
+    "origin",
+    "legs"
+   ],
+   "properties": {
+    "shape": {
+     "enum": [
+      "simple",
+      "compound"
+     ]
+    },
+    "origin": {
+     "enum": [
+      "rules",
+      "caller",
+      "model"
+     ]
+    },
+    "widened": {
+     "type": "boolean"
+    },
+    "model": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "legs": {
+     "type": "array",
+     "minItems": 1,
+     "maxItems": 3,
+     "items": {
+      "type": "object",
+      "required": [
+       "name",
+       "kind",
+       "required"
+      ],
+      "properties": {
+       "name": {
+        "type": "string"
+       },
+       "kind": {
+        "enum": [
+         "doc_probe",
+         "member_query"
+        ]
+       },
+       "text": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "sources": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       },
+       "query_name": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "slots": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       },
+       "required": {
+        "type": "boolean"
+       }
+      }
+     }
+    }
+   }
+  },
+  "sub_results": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "required": [
+     "leg",
+     "status"
+    ],
+    "properties": {
+     "leg": {
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "ok",
+       "insufficient_evidence",
+       "out_of_scope",
+       "not_executed"
+      ]
+     },
+     "confidence": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "reason": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "router": {
+      "type": "object"
+     },
+     "chunk_indexes": {
+      "type": "array",
+      "items": {
+       "type": "integer"
+      }
+     },
+     "widened": {
+      "type": "boolean"
+     }
+    }
+   }
+  },
+  "warehouse_results": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "required": [
+     "leg",
+     "status"
+    ],
+    "properties": {
+     "leg": {
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "ok",
+       "insufficient_evidence",
+       "not_executed",
+       "unknown_query"
+      ]
+     },
+     "query_name": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "reason": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "columns": {
+      "type": "array"
+     },
+     "rows": {
+      "type": "array"
+     },
+     "row_count": {
+      "type": "integer"
+     },
+     "masked_columns": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  },
+  "missing": {
+   "type": "array",
+   "items": {
+    "type": "string"
+   },
+   "description": "Required legs that did not return evidence (worst-of-required)"
+  },
+  "timings": {
+   "type": "object",
+   "description": "Per-stage ms + total (D5)"
+  },
+  "coverage": {
+   "type": "object",
+   "required": [
+    "field",
+    "keys",
+    "in_corpus",
+    "with_evidence",
+    "missing_from_corpus"
+   ],
+   "properties": {
+    "field": {
+     "type": "string"
+    },
+    "asked": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "keys": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "in_corpus": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "with_evidence": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "missing_from_corpus": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     },
+     "not_offered": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "keys the registry declares as not offered in the routed years"
+     },
+     "level": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "which level the question named: program (plans beneath covered) or option (programs above covered)"
+     }
+    }
+   },
+   "description": "The coverage rule fired: the question named a level (e.g. a program) but not the level beneath (its plans); every key beneath was searched — which have evidence here, which the corpus lacks"
+  },
+  "search": {
+   "type": "object",
+   "description": "How much searching the question needed: readings = sub-searches run (one per covered plan, routed year, or policy version); candidates = the merged pool the reranker scored; trimmed = candidates cut by the cap. More ambiguity means more readings and more time.",
+   "properties": {
+    "readings": {
+     "type": "integer"
+    },
+    "candidates": {
+     "type": "integer"
+    },
+    "trimmed": {
+     "type": "integer"
+    },
+    "cap": {
+     "type": "integer"
+    }
+   }
+  }
+ },
+ "allOf": [
+  {
+   "if": {
+    "properties": {
+     "status": {
+      "const": "out_of_scope"
+     }
+    }
+   },
+   "then": {
+    "required": [
+     "boundary_response"
+    ]
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "status": {
+      "enum": [
+       "ok",
+       "insufficient_evidence"
+      ]
+     }
+    }
+   },
+   "then": {
+    "required": [
+     "confidence",
+     "router"
+    ]
+   }
+  }
+ ]
 }

@@ -50,6 +50,14 @@ _FEHB_CODES = {"hdhp": "71-014", "elevate": "71-018", "elevate_plus": "71-018",
                "high": "71-006", "standard": "71-006"}
 _PSHB_CODES = {"hdhp": "71-026", "elevate": "71-022", "elevate_plus": "71-022",
                "high": "71-021", "standard": "71-021"}
+_OPTION_LABEL = {"hdhp": "HDHP", "elevate": "Elevate", "elevate_plus": "Elevate Plus",
+                 "high": "High Option", "standard": "Standard Option"}
+
+
+def _plan_years() -> dict[str, set[int]]:
+    """plan code -> the years the registry declares it offered (corpus.ALL_PLANS)."""
+    from raglab import corpus
+    return {spec.plan_code: set(spec.years) for spec in corpus.ALL_PLANS}
 
 
 @dataclass(frozen=True)
@@ -74,7 +82,8 @@ class Route:
     # program's plan codes. Years are covered by the multi-year mechanism.
     cover_field: str | None = None
     cover_keys: tuple[str, ...] = ()
-    cover_asked: str | None = None  # the named level's value ('PSHB')
+    cover_asked: str | None = None  # the named level's value ('PSHB', 'HDHP')
+    cover_level: str | None = None  # which level was named: 'program' (plans beneath covered) | 'option' (programs above covered)
     plan_from_enrollment: bool = False  # the plan filter came from the member's enrollment, not the question
 
 
@@ -152,15 +161,32 @@ def route(query: str, hierarchies: dict[str, tuple[str, ...]] | None = None) -> 
     as_of = as_of_date(query)
     if as_of:
         reasons.append(f"as of {as_of}")
-    cover_field, cover_keys, cover_asked = None, (), None
+    cover_field, cover_keys, cover_asked, cover_level = None, (), None, None
     program = "PSHB" if _PSHB.search(query) else ("FEHB" if _FEHB.search(query) else None)
-    if program and not plans and "plan_code" in (hierarchies or DEFAULT_HIERARCHIES).get("brochure", ()):
+    hierarchy = (hierarchies or DEFAULT_HIERARCHIES).get("brochure", ())
+    if program and not plans and "plan_code" in hierarchy:
         # The coverage rule: a level named (program), the level beneath it not
         # (plan) -> search every plan of that program and keep the best of each.
-        cover_field, cover_asked = "plan_code", program
+        cover_field, cover_asked, cover_level = "plan_code", program, "program"
         cover_keys = tuple(dict.fromkeys(program_codes.values()))
         plans = list(cover_keys)
         reasons.append(f"program named, no plan -> cover every {program} plan {cover_keys}")
+    elif plans and not program and "program" in hierarchy and "plan_code" in hierarchy:
+        # The same rule one level up: an option named (HDHP, High, Standard)
+        # but not the program above it, and the option exists under more than
+        # one program -> cover every plan offering it, in the routed years.
+        # Never a guess at FEHB. A member's enrollment, when bound, narrows
+        # this to their plan (retrieval.bind_enrollment_plan).
+        offered = _plan_years()
+        option_keys = [key for pattern, key in _PLAN_PATTERNS if pattern.search(query)]
+        keys = tuple(dict.fromkeys(
+            codes[key] for key in option_keys for codes in (_FEHB_CODES, _PSHB_CODES)
+            if any(y in offered.get(codes[key], set()) for y in years)))
+        if len(keys) > 1:
+            label = " / ".join(dict.fromkeys(_OPTION_LABEL[k] for k in option_keys))
+            cover_field, cover_asked, cover_level, cover_keys = "plan_code", label, "option", keys
+            plans = list(keys)
+            reasons.append(f"option named, no program -> cover every plan offering it {keys}")
     return Route(
         scope="in_scope",
         years=years,
@@ -171,6 +197,7 @@ def route(query: str, hierarchies: dict[str, tuple[str, ...]] | None = None) -> 
         cover_field=cover_field,
         cover_keys=cover_keys,
         cover_asked=cover_asked,
+        cover_level=cover_level,
     )
 
 

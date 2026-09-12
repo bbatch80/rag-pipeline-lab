@@ -235,7 +235,7 @@ def rerank(
         # others (P4: a claims bulletin fell outside every plan lane and was
         # dropped, blocking an entitled answer).
         lanes["*"] = [c for c in ordered if c.plan_code not in stratify_plans]
-        # strongest lane leads; every lane still gets its seat in the round-robin
+        # strongest lane leads; every plan lane gets exactly ONE seat (its best chunk)
         lanes = dict(sorted(lanes.items(), key=lambda kv: -(kv[1][0].rerank_score if kv[1] else -1)))
         return _interleave(ordered, lanes, top_n)
 
@@ -246,12 +246,13 @@ def rerank(
     # scores are not comparable: interleave by RANK within each year, latest
     # year first, so the top of every year is near the top of the list.
     lanes = {year: [c for c in ordered if c.year == year] for year in sorted(stratify_years, reverse=True)}
-    return _interleave(ordered, lanes, top_n)
+    return _share(ordered, lanes, top_n)
 
 
-def _interleave(ordered: list[Candidate], lanes: dict, top_n: int) -> list[Candidate]:
-    """Round-robin the lanes by rank so every lane's best is near the top;
-    chunks outside every lane fill the rest."""
+def _share(ordered: list[Candidate], lanes: dict, top_n: int) -> list[Candidate]:
+    """Round-robin: every lane holds an equal share of the list. For YEARS,
+    where the question asked for both sides ("how did X change"), the
+    asker wants each year's evidence in depth, not one chunk per year."""
     picked, picked_ids = [], set()
     while len(picked) < top_n and any(lanes.values()):
         for key in list(lanes):
@@ -261,6 +262,32 @@ def _interleave(ordered: list[Candidate], lanes: dict, top_n: int) -> list[Candi
                     picked.append(c)
                     picked_ids.add(c.chunk_id)
     for c in ordered:
+        if len(picked) >= top_n:
+            break
+        if c.chunk_id not in picked_ids:
+            picked.append(c)
+            picked_ids.add(c.chunk_id)
+    return picked[:top_n]
+
+
+def _interleave(ordered: list[Candidate], lanes: dict, top_n: int) -> list[Candidate]:
+    """PLAN lanes: one seat per lane, then score order. A covered plan is a
+    plausible reading of an ambiguous question and is REPRESENTED by its
+    best chunk at the top; coverage never means an equal share of the list.
+    (Years use _share: a change question asked for both sides.)
+    The chunks outside every lane (key "*": bulletins, policies, letters —
+    sources without the covered field) own no seat, but are never demoted
+    below a seat they outscore (P4: a claims bulletin at 0.95 leads).
+    Measured 2026-09-11 before this rule: a round-robin split the top five
+    between two brochures saying the same thing (F1, T4 lost; Y1, Y8 lost a
+    year) and gave a 0.47 carrier letter the third seat above 0.85 chunks."""
+    seats = [lane[0] for key, lane in lanes.items() if key != "*" and lane]
+    seat_ids = {c.chunk_id for c in seats}
+    floor = min((c.rerank_score or 0.0) for c in seats) if seats else 0.0
+    outside = [c for c in lanes.get("*", []) if (c.rerank_score or 0.0) >= floor and c.chunk_id not in seat_ids]
+    head = sorted(seats + outside, key=lambda c: -(c.rerank_score or 0.0))
+    picked, picked_ids = [], set()
+    for c in head + ordered:
         if len(picked) >= top_n:
             break
         if c.chunk_id not in picked_ids:

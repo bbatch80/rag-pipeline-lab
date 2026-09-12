@@ -1,6 +1,8 @@
 """Parser bake-off on table structure (Phase 3.5, 2026-09-12).
 
-Three parsers read the same brochures into a scratch table, side by side.
+Parsers read the same brochures into a scratch table, side by side (fast,
+hi_res; Docling took part in the 2026-09-12 bake-off and was removed after
+hi_res was promoted — its scratch rows remain as the record).
 The measurement is whether a TABLE ROW survives parsing and chunking: for
 a labeled cell, does one chunk hold the value, its row label, and its
 column header together? hit@5 never asked that (any page stating the value
@@ -25,13 +27,10 @@ from raglab.chunking import chunk_elements
 CELLS_PATH = config.REPO_ROOT / "eval" / "table_cells.jsonl"
 EVAL_SCHEMA_PATH = config.REPO_ROOT / "db" / "eval.sql"
 
-PARSERS = ("fast", "hires", "docling")
+PARSERS = ("fast", "hires")  # docling lost the promotion (2026-09-12) and was removed
 
 
 def backend_for(parser: str):
-    if parser == "docling":
-        from raglab.parsing.docling_backend import DoclingBackend
-        return DoclingBackend()
     from raglab.parsing.unstructured_backend import UnstructuredBackend
     return UnstructuredBackend("fast" if parser == "fast" else "hi_res")
 

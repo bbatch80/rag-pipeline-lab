@@ -143,6 +143,7 @@ DEFECTS: tuple[tuple[int, str], ...] = (
     (1, "A member's own call notes rank below generic CSR prose on a claim-status question (C12, since the corpus growth)."),
     (2, "Chiropractic rule split across chunk boundaries (PSHB probe)."),
     (1, "Reranker saturation on look-alike brochure passages: ties at 1.000 (F1) and a table-of-contents chunk outscoring the answer (F6) once both programs' brochures are covered."),
+    (1, "Wide-table granularity: one intact row in a large table chunk cannot lift the chunk over the abstention bar (cognitive rehab, table-04; the rates page, T1)."),
     (1, "Name translation ate “Puerto Rico” (blind faq-26)."),
     (1, "Medicare scope gate blocked an IRMAA question the brochure answers (blind faq-18)."),
 )

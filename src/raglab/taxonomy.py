@@ -90,6 +90,7 @@ BANDS = (
 
 @dataclass(frozen=True)
 class Group:
+    number: int
     name: str
     description: str
     metric: str
@@ -98,25 +99,25 @@ class Group:
 
 GROUPS: dict[str, Group] = {
     g.name: g for g in (
-        Group("factual", "A stated fact from a brochure", "hit@5", "retrieval"),
-        Group("table", "A cell from a brochure rate or benefit table", "hit@5", "retrieval"),
-        Group("yoy", "The same benefit across two plan years", "hit@5 · source coverage", "retrieval"),
-        Group("call_note", "One member's call record", "hit@5", "retrieval"),
-        Group("appeal", "An appeal case file or determination letter", "hit@5", "retrieval"),
-        Group("clinical_policy", "A medical policy's criteria", "hit@5", "retrieval"),
-        Group("carrier_letter", "An OPM carrier letter", "hit@5", "retrieval"),
-        Group("internal_factual", "A bulletin, SOP, or knowledge-base fact", "hit@5", "retrieval"),
-        Group("internal_table", "A table inside an internal document", "hit@5", "retrieval"),
-        Group("compound", "Two or more legs planned and every leg's evidence present",
+        Group(1, "factual", "A stated fact from a brochure", "hit@5", "retrieval"),
+        Group(2, "table", "A cell from a brochure rate or benefit table", "hit@5", "retrieval"),
+        Group(3, "yoy", "The same benefit across two plan years", "hit@5 · source coverage", "retrieval"),
+        Group(4, "call_note", "One member's call record", "hit@5", "retrieval"),
+        Group(5, "appeal", "An appeal case file or determination letter", "hit@5", "retrieval"),
+        Group(6, "clinical_policy", "A medical policy's criteria", "hit@5", "retrieval"),
+        Group(7, "carrier_letter", "An OPM carrier letter", "hit@5", "retrieval"),
+        Group(8, "internal_factual", "A bulletin, SOP, or knowledge-base fact", "hit@5", "retrieval"),
+        Group(9, "internal_table", "A table inside an internal document", "hit@5", "retrieval"),
+        Group(10, "compound", "Two or more legs planned and every leg's evidence present",
               "routing · complete recall", "composition"),
-        Group("named_query", "One warehouse query bound and returning rows",
+        Group(11, "named_query", "One warehouse query bound and returning rows",
               "rows (tests/test_named_queries.py)", "composition"),
-        Group("persona_negative", "A persona is refused what it may not see, and allowed what it may",
+        Group(12, "persona_negative", "A persona is refused what it may not see, and allowed what it may",
               "deny clean · allow answered", "guardrail"),
-        Group("scope_negative", "Other carriers and outside programs are refused", "scope clean", "guardrail"),
-        Group("unanswerable", "A question the corpus cannot answer is declared so", "gate correct", "guardrail"),
-        Group("version_negative", "A superseded version never outranks the current one", "version clean", "guardrail"),
-        Group("adversarial", "Instructions hidden in a question do not change the payload", "adversarial ok", "guardrail"),
+        Group(13, "scope_negative", "Other carriers and outside programs are refused", "scope clean", "guardrail"),
+        Group(14, "unanswerable", "A question the corpus cannot answer is declared so", "gate correct", "guardrail"),
+        Group(15, "version_negative", "A superseded version never outranks the current one", "version clean", "guardrail"),
+        Group(16, "adversarial", "Instructions hidden in a question do not change the payload", "adversarial ok", "guardrail"),
     )
 }
 

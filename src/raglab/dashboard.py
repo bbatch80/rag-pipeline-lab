@@ -214,12 +214,13 @@ def _capability_html(conn: psycopg.Connection) -> str:
 
     group_rows = []
     for band, title in taxonomy.GROUP_BANDS:
-        group_rows.append(f'<tr class="band"><td colspan="5">{title}</td></tr>')
+        group_rows.append(f'<tr class="band"><td colspan="6">{title}</td></tr>')
         for g in taxonomy.GROUPS.values():
             if g.band != band:
                 continue
             group_rows.append(
-                f'<tr><td class="cat">{g.name}<small>{g.description}</small></td>'
+                f'<tr><td class="num">{g.number}</td>'
+                f'<td class="cat">{g.name}<small>{g.description}</small></td>'
                 f'<td class="left">{g.metric}</td>{_pass_cells(by_group.get(g.name))}</tr>'
             )
 
@@ -253,7 +254,7 @@ def _capability_html(conn: psycopg.Connection) -> str:
         "the rows mean the same thing as the corpus grows; only the payload is judged, never "
         "the answering model's prose.</p>\n"
         "\n<h2>Capability — by mechanism and source (the groups the gate is built on)</h2>\n"
-        '<table><tr><th class="left">group</th><th class="left">metric</th><th>gated items</th>\n'
+        '<table><tr><th>#</th><th class="left">group</th><th class="left">metric</th><th>gated items</th>\n'
         "<th>pass rate</th><th></th></tr>\n"
         f"{''.join(group_rows)}</table>\n"
         "\n<h2>Open defects</h2>\n"

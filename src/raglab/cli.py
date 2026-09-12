@@ -947,6 +947,44 @@ def eval_diff_cmd(before: int, after: int):
     receipt.finish()
 
 
+@main.group("bakeoff")
+def bakeoff_group():
+    """Parser bake-off on table structure: parse into scratch, then report."""
+
+
+@bakeoff_group.command("parse")
+@click.argument("parser", type=click.Choice(["fast", "hires", "docling"]))
+@click.option("--year", "years", multiple=True, type=int, help="Only these brochure years (default: all).")
+def bakeoff_parse_cmd(parser: str, years: tuple[int, ...]):
+    """Parse the brochures with one parser into the scratch table (never the live corpus)."""
+    from raglab import tablebakeoff
+
+    receipt = Receipt(f"raglab bakeoff parse {parser}")
+    try:
+        with db.connect() as conn:
+            stats = tablebakeoff.parse_into_scratch(conn, parser, tuple(years), log=lambda m: receipt.add("parsed", m))
+        for k, v in stats.items():
+            receipt.add(k, v)
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+@bakeoff_group.command("report")
+def bakeoff_report_cmd():
+    """Structure statistics and the table-row metric per parser."""
+    from raglab import tablebakeoff
+
+    receipt = Receipt("raglab bakeoff report")
+    try:
+        with db.connect() as conn:
+            for parser, r in tablebakeoff.report(conn).items():
+                receipt.add(parser, "  ".join(f"{k}={v}" for k, v in r.items()))
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
 @main.command("eval-generation")
 @click.option("--label", default="demo", help="config_label recorded with the run.")
 def eval_generation_cmd(label: str):

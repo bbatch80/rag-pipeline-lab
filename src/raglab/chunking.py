@@ -60,9 +60,31 @@ class _Builder:
         )
 
 
+def _split_table(el: Element, hard_max: int) -> list[Element]:
+    """A table never splits mid-row: pieces break on row boundaries and each
+    piece repeats the header rows (markdown: the first two lines), so every
+    row keeps its column labels."""
+    lines = el.text.split("\n")
+    header = lines[:2] if len(lines) > 2 and lines[1].strip().startswith("|") and set(lines[1].replace("|", "").strip()) <= set("- :") else []
+    body = lines[len(header):]
+    pieces, current = [], list(header)
+    for row in body:
+        candidate = current + [row]
+        if current != header and len("\n".join(candidate)) > hard_max:
+            pieces.append("\n".join(current))
+            current = list(header) + [row]
+        else:
+            current = candidate
+    if current != header:
+        pieces.append("\n".join(current))
+    return [Element(text=t, category="table", page=el.page) for t in pieces]
+
+
 def _split_oversized(el: Element, hard_max: int) -> list[Element]:
     if len(el.text) <= hard_max:
         return [el]
+    if el.category == "table":
+        return _split_table(el, hard_max)
     pieces, remaining = [], el.text
     while len(remaining) > hard_max:
         cut = remaining.rfind(" ", 0, hard_max)
@@ -115,6 +137,16 @@ def chunk_elements(
                 current = _Builder(section=section)
             current.add(el)
             continue
+        if el.category == "table":
+            # Table-aware chunking: a table is its own chunk (or several, split
+            # on rows with headers repeated) — never merged into prose that
+            # happens to precede it, never cut mid-row. A row survives as a row.
+            close()
+            for piece in _split_oversized(el, hard_max):
+                current = _Builder(section=section)
+                current.add(piece)
+                close()
+            continue
         for piece in _split_oversized(el, hard_max):
             if current is None:
                 current = _Builder(section=section)
@@ -136,6 +168,7 @@ def _merge_small(chunks: list[Chunk], merge_under: int, hard_max: int) -> list[C
             out
             and len(chunk.text) < merge_under
             and len(out[-1].text) + len(chunk.text) + 2 <= hard_max
+            and "table" not in chunk.categories and "table" not in out[-1].categories
         ):
             prev = out.pop()
             out.append(
@@ -155,8 +188,8 @@ def _merge_small(chunks: list[Chunk], merge_under: int, hard_max: int) -> list[C
             out.append(chunk)
         else:
             out.append(chunk)
-    # Second pass for a still-small leading chunk.
-    if len(out) >= 2 and len(out[0].text) < merge_under:
+    # Second pass for a still-small leading chunk (never into a table).
+    if len(out) >= 2 and len(out[0].text) < merge_under and "table" not in out[1].categories:
         first, second = out[0], out[1]
         if len(first.text) + len(second.text) + 2 <= hard_max:
             out[1] = Chunk(

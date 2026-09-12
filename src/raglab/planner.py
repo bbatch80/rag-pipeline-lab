@@ -251,7 +251,7 @@ FREE_TEXT_PARAMS = tuple(sorted({
 } - set(SLOT_NAMES) - {"last_name", "first_name", "name"}))
 
 READER_SYSTEM = """You read one question asked of a governed retrieval platform for a health insurer (GEHA). You never answer it, never search, and never see records. Report only what the question SAYS, as fields the platform enforces:
-- `scope`: "other_carrier" ONLY when the question asks about a specific other insurer's plan by name (Blue Cross / FEP, Aetna, Kaiser, MHBP, NALC, APWU, Cigna, Humana, Anthem …) — put that name in `boundary_value`; without a name it is not a boundary. The words "carrier", "carriers", "examiners", "OPM", claims bulletins, appeals, and notes are all GEHA's own business and are in scope. "medicare_program" when it asks for Medicare's OWN program facts (Medicare premiums, Part B or Part D amounts, IRMAA) rather than how a GEHA plan coordinates with Medicare. Otherwise "in_scope" with `boundary_value` null.
+- `scope`: "other_carrier" ONLY when the question asks for a fact ABOUT another insurer's plan (Blue Cross / FEP, Aetna, Kaiser, MHBP, NALC, APWU, Cigna, Humana, Anthem …) — what it charges, covers, or requires, or a comparison with it — and put that name in `boundary_value`; without a name it is not a boundary. A carrier named only as the asker's former or other plan, as a contrast, or as background is NOT the subject: "Unlike my old Aetna plan, do I need a referral with GEHA High?" is in scope (it asks about GEHA); "I'm switching from Kaiser; does GEHA cover my prescriptions?" is in scope; "What does Blue Cross FEP charge for a specialist?" is other_carrier; "How does GEHA Standard compare to Blue Cross Standard?" is other_carrier (the comparison needs Blue Cross facts). The words "carrier", "carriers", "examiners", "OPM", claims bulletins, appeals, and notes are all GEHA's own business and are in scope. "medicare_program" when it asks for Medicare's OWN program facts (Medicare premiums, Part B or Part D amounts, IRMAA) rather than how a GEHA plan coordinates with Medicare or what GEHA reimburses. Otherwise "in_scope" with `boundary_value` null.
 - `program`: "FEHB" only when the question literally says FEHB or federal employees; "PSHB" only when it says PSHB or postal. Otherwise "none". Never infer the program from an option or a product name: High, Standard, HDHP and "GEHA Benefit Plan" exist under both programs.
 - `options`: the plan options the question names, as keys: "hdhp" (HDHP, high-deductible), "elevate", "elevate_plus", "high" (High Option, "hi opt", the GEHA Benefit Plan), "standard" (Standard Option, "std"). [] when none.
 - `years`: the plan years written in the question (e.g. 2026); [] when none. Never infer a year.
@@ -553,7 +553,26 @@ def compose(
     _t(trace, "identifiers", member_key=ctx.member_key, record=dict(ctx.record), as_of=ctx.as_of,
        unresolved=list(ctx.unresolved))
     _t(trace, "menu", module=module, sources=list(available["sources"]), named_queries=list(available["named_queries"]))
-    if route.scope == "in_scope" and not caller_plan:
+    if route.scope != "in_scope":
+        # An out-of-scope route means NO retrieval: no plan, no legs. The payload
+        # says out_of_scope with the boundary text at the top, as the single-
+        # query path always has. Before 2026-09-12 the composer ran the rules
+        # plan, its one leg reported out_of_scope, and the top-level status
+        # became 'insufficient_evidence: missing documents' with the boundary
+        # text lost (scope_negative-01: a Blue Cross question).
+        with watch.stage("payload"):
+            built = payload_mod.build(question, route, [])
+            built["payload_id"] = str(uuid.uuid4())
+            built["persona"] = caller.persona or "admin"
+            built["member_context"] = member_id
+            built["record_context"] = dict(ctx.record)
+            built["unresolved_identifiers"] = list(ctx.unresolved)
+            built["plan"] = None
+            built["sub_results"], built["warehouse_results"], built["missing"] = [], [], []
+        _t(trace, "composed", status=built["status"], boundary=built.get("boundary_response"), chunks=0)
+        _disclose_and_commit(conn, built, [], source, caller.user_id, watch)
+        return built
+    if not caller_plan:
         _t(trace, "translated_for_planner", text=translated_for_planning(conn, question) if PLANNER == "model" else None)
     plan = plan or (plan_for(conn, question, module=module) if route.scope == "in_scope" else plan_rules(question))
     with watch.stage("plan"):

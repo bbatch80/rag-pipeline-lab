@@ -97,3 +97,17 @@ def test_bulletin_number_is_a_record_key_and_bypasses_the_version_window():
     where, params = _filters(route, None, (), (), {"policy_id": "CP-0003"}, ("clinical_policy",), ("bulletin_id",))
     assert "IS NOT NULL" not in where and "effective_from" in where
     assert params.count("policy_id") == 2
+
+
+def test_formulary_update_logs_are_events_not_versions():
+    """Every quarterly log stays current: an issue date, no end date, so a
+    default question sees all of them and a dated one sees those issued by
+    then (internal_table-02)."""
+    logs = [d for d in internal_docs.ALL_DOCS if d.relpath.startswith("formulary/formulary_updates_20")]
+    assert len(logs) >= 6
+    for d in logs:
+        assert d.record["effective_to"] is None and d.record["status"] == "current" and d.record.get("event"), d.relpath
+        assert d.record["effective_from"] == d.record["effective_from"][:10]
+    # the per-year formulary itself is still versioned: 2025 ended when 2026 began
+    f25 = next(d for d in internal_docs.ALL_DOCS if d.relpath == "formulary/formulary_2025.md")
+    assert f25.record["status"] == "superseded"

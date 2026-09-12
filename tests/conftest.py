@@ -3,6 +3,7 @@ os.environ.setdefault("RAGLAB_EMBED_CACHE", "off")  # tests patch the embedder; 
 os.environ.setdefault("RAGLAB_RERANK_CACHE", "off")  # tests patch the reranker; same reason
 os.environ.setdefault("RAGLAB_PLANNER", "rules")  # tests never call the planner model; model tests inject a fake client
 os.environ.setdefault("RAGLAB_PLAN_CACHE", "off")
+os.environ.setdefault("RAGLAB_PARSE_CACHE", "off")  # tests parse fixtures; the cache dir is a real data folder
 import pytest
 
 from raglab import db as raglab_db

@@ -586,13 +586,18 @@ Symbicort moves to Tier 3 with generic budesonide/formoterol at Tier 1.
 ]
 
 
-def _updates(year: int, quarter: int, issued: str, body: str, effective_to: str | None) -> InternalDoc:
+def _updates(year: int, quarter: int, issued: str, body: str, effective_to: str | None = None) -> InternalDoc:
+    """A quarterly update log is an EVENT, not a version: "Nurtec was added
+    in Q3 2025" stays true after Q4's log exists. It carries its issue date
+    (a dated question sees only logs issued by then) and never an end date,
+    so the version window never files it as superseded (internal_table-02,
+    2026-09-12: the log that answered a quantity-limit question was hidden).
+    The `effective_to` argument is kept for call compatibility and ignored."""
     return InternalDoc(f"formulary/formulary_updates_{year}_q{quarter}.md", "employee", "formulary",
                        f"Formulary Updates {year} Q{quarter}",
                        f"# Formulary Updates — {year} Q{quarter}\n\n**Issued:** {issued} · pharmacy services\n\n" + body.strip() + "\n",
                        year=year, record={"formulary_year": year, "quarter": quarter, "effective_from": issued,
-                                          "effective_to": effective_to,
-                                          "status": "superseded" if effective_to else "current"})
+                                          "effective_to": None, "status": "current", "event": True})
 
 
 FORMULARY_UPDATES = [

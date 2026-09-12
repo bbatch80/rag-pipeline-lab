@@ -90,3 +90,17 @@ def test_an_oversized_table_splits_on_rows_and_repeats_its_headers():
         assert all(line.startswith("|") and line.endswith("|") for line in c.text.split("\n")), "no row is cut mid-way"
     joined = "\n".join(c.text for c in chunks)
     assert all(f"Benefit row number {i} " in joined for i in range(60)), "no row lost"
+
+
+def test_a_wide_table_splits_into_row_groups_with_headers_under_table_max(monkeypatch):
+    """The ranker judges the chunk: a table wider than TABLE_MAX becomes row
+    groups, each with the header rows, none exceeding TABLE_MAX."""
+    from raglab import chunking
+    monkeypatch.setattr(chunking, "TABLE_MAX", 300)
+    rows = [f"Benefit number {i} with a description long enough to matter" for i in range(20)]
+    chunks = chunk_elements([_table(rows)], hard_max=2000)
+    assert len(chunks) > 3
+    for c in chunks:
+        assert len(c.text) <= 300 + 60, "row groups stay near TABLE_MAX (one row may overshoot)"
+        assert c.text.startswith("| Benefit | High Option | Standard Option |\n| --- |")
+    assert all(f"Benefit number {i} " in "\n".join(c.text for c in chunks) for i in range(20))

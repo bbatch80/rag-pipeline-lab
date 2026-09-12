@@ -187,3 +187,14 @@ def test_compose_records_every_stage_in_order(db, monkeypatch):
     doc = next(e for e in events if e["stage"] == "doc_leg")
     assert doc["vector_top"] and doc["rerank_top"] and set(doc["sources_searched"]) >= {"brochure", "sop"}
     assert events[-1]["payload_id"] and events[-2]["status"] in ("ok", "insufficient_evidence")
+
+
+def test_out_of_scope_route_short_circuits_composition(db, monkeypatch):
+    """No plan, no legs, status out_of_scope with the boundary text at the
+    top (scope_negative-01, 2026-09-12)."""
+    from raglab import planner, router
+    monkeypatch.setattr(planner, "read_route", lambda conn, q, client=None: router.Reading(scope="other_carrier", boundary_value="Blue Cross FEP", origin="model"))
+    monkeypatch.setattr(planner, "_disclose_and_commit", lambda *a, **k: None)
+    built = planner.compose(db, "What does Blue Cross FEP Basic charge for a specialist visit?", planner.Caller(persona="public"), module="ask", source="test")
+    assert built["status"] == "out_of_scope" and "Blue Cross FEP" in built["boundary_response"]
+    assert built["chunks"] == [] and built["plan"] is None and built["sub_results"] == [] and built["warehouse_results"] == []

@@ -57,6 +57,9 @@ def _contextualize(chunks: list[Chunk], meta: DocumentMeta) -> list[Chunk]:
 RECORD_HEADER = "rec:v1"  # search-copy header carrying the record's keys (member records)
 
 
+PARSE_STATS = {"fresh": 0, "cached": 0}  # per process: how many parses came from the cache (the receipt reports it)
+
+
 def processing_recipe(backend_name: str, phi: bool = False, normalized: bool = False,
                       record: bool = False) -> str:
     """The recipe half of a document's identity: what would change the
@@ -65,9 +68,13 @@ def processing_recipe(backend_name: str, phi: bool = False, normalized: bool = F
     from raglab import chunking
 
     contextual_mode = os.environ.get("RAGLAB_CONTEXTUAL", "template")
+    # The table knob enters the recipe only when it splits anything: at the
+    # default (whole tables, TABLE_MAX == HARD_MAX) the recipe stays byte-
+    # identical to the stored corpus, so no document looks stale.
+    table = f"/t{chunking.TABLE_MAX}" if chunking.TABLE_MAX < chunking.HARD_MAX else ""
     recipe = (
         f"{backend_name}|{chunking.HARD_MAX}/{chunking.SOFT_MAX}/"
-        f"{chunking.MERGE_UNDER}|{contextual_mode}"
+        f"{chunking.MERGE_UNDER}{table}|{contextual_mode}"
     )
     if phi:
         from raglab import deid
@@ -218,7 +225,10 @@ def ingest_document(
             )
         return "skipped"
 
-    elements = backend.parse(pdf_path)
+    from raglab import parsecache
+
+    elements, from_cache = parsecache.parse(backend, pdf_path)
+    PARSE_STATS["cached" if from_cache else "fresh"] += 1
     chunks = chunk_elements(elements, profile=source.chunk_profile or "section")
     failures = run_gates(chunks, source.gate_rules())
 

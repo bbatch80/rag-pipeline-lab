@@ -118,7 +118,10 @@ def ingest_cmd(full: bool):
     # table structure survives; ~11 min per brochure); every other PDF source
     # keeps the fast text-layer parser. The parser's name is part of each
     # document's processing recipe, so a switch re-ingests brochures only.
-    brochure_parser = os.environ.get("RAGLAB_BROCHURE_PARSER", "fast")
+    # hi_res is the promoted brochure parser (PR #45). The default lives HERE,
+    # not only in an env var: on 2026-09-12 an ingest run without the variable
+    # silently re-parsed every brochure with `fast` and reverted the corpus.
+    brochure_parser = os.environ.get("RAGLAB_BROCHURE_PARSER", "hi_res")
     backends = {
         "pdf": UnstructuredBackend(),
         "brochure": UnstructuredBackend(brochure_parser),
@@ -179,6 +182,7 @@ def ingest_cmd(full: bool):
 
             for status_name, count in counts.items():
                 receipt.add(status_name, count)
+            receipt.add("parses", f"{ingest.PARSE_STATS['fresh']} fresh, {ingest.PARSE_STATS['cached']} from cache")
             total, histogram = _chunk_histogram(conn)
             receipt.add("chunks total", total)
             receipt.add("size histogram", histogram)
@@ -987,6 +991,55 @@ def bakeoff_report_cmd():
         with db.connect() as conn:
             for parser, r in tablebakeoff.report(conn).items():
                 receipt.add(parser, "  ".join(f"{k}={v}" for k, v in r.items()))
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+@main.group("rerank-bakeoff")
+def rerank_bakeoff_group():
+    """Reranker bake-off v2: prepare candidates, run each through the gate, report."""
+
+
+@rerank_bakeoff_group.command("prepare")
+@click.argument("keys", nargs=-1)
+def rerank_bakeoff_prepare_cmd(keys):
+    """Download and load-test the candidate rerankers (explicit, one-time)."""
+    from raglab import rerankbakeoff
+
+    receipt = Receipt("raglab rerank-bakeoff prepare")
+    try:
+        for key, status in rerankbakeoff.prepare(tuple(keys) or ("bge-v2-m3", "mxbai-large-v2", "qwen3-0.6b"),
+                                                  log=lambda m: None).items():
+            receipt.add(key, status)
+    except Exception as exc:
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
+@rerank_bakeoff_group.command("run")
+@click.argument("keys", nargs=-1)
+@click.option("--reidentify/--no-reidentify", default=False, help="Axis 2: score on re-identified text.")
+def rerank_bakeoff_run_cmd(keys, reidentify):
+    """Run the gate under each candidate (thresholds provisional), then the rebuilt items; print the comparison."""
+    from raglab import rerankbakeoff
+
+    receipt = Receipt("raglab rerank-bakeoff run")
+    try:
+        runs = {}
+        with db.connect() as conn:
+            for key in keys or ("bge-base", "bge-v2-m3", "mxbai-large-v2", "qwen3-0.6b"):
+                run_id = rerankbakeoff.run_gate(key, reidentify, f"bakeoff-{key}{'-reid' if reidentify else ''}")
+                if run_id is None:
+                    receipt.add(key, "gate run FAILED (no run id in receipt)")
+                    continue
+                runs[(key, reidentify)] = run_id
+                rebuilt = rerankbakeoff.rebuild_check(conn, key, reidentify)
+                passed = sum(1 for v in rebuilt.values() if isinstance(v, dict) and v.get("pass"))
+                receipt.add(f"{key} rebuilt items", f"{passed}/{len(rebuilt)} pass  " + " ".join(
+                    f"{k}:{'P' if v.get('pass') else 'f'}" for k, v in rebuilt.items() if isinstance(v, dict)))
+            for line in rerankbakeoff.report(conn, runs).splitlines():
+                receipt.add("gate", line)
     except Exception as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()

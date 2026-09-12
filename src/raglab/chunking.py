@@ -25,6 +25,11 @@ from raglab.parsing.base import Element
 HARD_MAX = int(os.environ.get("RAGLAB_CHUNK_HARD", 2000))
 SOFT_MAX = int(os.environ.get("RAGLAB_CHUNK_SOFT", 1500))
 MERGE_UNDER = int(os.environ.get("RAGLAB_CHUNK_MERGE", 250))
+# A table splits into row groups at this size (headers repeated in every
+# piece), well under HARD_MAX: the chunk is the unit the ranker judges, and
+# one row diluted among twenty in a 2,000-character table chunk scored 0.36
+# under the 0.5 bar (table-04, T1; 2026-09-12). Rows stay whole.
+TABLE_MAX = int(os.environ.get("RAGLAB_CHUNK_TABLE", HARD_MAX))  # 700 measured 2026-09-12: yoy ratchet 0.875, T7 lost; held at whole-table until re-measured
 
 
 @dataclass
@@ -81,10 +86,12 @@ def _split_table(el: Element, hard_max: int) -> list[Element]:
 
 
 def _split_oversized(el: Element, hard_max: int) -> list[Element]:
+    if el.category == "table" and len(el.text) > min(hard_max, TABLE_MAX):
+        return _split_table(el, min(hard_max, TABLE_MAX))
     if len(el.text) <= hard_max:
         return [el]
     if el.category == "table":
-        return _split_table(el, hard_max)
+        return _split_table(el, min(hard_max, TABLE_MAX))
     pieces, remaining = [], el.text
     while len(remaining) > hard_max:
         cut = remaining.rfind(" ", 0, hard_max)

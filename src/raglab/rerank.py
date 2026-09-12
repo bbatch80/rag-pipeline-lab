@@ -23,15 +23,30 @@ from raglab.retrieval import Candidate
 # 0.868, an entitled persona wrongly blocked (allow_answered 0.8), rerank
 # p50 1964 vs 1157 ms; its answerable/unanswerable margin was 0.06 vs 0.42.
 RERANKERS = {
+    # ---- bake-off v2 candidates (2026-09-12): thresholds provisional until
+    # re-derived from each model's own score separation (raglab rerank-bakeoff).
+    "bge-v2-m3": {"model": "BAAI/bge-reranker-v2-m3", "kind": "cross-encoder", "threshold": 0.5,
+                  "thresholds": {"call_note": 0.1, "appeal": 0.1, "clinical_note": 0.1}, "size_gb": 2.2},
+    "mxbai-large-v2": {"model": "mixedbread-ai/mxbai-rerank-large-v2", "kind": "cross-encoder", "threshold": 0.5,
+                       "thresholds": {"call_note": 0.1, "appeal": 0.1, "clinical_note": 0.1}, "size_gb": 3.0},
+    "qwen3-0.6b": {"model": "Qwen/Qwen3-Reranker-0.6B", "kind": "qwen3", "threshold": 0.5,
+                   "thresholds": {"call_note": 0.1, "appeal": 0.1, "clinical_note": 0.1}, "size_gb": 1.2},
     "bge-base": {
         "model": "BAAI/bge-reranker-base",  # 2023, 278M
+        "kind": "cross-encoder",
         "threshold": 0.5,  # prose sources (calibrated on brochures, Phase 0)
         # Records: a terse, de-identified note scores lower in absolute
         # terms even when it is the answer. Calibrated on the call-note
         # golden slice (2026-09-09, 10 items): correct notes 0.16–0.99,
         # unrelated notes ≈ 0.00–0.01; a threshold of 0.1 sits under every
         # answered item with margin and above the noise floor.
-        "thresholds": {"call_note": 0.1, "appeal": 0.1},  # records: same bar (appeal chunks carry the record header)
+        # Clinical notes are records of the same shape (member-scoped,
+        # de-identified, one document per event) and were added after this
+        # table was calibrated; they carried the prose bar until 2026-09-12
+        # (persona_negative-07: the right note ranked first at 0.30 and the
+        # payload abstained). Set by category, not by measurement; the
+        # reranker bake-off re-derives every bar from each model's scores.
+        "thresholds": {"call_note": 0.1, "appeal": 0.1, "clinical_note": 0.1},
     },
 }
 RERANKER = os.environ.get("RAGLAB_RERANKER", "bge-base")
@@ -76,7 +91,7 @@ def model_key() -> str:
         except Exception:  # no hub cache metadata: still keyed on the name
             pass
         _model_key = f"{MODEL_NAME}@{rev}"
-    return _model_key
+    return _model_key + ("+reid" if RERANK_REIDENTIFY else "")
 
 
 def _cache_connection():
@@ -138,12 +153,57 @@ def score_pairs(model, pairs: list[tuple[str, str]], conn=None) -> list[float]:
     return [float(s) for s in scores]  # type: ignore[arg-type]
 
 
+class _Qwen3Reranker:
+    """Qwen3-Reranker as a predict(pairs) scorer: a causal LM asked whether
+    the document answers the query; score = P(yes) from the last-token
+    logits, as the model card prescribes. Same interface as CrossEncoder."""
+
+    _PREFIX = ('<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the '
+               'Instruct provided. Note that the answer can only be "yes" or "no".<|im_end|>\n<|im_start|>user\n')
+    _SUFFIX = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    _INSTRUCT = ("Given a health-plan question, judge whether the passage STATES the specific fact the question asks for. "
+                 "Being on the same topic is not an answer: a formulary that does not list the drug asked about, or a "
+                 "directory page that does not name the provider asked about, does not answer. Shorthand, abbreviations, "
+                 "and paraphrase count when the fact is the same.")
+
+    def __init__(self, name: str):
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        self.torch = torch
+        self.tok = AutoTokenizer.from_pretrained(name, padding_side="left", local_files_only=True)
+        self.model = AutoModelForCausalLM.from_pretrained(name, local_files_only=True).eval()
+        self.device = "mps" if torch.backends.mps.is_available() else "cpu"
+        self.model.to(self.device)
+        self.yes, self.no = self.tok.convert_tokens_to_ids("yes"), self.tok.convert_tokens_to_ids("no")
+
+    def predict(self, pairs, batch_size: int = 8):
+        out = []
+        for i in range(0, len(pairs), batch_size):
+            batch = [self._PREFIX + f"<Instruct>: {self._INSTRUCT}\n<Query>: {q}\n<Document>: {d}" + self._SUFFIX
+                     for q, d in pairs[i:i + batch_size]]
+            enc = self.tok(batch, padding=True, truncation=True, max_length=2048, return_tensors="pt").to(self.device)
+            with self.torch.no_grad():
+                logits = self.model(**enc).logits[:, -1, :]
+                two = self.torch.stack([logits[:, self.no], logits[:, self.yes]], dim=1)
+                out += self.torch.nn.functional.log_softmax(two, dim=1)[:, 1].exp().tolist()
+        return out
+
+
+def load_reranker(key: str):
+    """The scorer for a RERANKERS entry, from local weights only."""
+    spec = RERANKERS[key]
+    if spec.get("kind") == "qwen3":
+        return _Qwen3Reranker(spec["model"])
+    from sentence_transformers import CrossEncoder
+
+    return CrossEncoder(spec["model"], local_files_only=True, trust_remote_code=True)
+
+
 def _get_model():
     global _model
     if _model is None:
-        from sentence_transformers import CrossEncoder
-
-        _model = CrossEncoder(MODEL_NAME, local_files_only=True)
+        _model = load_reranker(RERANKER)
     return _model
 
 
@@ -156,6 +216,27 @@ def _get_model():
 #           from …") for every source
 #   max   — index AND the header-less body for call notes, higher score wins
 RERANK_TEXT = os.environ.get("RAGLAB_RERANK_TEXT", "max")
+# Bake-off axis 2 (2026-09-12): score on RE-IDENTIFIED text — vault tokens
+# ([MEMBER_ID-0384]) replaced by their originals at scoring time. The
+# reranker is local, so no boundary is crossed; the substitution needs the
+# vault (owner connection) and is off by default.
+RERANK_REIDENTIFY = os.environ.get("RAGLAB_RERANK_REIDENTIFY", "off") == "on"
+_vault: dict[str, str] | None = None
+
+
+def _reidentify(text: str) -> str:
+    global _vault
+    if _vault is None:
+        try:
+            conn = _cache_connection()
+            with conn.transaction():
+                _vault = {p: o for o, p in conn.execute("SELECT original, pseudonym FROM deid_vault").fetchall()}
+        except Exception:
+            _vault = {}
+    if not _vault or "[" not in text:
+        return text
+    import re as _re
+    return _re.sub(r"\[[A-Z_]+-\d{4}\]", lambda m: _vault.get(m.group(0), m.group(0)), text)
 _HEADER_SOURCES = ("call_note", "appeal")
 _HEADER_PREFIXES = ("record:", "CALL NOTE", "Appeal case", "Case ", "GEHA APPEALS DETERMINATION", "Case:", "Member:")
 
@@ -167,7 +248,7 @@ def record_body(c: Candidate) -> str:
     return "\n".join(lines).strip() or text
 
 
-def rerank_text(c: Candidate) -> str:
+def _rerank_text(c: Candidate) -> str:
     text = c.index_text or c.content
     if RERANK_TEXT not in ("body", "header"):
         return text
@@ -177,6 +258,11 @@ def rerank_text(c: Candidate) -> str:
     if c.doc_type in _HEADER_SOURCES:
         lines = [l for l in lines if not l.lstrip().startswith(_HEADER_PREFIXES)]
     return "\n".join(lines).strip() or text
+
+
+def rerank_text(c: Candidate) -> str:
+    text = _rerank_text(c)
+    return _reidentify(text) if RERANK_REIDENTIFY else text
 
 
 def rerank(

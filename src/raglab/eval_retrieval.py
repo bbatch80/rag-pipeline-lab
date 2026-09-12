@@ -322,7 +322,7 @@ def run(
         )
         coverage = covered / len(item["sources"])
 
-        scores.append((qid, category, "hit@5", hit, {}))
+        scores.append((qid, category, "hit@5", hit, {"top_scores": [round(c.rerank_score or 0.0, 4) for c in top5]}))
         scores.append((qid, category, "precision@5", precision, {}))
         scores.append((qid, category, "source_coverage", coverage,
                        {"expected_sources": len(item["sources"])}))

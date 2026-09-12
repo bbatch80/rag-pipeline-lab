@@ -161,6 +161,17 @@ def enforce(reading: Reading, hierarchies: dict[str, tuple[str, ...]] | None = N
         return Route(scope="out_of_domain", boundary_response=BOUNDARY_TEXT["medicare_program"],
                      reasons=(f"reading: {reading.origin}", "medicare-own-program"))
 
+    # An as-of date and a plan year are one fact read two ways. When the
+    # question gives a date and no year, the year follows the date: otherwise
+    # the year defaults to today's edition and the two filters disagree
+    # (version_negative-03: as-of 2025-07-01 + year 2026 excluded BOTH
+    # formularies from the pool; the 2026 KB article answered with the wrong
+    # year's tier).
+    if reading.as_of and not reading.years:
+        reasons.append(f"year follows the as-of date {reading.as_of}")
+        reading = Reading(program=reading.program, options=reading.options, years=(int(reading.as_of[:4]),),
+                          change=reading.change, as_of=reading.as_of, scope=reading.scope,
+                          boundary_value=reading.boundary_value, origin=reading.origin)
     mentioned_years = sorted(reading.years)
     out_of_range = [y for y in mentioned_years if y not in CORPUS_YEARS]
     if out_of_range:

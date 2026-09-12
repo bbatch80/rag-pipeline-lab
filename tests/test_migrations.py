@@ -48,3 +48,7 @@ def test_recipe_string_unchanged_by_refactor(monkeypatch):
     assert plain == "fast|2000/1500/250|template"
     assert phi == plain + f"|deid:tokenize:{deid.VERSION}"
     assert "|deid:" not in plain
+    from raglab import chunking
+    monkeypatch.setattr(chunking, "TABLE_MAX", 700)
+    assert ingest.processing_recipe("fast") == "fast|2000/1500/250/t700|template", \
+        "a table split that changes chunks changes the recipe; the default leaves it untouched"

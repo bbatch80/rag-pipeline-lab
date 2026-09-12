@@ -94,3 +94,16 @@ def test_a_boundary_without_a_name_is_not_a_boundary():
     assert any("named no carrier" in reason for reason in r.reasons)
     r = enforce(Reading(scope="other_carrier", boundary_value="Aetna", origin="model"))
     assert r.scope == "out_of_domain" and "Aetna" in r.boundary_response
+
+
+def test_the_year_follows_an_as_of_date_when_no_year_is_written():
+    """version_negative-03: 'as of July 1, 2025' with no explicit year must
+    route to plan year 2025, not today's edition."""
+    from raglab.router import Reading, enforce
+    r = enforce(Reading(as_of="2025-07-01", origin="model"))
+    assert r.years == (2025,) and r.as_of == "2025-07-01"
+    assert any("follows the as-of date" in reason for reason in r.reasons)
+    r = enforce(Reading(as_of="2025-07-01", years=(2026,), origin="model"))
+    assert r.years == (2026,), "an explicit year is the asker's and wins"
+    r = route("As of March 1, 2025, what did CP-0003 require?")
+    assert r.years == (2025,) and r.as_of == "2025-03-01"

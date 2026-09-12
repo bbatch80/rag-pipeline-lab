@@ -4,8 +4,11 @@ from raglab import rerank
 
 
 def test_single_pinned_reranker():
-    assert list(rerank.RERANKERS) == ["bge-base"]
+    """bge-base ships; every other entry is a bake-off candidate (carries
+    `size_gb`, loaded only by `raglab rerank-bakeoff`)."""
     assert rerank.RERANKER == "bge-base"
+    assert "size_gb" not in rerank.RERANKERS["bge-base"]
+    assert all("size_gb" in spec for key, spec in rerank.RERANKERS.items() if key != "bge-base")
     assert rerank.MODEL_NAME == "BAAI/bge-reranker-base"
     assert rerank.ABSTAIN_THRESHOLD == rerank.RERANKERS["bge-base"]["threshold"] == 0.5
 

@@ -114,11 +114,18 @@ def ingest_cmd(full: bool):
     from raglab.metadata import derive_document_meta
 
     receipt = Receipt("raglab ingest" + (" --full" if full else ""))
+    # Brochures may use a layout-aware parser (RAGLAB_BROCHURE_PARSER=hi_res:
+    # table structure survives; ~11 min per brochure); every other PDF source
+    # keeps the fast text-layer parser. The parser's name is part of each
+    # document's processing recipe, so a switch re-ingests brochures only.
+    brochure_parser = os.environ.get("RAGLAB_BROCHURE_PARSER", "fast")
     backends = {
         "pdf": UnstructuredBackend(),
+        "brochure": UnstructuredBackend(brochure_parser),
         "markdown": MarkdownBackend(),
         "csv": CsvBackend(),
     }
+    receipt.add("brochure parser", backends["brochure"].name)
     counts = {"skipped": 0, "ingested": 0, "reingested": 0, "quarantined": 0, "duplicate": 0}
 
     def one(conn, path, meta, backend_kind, label):
@@ -138,7 +145,7 @@ def ingest_cmd(full: bool):
                 if not cell.pdf_path.exists():
                     receipt.fail(f"missing PDF (run `raglab download`): {cell.pdf_path.name} {cell.year}")
                     continue
-                one(conn, cell.pdf_path, derive_document_meta(cell), "pdf",
+                one(conn, cell.pdf_path, derive_document_meta(cell), "brochure",
                     f"{cell.spec.ri}/{cell.year}")
 
             from raglab import letters as letters_mod
@@ -953,7 +960,7 @@ def bakeoff_group():
 
 
 @bakeoff_group.command("parse")
-@click.argument("parser", type=click.Choice(["fast", "hires", "docling"]))
+@click.argument("parser", type=click.Choice(["fast", "hires"]))
 @click.option("--year", "years", multiple=True, type=int, help="Only these brochure years (default: all).")
 def bakeoff_parse_cmd(parser: str, years: tuple[int, ...]):
     """Parse the brochures with one parser into the scratch table (never the live corpus)."""

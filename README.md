@@ -270,8 +270,9 @@ rerank; the floor rises when that is fixed.
 | chunk size | small (1200/900/150) | 0.793 | 0.736 | fragments answers; trips gate |
 | chunk size | **baseline (2000/1500/250)** | 0.931 | 0.417 | **kept** |
 | chunk size | large (3000/2400/400) | 0.862 | 0.799* | overall regression |
-| parser bake-off | Unstructured-fast | 0.931 | — | **production default** |
+| parser bake-off (hit@5) | Unstructured-fast | 0.931 | — | production default until 2026-09-12 |
 | parser bake-off | Docling (table docs) | 0.862 | — | hypothesis rejected: lost table hit@5 1.0→0.875 |
+| parser bake-off (table rows intact, 8 labeled cells) | Unstructured-fast / hi_res / Docling | 0 / 7 / 8 of 8 | — | **hi_res promoted for brochures**: hit@5 never asked whether a row survived; on four table questions hi_res kept every row (Docling mis-attached one); gate unchanged, precision@5 0.347→0.372 |
 | year routing | blended search | 0.931 | 0.417 | one year crowds out the other |
 | year routing | **per-year search + stratified rerank + router vocab** | **0.966** | **0.521** | metadata-native fix, $0 |
 | contextual chunks | model-written chunk context | 0.966 | 0.750 | ties hit@5; large yoy-coverage gain; costs ~$0.70 + hours per rebuild; traded away a factual hit |

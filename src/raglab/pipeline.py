@@ -8,7 +8,7 @@ ranking; this module never filters content in application code.
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import uuid
 
 import psycopg
@@ -48,7 +48,8 @@ def run_query(
         else retrieval.Context(query=query)
     probe = _probe(conn, query, persona, ctx, watch, decision=decision)
     with watch.stage("payload"):
-        built = payload_mod.build(query, probe.decision, probe.reranked, coverage=coverage_note(conn, probe.decision, probe.reranked))
+        built = payload_mod.build(query, probe.decision, probe.reranked, coverage=coverage_note(conn, probe.decision, probe.reranked),
+                                  search=probe.search_stats)
         built["payload_id"] = str(uuid.uuid4())
         built["persona"] = persona or "admin"
         built["member_context"] = member_id
@@ -67,6 +68,7 @@ class Probe:
     reranked: list
     search_query: str
     candidates: list = None  # the fused pool before reranking (for traces)
+    search_stats: dict = field(default_factory=dict)  # readings / candidates / trimmed / cap
 
 
 def _probe(conn, query: str, persona: str | None, ctx: retrieval.Context, watch: Stopwatch,
@@ -76,6 +78,7 @@ def _probe(conn, query: str, persona: str | None, ctx: retrieval.Context, watch:
     reranked: list = []
     candidates: list = []
     search_query = query
+    search_stats: dict = {}
     if decision.scope == "in_scope":
         # Re-identification is itself an entitlement: queries are translated
         # (name -> vault pseudonym) only for sessions entitled to the vault —
@@ -100,14 +103,17 @@ def _probe(conn, query: str, persona: str | None, ctx: retrieval.Context, watch:
         try:
             with watch.stage("search"):
                 candidates = retrieval.search(conn, search_query, vector, decision, member_key=ctx.member_key,
-                                              record=ctx.record, embed=lambda t: retrieval.embed_cached(conn, t))
+                                              record=ctx.record, embed=lambda t: retrieval.embed_cached(conn, t),
+                                              stats=search_stats)
+                search_stats.setdefault("candidates", len(candidates))
             with watch.stage("rerank"):
                 reranked = rerank.rerank(search_query, candidates, stratify_years=decision.years,
                                          stratify_plans=decision.cover_keys if decision.cover_field == "plan_code" else ())
         finally:
             if persona is not None:
                 conn.execute("RESET ROLE")
-    return Probe(decision=decision, reranked=reranked, search_query=search_query, candidates=candidates)
+    return Probe(decision=decision, reranked=reranked, search_query=search_query, candidates=candidates,
+                 search_stats=search_stats)
 
 
 def _hierarchies(conn) -> dict | None:
@@ -141,7 +147,7 @@ def coverage_note(conn, decision: Route, reranked: list) -> dict | None:
     offered = {spec.plan_code: set(spec.years) for spec in corpus.ALL_PLANS}
     not_offered = [k for k in decision.cover_keys
                    if k in offered and decision.years and not (offered[k] & set(decision.years))]
-    return {"field": "plan_code", "asked": decision.cover_asked, "keys": list(decision.cover_keys),
+    return {"field": "plan_code", "asked": decision.cover_asked, "level": decision.cover_level, "keys": list(decision.cover_keys),
             "in_corpus": in_corpus, "with_evidence": with_evidence,
             "missing_from_corpus": [k for k in decision.cover_keys if k not in in_corpus and k not in not_offered],
             "not_offered": not_offered}

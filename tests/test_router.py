@@ -8,11 +8,11 @@ from raglab.router import Route, route
 IN_SCOPE_CASES = [
     # (query, expected_years, expected_plan_codes)
     ("What is the deductible?", (2026,), ()),
-    ("What is the HDHP deductible?", (2026,), ("71-014",)),
+    ("What is the HDHP deductible?", (2026,), ("71-014", "71-026")),  # option without a program: both programs' HDHP
     ("What was the High Option deductible in 2024?", (2024,), ("71-006",)),
     ("How did the deductible change from 2025 to 2026?", (2025, 2026), ()),
-    ("How did High Option coinsurance change for 2026?", (2025, 2026), ("71-006",)),
-    ("Did the HDHP out-of-pocket maximum change for 2026?", (2025, 2026), ("71-014",)),
+    ("How did High Option coinsurance change for 2026?", (2025, 2026), ("71-006", "71-021")),
+    ("Did the HDHP out-of-pocket maximum change for 2026?", (2025, 2026), ("71-014", "71-026")),
     ("What was the deductible in 2021, and how does it compare to 2026?",
      (2021, 2026), ()),
     ("What is the Elevate Plus deductible?", (2026,), ("71-018",)),
@@ -20,11 +20,11 @@ IN_SCOPE_CASES = [
     ("How does GEHA coordinate benefits with Medicare?", (2026,), ()),
     # 71-006's product name, not a generic phrase
     ("How did the GEHA Benefit Plan deductible change from 2025 to 2026?",
-     (2025, 2026), ("71-006",)),
+     (2025, 2026), ("71-006", "71-021")),
     # "plan" phrasing routes like "option" phrasing
     ("For the 2025 FEHB standard plan, who is covered under Self and Family?",
      (2025,), ("71-006",)),
-    ("What does the high plan pay for urgent care?", (2026,), ("71-006",)),
+    ("What does the high plan pay for urgent care?", (2026,), ("71-006", "71-021")),
 ]
 
 
@@ -57,7 +57,8 @@ def test_route_is_deterministic():
     assert route(q) == route(q) == Route(
         scope="in_scope",
         years=(2025, 2026),
-        plan_codes=("71-014",),
+        plan_codes=("71-014", "71-026"),
         reasons=route(q).reasons,
         change=True,
+        cover_field="plan_code", cover_keys=("71-014", "71-026"), cover_asked="HDHP", cover_level="option",
     )

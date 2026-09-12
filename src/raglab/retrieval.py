@@ -198,10 +198,18 @@ def bind_enrollment_plan(route: Route, ctx: Context) -> Route:
     a High Option children's clause leaked into an Elevate Plus member's
     answer because other plans' near-identical chunks outranked theirs."""
     from dataclasses import replace
-    if route.plan_codes or not ctx.enrollment or route.scope != "in_scope":
+    if not ctx.enrollment or route.scope != "in_scope":
         return route
     codes = tuple(sorted({ctx.enrollment[y] for y in route.years if y in ctx.enrollment}))
     if not codes:
+        return route
+    if route.cover_level == "option" and set(codes) <= set(route.cover_keys):
+        # An option named without a program covers both programs' plans for a
+        # public asker; for a member the enrollment says which program.
+        return replace(route, plan_codes=codes, plan_from_enrollment=True,
+                       cover_field=None, cover_keys=(), cover_asked=None, cover_level=None,
+                       reasons=route.reasons + (f"option covered both programs -> the member's enrolled plan {codes} (from enrollment)",))
+    if route.plan_codes:
         return route
     return replace(route, plan_codes=codes, plan_from_enrollment=True,
                    reasons=route.reasons + (f"member question, no plan named -> the member's enrolled plan {codes} (from enrollment)",))
@@ -278,6 +286,11 @@ def _source_flags(conn: psycopg.Connection) -> tuple[tuple[str, ...], tuple[str,
             tuple(r[0] for r in rows if r[3]), leaf_keys)
 PER_METHOD_LIMIT = 100
 FUSED_LIMIT = int(os.environ.get("RAGLAB_FUSED_LIMIT", "50"))
+# Ambiguity costs time, never recall (user ruling 2026-09-12): every reading
+# of the question (a covered plan, a routed year, a policy version) gets a
+# FULL pool; the reranker's work grows with the number of readings, bounded
+# by this cap on the merged pool. When the cap trims, the payload says so.
+MAX_CANDIDATES = int(os.environ.get("RAGLAB_MAX_CANDIDATES", "600"))
 EF_SEARCH = 40  # Phase 2 benchmark operating point
 
 
@@ -361,8 +374,12 @@ def search(
     embed=None,
     member_key: str | None = None,
     record: dict | None = None,
+    stats: dict | None = None,
 ) -> list[Candidate]:
-    """`member_key` / `record` are the context (retrieval.resolve_context):
+    """`stats` (optional dict) is filled with readings / candidates / trimmed /
+    cap — how many sub-searches ran and whether the cap cut the merged pool.
+
+    `member_key` / `record` are the context (retrieval.resolve_context):
     member-scoped sources are filtered to the member, or skipped when there
     is none, and to the record when a case or claim id was given.
 
@@ -376,42 +393,38 @@ def search(
     eval's sabotage passes a junk-vector function)."""
     from dataclasses import replace
 
+    if stats is not None:
+        stats.setdefault("readings", 0)
     if route.cover_field == "plan_code" and len(route.cover_keys) >= 2:
         # The coverage rule: one search per covered plan, merged — one blended
         # pool lets the plan with the most brochure text crowd the others out
-        # (the PSHB probe: three plans asked about, one answered).
-        per_key = max(15, fused_limit // len(route.cover_keys))
-        merged, seen = [], set()
-        for code in route.cover_keys:
-            sub = search(conn, query_text, query_vector,
-                         replace(route, plan_codes=(code,), cover_field=None, cover_keys=(), cover_asked=None),
-                         fused_limit=per_key, embed=embed, member_key=member_key, record=record)
-            for c in sub:
-                if c.chunk_id not in seen:
-                    merged.append(c)
-                    seen.add(c.chunk_id)
-        return merged
+        # (the PSHB probe: three plans asked about, one answered). Each plan
+        # is a reading and gets the full budget (measured 2026-09-11: a split
+        # budget, divided again per year, dropped Y1's 2025 page from the pool).
+        subs = [search(conn, query_text, query_vector,
+                       replace(route, plan_codes=(code,), cover_field=None, cover_keys=(), cover_asked=None, cover_level=None),
+                       fused_limit=fused_limit, embed=embed, member_key=member_key, record=record, stats=stats)
+                for code in route.cover_keys]
+        return _merge_capped(subs, stats)
 
     if len(route.years) >= 2:
         from raglab import router as router_mod
 
         embed = embed or embed_query
-        per_year = max(15, fused_limit // len(route.years))
-        merged, seen = [], set()
         by_year = router_mod.year_queries(query_text, route.years)
+        subs = []
         for year in route.years:
             sub_text = by_year.get(year, query_text)
-            sub = search(
+            subs.append(search(
                 conn, sub_text, embed(sub_text),
                 replace(route, years=(year,), change=False),  # one year: no re-expansion
-                fused_limit=per_year, embed=embed,
-                member_key=member_key, record=record,
-            )
-            for candidate in sub:
-                if candidate.chunk_id not in seen:
-                    merged.append(candidate)
-                    seen.add(candidate.chunk_id)
-        return merged
+                fused_limit=fused_limit, embed=embed,
+                member_key=member_key, record=record, stats=stats,
+            ))
+        return _merge_capped(subs, stats)
+
+    if stats is not None:
+        stats["readings"] += 1
 
     member_scoped, events, versioned, leaf_keys = _source_flags(conn)
     where, filter_params = _filters(route, member_key, member_scoped, events, record, versioned, leaf_keys)
@@ -454,6 +467,27 @@ def search(
                 pool.append(c)
                 seen.add(c.chunk_id)
     return pool
+
+
+def _merge_capped(subs: list[list[Candidate]], stats: dict | None) -> list[Candidate]:
+    """Merge the readings' pools round-robin (each keeps its top share) and
+    cut at MAX_CANDIDATES; record the cut in stats."""
+    merged, seen = [], set()
+    queues = [list(sub) for sub in subs]
+    while any(queues):
+        for q in queues:
+            if q:
+                c = q.pop(0)
+                if c.chunk_id not in seen:
+                    merged.append(c)
+                    seen.add(c.chunk_id)
+    before = len(merged)
+    merged = merged[:MAX_CANDIDATES]
+    if stats is not None:
+        stats["candidates"] = len(merged)
+        stats["trimmed"] = before - len(merged)
+        stats["cap"] = MAX_CANDIDATES
+    return merged
 
 
 def _ingested_sources(conn: psycopg.Connection) -> tuple[str, ...]:

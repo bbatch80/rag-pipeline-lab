@@ -470,13 +470,20 @@ def compose(
     all_reranked: list = []
     as_of_defaulted = False
     coverage = None
+    search_note: dict = {}
     for leg in plan.legs:
         if leg.kind == "doc_probe":
             result, reranked, widened = _run_doc_leg(conn, leg, question, caller, ctx, route, watch, available, trace)
             plan.widened = plan.widened or widened
             start = len(chunks)
-            built = payload_mod.build(leg.text, result.decision, reranked, coverage=coverage_note(conn, result.decision, reranked))
+            built = payload_mod.build(leg.text, result.decision, reranked, coverage=coverage_note(conn, result.decision, reranked),
+                                      search=result.search_stats)
             coverage = coverage or built.get("coverage")
+            for k in ("readings", "candidates", "trimmed"):  # summed over the document legs
+                if k in result.search_stats:
+                    search_note[k] = search_note.get(k, 0) + result.search_stats[k]
+            if "cap" in result.search_stats:
+                search_note["cap"] = result.search_stats["cap"]
             _t(trace, "leg_verdict", leg=leg.name, status=built["status"], confidence=built.get("confidence"),
                thresholds={"prose": rerank.ABSTAIN_THRESHOLD, **rerank.ABSTAIN_BY_SOURCE})
             for c in built["chunks"]:
@@ -498,7 +505,7 @@ def compose(
     with watch.stage("payload"):
         built = payload_mod.compose(question, plan.to_dict(), sub_results, warehouse_results, chunks,
                                     subject=member_id or _member_id_of(ctx), unresolved=ctx.unresolved,
-                                    as_of_defaulted=as_of_defaulted, coverage=coverage,
+                                    as_of_defaulted=as_of_defaulted, coverage=coverage, search=search_note or None,
                                     router={"years": list(route.years), "plan_codes": list(route.plan_codes), "as_of": route.as_of,
                                             "plan_from_enrollment": route.plan_from_enrollment})
         built["payload_id"] = str(uuid.uuid4())

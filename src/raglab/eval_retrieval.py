@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 import psycopg
 
 from raglab import planner
-from raglab import ablation, config, deid, rerank, retrieval, router, sources, stats
+from raglab import ablation, config, deid, rerank, retrieval, router, sources, stats, taxonomy
 from raglab.timing import BUDGET_P95_MS, Stopwatch, percentile
 
 EVAL_SCHEMA_PATH = config.REPO_ROOT / "db" / "eval.sql"
@@ -86,6 +86,7 @@ class RetrievalEvalResult:
     failures: list = field(default_factory=list)
     replan: list = field(default_factory=list)  # [(qid, stored shape/legs, fresh shape/legs)] — plans the live model would change
     corpus_hash: str = ""
+    by_work: dict = field(default_factory=dict)  # work category number -> {name, n, passed, unverified}
 
 
 def _git_sha() -> str:
@@ -329,6 +330,7 @@ def run(
 
     import json as _json
 
+    scores.extend(_item_verdict_rows(scores))
     by_qid = {item["id"]: expected_source(item, registry) for item in ablation.load_golden()}
     scores = [
         (qid, cat, metric, value, {**detail, "source": by_qid.get(qid, "none")})
@@ -394,8 +396,38 @@ def _slice(rows: list[tuple]) -> dict:
     return out
 
 
+def _item_verdict_rows(scores: list[tuple]) -> list[tuple]:
+    """One `item_pass` row per gated item (1.0 / 0.0) carrying its work
+    category, or `item_unverified` when a gate metric was skipped in this
+    run. The dashboard reads these; a skipped check never counts as a pass."""
+    by_id = {item["id"]: item for item in ablation.load_golden()}
+    rows = []
+    for qid, (passed, skipped) in sorted(taxonomy.item_verdicts(scores).items()):
+        item = by_id.get(qid)
+        if item is None:
+            continue
+        detail = {"work_category": int(item["work_category"]), "group": item["category"]}
+        if passed is None:
+            rows.append((qid, item["category"], "item_unverified", 1.0, {**detail, "skipped": skipped}))
+        else:
+            rows.append((qid, item["category"], "item_pass", float(passed), detail))
+    return rows
+
+
 def _summarize(run_id: int, scores: list[tuple]) -> RetrievalEvalResult:
     result = RetrievalEvalResult(run_id=run_id)
+
+    for qid, cat, metric, value, detail in scores:
+        if metric not in ("item_pass", "item_unverified"):
+            continue
+        number = int(detail["work_category"])
+        slot = result.by_work.setdefault(
+            number, {"name": taxonomy.WORK_CATEGORIES[number].name, "n": 0, "passed": 0, "unverified": 0})
+        if metric == "item_unverified":
+            slot["unverified"] += 1
+        else:
+            slot["n"] += 1
+            slot["passed"] += int(value >= 1.0)
 
     def mean(metric, rows):
         vals = [v for _, _, m, v, _ in rows if m == metric]

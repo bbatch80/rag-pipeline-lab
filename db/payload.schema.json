@@ -432,7 +432,8 @@
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+     "not_offered": {"type": "array", "items": {"type": "string"}, "description": "keys the registry declares as not offered in the routed years"}
         }
       },
       "description": "The coverage rule fired: the question named a level (e.g. a program) but not the level beneath (its plans); every key beneath was searched \u2014 which have evidence here, which the corpus lacks"

@@ -10,6 +10,7 @@ from raglab import config
 from raglab import stats
 from raglab.timing import BUDGET_P95_MS, percentile
 from raglab.eval_retrieval import THRESHOLDS
+from raglab import taxonomy
 
 OUT_PATH = config.REPO_ROOT / "data" / "eval" / "dashboard.html"
 
@@ -66,6 +67,15 @@ td.num { width: 5.4rem; }
 details { margin-top: .8rem; }
 summary { cursor: pointer; color: var(--muted); font-size: .82rem; }
 .note { color: var(--muted); font-size: .78rem; margin-top: .4rem; }
+td.left, th.left { text-align: left; }
+td.cat { text-align: left; font-weight: 600; white-space: nowrap; }
+td.cat small { display: block; font-weight: 400; color: var(--muted); white-space: normal; }
+td.ex { text-align: left; color: var(--muted); font-style: italic; }
+tr.band td { background: var(--chip); color: var(--muted); font-size: .72rem;
+  text-transform: uppercase; letter-spacing: .05em; text-align: left; }
+.defects { list-style: none; padding: 0; margin: 0; }
+.defects li { padding: .3rem 0; border-top: 1px solid var(--line); }
+.defects li b { display: inline-block; min-width: 1.6rem; color: var(--amber); }
 """
 
 
@@ -142,6 +152,117 @@ def _trend_svg(points: list[tuple], threshold: float) -> str:
             f'{line(cov, "var(--indigo)")}{dots(cov, "var(--indigo)")}'
             f'{line(hit, "var(--teal)")}{dots(hit, "var(--teal)")}'
             f'{breaches}{xlabels}</svg>')
+
+
+def _item_verdicts(conn: psycopg.Connection) -> tuple[dict, dict, tuple | None]:
+    """Latest verdict per golden item across FULL retrieval runs (never a
+    partial or sabotage run). An item skipped in the latest run keeps the
+    verdict of the last run that verified it, so a CI run without warehouse
+    credentials neither hides nor fakes the warehouse-backed items.
+    Returns (by_work, by_group, (oldest_run, newest_run))."""
+    rows = conn.execute(
+        "SELECT DISTINCT ON (s.question_id) s.question_id, s.category, s.value, "
+        "s.detail->>'work_category', r.id "
+        "FROM eval_scores s JOIN eval_runs r ON r.id = s.run_id "
+        "WHERE s.metric = 'item_pass' AND r.kind = 'retrieval' "
+        "AND r.config_label NOT LIKE '%%SABOTAGE%%' AND r.config_label NOT LIKE '%%-partial:%%' "
+        "ORDER BY s.question_id, r.id DESC"
+    ).fetchall()
+    by_work: dict[int, list[int]] = {}
+    by_group: dict[str, list[int]] = {}
+    run_ids = []
+    for _qid, group, value, work, run_id in rows:
+        by_work.setdefault(int(work), []).append(int(float(value) >= 1.0))
+        by_group.setdefault(group, []).append(int(float(value) >= 1.0))
+        run_ids.append(run_id)
+    span = (min(run_ids), max(run_ids)) if run_ids else None
+    return by_work, by_group, span
+
+
+def _pass_cells(verdicts: list[int] | None) -> str:
+    if not verdicts:
+        return '<td class="num">0</td><td class="num">–</td><td></td>'
+    n, passed = len(verdicts), sum(verdicts)
+    rate = passed / n
+    return (f'<td class="num">{n}</td><td class="num">{rate * 100:.0f}%</td>'
+            f'<td>{_pct_bar(rate, low=1.0)}</td>')
+
+
+def _capability_html(conn: psycopg.Connection) -> str:
+    by_work, by_group, span = _item_verdicts(conn)
+    open_defects: dict[int, int] = {}
+    for number, _text in taxonomy.DEFECTS:
+        open_defects[number] = open_defects.get(number, 0) + 1
+
+    work_rows = []
+    for band, title in taxonomy.BANDS:
+        work_rows.append(f'<tr class="band"><td colspan="7">{title}</td></tr>')
+        for c in taxonomy.WORK_CATEGORIES.values():
+            if c.band != band:
+                continue
+            label = "G" if c.number == taxonomy.GUARDRAILS else str(c.number)
+            if band == "designed_out":
+                cells = '<td class="num">–</td><td class="num">–</td><td></td>'
+            else:
+                cells = _pass_cells(by_work.get(c.number))
+            work_rows.append(
+                f'<tr><td class="num">{label}</td>'
+                f'<td class="cat">{c.name}<small>{c.description}</small></td>'
+                f'<td class="ex">“{c.example}”</td>{cells}'
+                f'<td class="num">{open_defects.get(c.number, 0) or "–"}</td></tr>'
+            )
+
+    group_rows = []
+    for band, title in taxonomy.GROUP_BANDS:
+        group_rows.append(f'<tr class="band"><td colspan="5">{title}</td></tr>')
+        for g in taxonomy.GROUPS.values():
+            if g.band != band:
+                continue
+            group_rows.append(
+                f'<tr><td class="cat">{g.name}<small>{g.description}</small></td>'
+                f'<td class="left">{g.metric}</td>{_pass_cells(by_group.get(g.name))}</tr>'
+            )
+
+    defect_items = "".join(
+        f"<li><b>{'G' if n == taxonomy.GUARDRAILS else n}</b>{text}</li>" for n, text in taxonomy.DEFECTS
+    ) or "<li>none open</li>"
+    blind = conn.execute(
+        "SELECT r.id, to_char(r.started_at, 'YYYY-MM-DD'), r.config_label, "
+        "sum(s.value) FILTER (WHERE s.metric = 'right_context'), "
+        "sum(s.value) FILTER (WHERE s.metric = 'not_in_corpus'), "
+        "sum(s.value) FILTER (WHERE s.metric = 'defect'), count(DISTINCT s.question_id) "
+        "FROM eval_runs r JOIN eval_scores s ON s.run_id = r.id "
+        "WHERE r.kind = 'blind' GROUP BY r.id ORDER BY r.id DESC LIMIT 1"
+    ).fetchone()
+    blind_html = (
+        f"run {blind[0]} · {blind[1]} · {blind[2]}: {int(blind[6])} questions — "
+        f"{int(blind[3] or 0)} right context · {int(blind[4] or 0)} not in corpus, said so · "
+        f"{int(blind[5] or 0)} defects"
+        if blind else "no blind-set runs recorded in the store yet"
+    )
+    verified = (f"verdicts from full runs {span[0]}–{span[1]}" if span and span[0] != span[1]
+                else f"verdicts from full run {span[0]}" if span else "no full retrieval run yet")
+    return (
+        "\n<h2>Capability — by the work a question needs</h2>\n"
+        '<table><tr><th>#</th><th class="left">category</th><th class="left">example question</th>\n'
+        "<th>gated items</th><th>pass rate</th><th></th><th>open defects</th></tr>\n"
+        f"{''.join(work_rows)}</table>\n"
+        '<p class="note">Pass = every gate metric on the item is 1.0. A check skipped in a run '
+        "(no warehouse credentials) never counts as a pass: the item keeps the verdict of the "
+        f"last full run that verified it. {verified}. Descriptions are general on purpose so "
+        "the rows mean the same thing as the corpus grows; only the payload is judged, never "
+        "the answering model's prose.</p>\n"
+        "\n<h2>Capability — by mechanism and source (the groups the gate is built on)</h2>\n"
+        '<table><tr><th class="left">group</th><th class="left">metric</th><th>gated items</th>\n'
+        "<th>pass rate</th><th></th></tr>\n"
+        f"{''.join(group_rows)}</table>\n"
+        "\n<h2>Open defects</h2>\n"
+        f'<ul class="defects">{defect_items}</ul>\n'
+        '<p class="note">Each defect is pinned to the category it blocks; a row\'s pass rate can be '
+        "100% while a defect found outside the golden set stays open against it.</p>\n"
+        "\n<h2>Real questions (blind set, first-run totals)</h2>\n"
+        f'<p class="note">{blind_html}</p>\n'
+    )
 
 
 def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
@@ -304,6 +425,7 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
         for t, v in sorted(deid_types.items(), key=lambda kv: -kv[1])
     )
 
+    capability = _capability_html(conn)
     stamp = (f"latest retrieval run {latest_run[0]} · {latest_run[3]} · "
              f"<span class='mono'>{latest_run[2]}</span>" if latest_run else "no runs yet")
     html = f"""<meta charset="utf-8"><title>raglab — evaluation dashboard</title>
@@ -315,6 +437,7 @@ set. {stamp}</p>
 
 <h2>Health — current values vs CI gates</h2>
 <div class="cards">{''.join(cards)}</div>
+{capability}
 
 <h2>Retrieval quality over time</h2>
 <div class="chart-box">

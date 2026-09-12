@@ -14,6 +14,7 @@ import uuid
 import psycopg
 
 from raglab.router import Route
+from raglab import corpus
 from raglab import payload as payload_mod
 from raglab import rerank, retrieval, router
 from raglab.timing import Stopwatch
@@ -135,9 +136,15 @@ def coverage_note(conn, decision: Route, reranked: list) -> dict | None:
     except Exception:  # noqa: BLE001
         in_corpus = []
     with_evidence = sorted({c.plan_code for c in reranked if c.plan_code in decision.cover_keys})
+    # A plan the registry declares as not offered in the routed years is not
+    # "missing" — its absence is data (71-022 ended after 2025).
+    offered = {spec.plan_code: set(spec.years) for spec in corpus.ALL_PLANS}
+    not_offered = [k for k in decision.cover_keys
+                   if k in offered and decision.years and not (offered[k] & set(decision.years))]
     return {"field": "plan_code", "asked": decision.cover_asked, "keys": list(decision.cover_keys),
             "in_corpus": in_corpus, "with_evidence": with_evidence,
-            "missing_from_corpus": [k for k in decision.cover_keys if k not in in_corpus]}
+            "missing_from_corpus": [k for k in decision.cover_keys if k not in in_corpus and k not in not_offered],
+            "not_offered": not_offered}
 
 
 def _disclose_and_commit(conn, built: dict, reranked, source: str, user_id: int | None, watch: Stopwatch) -> None:

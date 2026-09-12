@@ -644,7 +644,9 @@ def explain_cmd(query: str, persona: str | None, generate: bool):
     """Full retrieval trace: router -> per-method -> RRF -> rerank -> verdict."""
     from raglab import rerank, retrieval, router
 
-    decision = router.route(query)
+    from raglab import planner
+    with db.connect() as _conn:
+        decision = router.route(query, reading=planner.read_route(_conn, query))
     click.echo(f"\nQUERY: {query}")
     click.echo("\n[1] ROUTER")
     click.echo(f"    scope: {decision.scope}")

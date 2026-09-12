@@ -250,6 +250,29 @@ FREE_TEXT_PARAMS = tuple(sorted({
     param for spec in snowlane.NAMED_QUERIES.values() for param in spec.get("params", {})
 } - set(SLOT_NAMES) - {"last_name", "first_name", "name"}))
 
+READER_SYSTEM = """You read one question asked of a governed retrieval platform for a health insurer (GEHA). You never answer it, never search, and never see records. Report only what the question SAYS, as fields the platform enforces:
+- `scope`: "other_carrier" ONLY when the question asks about a specific other insurer's plan by name (Blue Cross / FEP, Aetna, Kaiser, MHBP, NALC, APWU, Cigna, Humana, Anthem …) — put that name in `boundary_value`; without a name it is not a boundary. The words "carrier", "carriers", "examiners", "OPM", claims bulletins, appeals, and notes are all GEHA's own business and are in scope. "medicare_program" when it asks for Medicare's OWN program facts (Medicare premiums, Part B or Part D amounts, IRMAA) rather than how a GEHA plan coordinates with Medicare. Otherwise "in_scope" with `boundary_value` null.
+- `program`: "FEHB" only when the question literally says FEHB or federal employees; "PSHB" only when it says PSHB or postal. Otherwise "none". Never infer the program from an option or a product name: High, Standard, HDHP and "GEHA Benefit Plan" exist under both programs.
+- `options`: the plan options the question names, as keys: "hdhp" (HDHP, high-deductible), "elevate", "elevate_plus", "high" (High Option, "hi opt", the GEHA Benefit Plan), "standard" (Standard Option, "std"). [] when none.
+- `years`: the plan years written in the question (e.g. 2026); [] when none. Never infer a year.
+- `change`: true when the question asks how something changed or compares years (changed, compare, difference, increase, vs).
+- `as_of`: an explicit in-effect date written in the question, as YYYY-MM-DD ("as of March 1, 2025", "in effect on 2026-01-06"); otherwise null.
+Identifiers appear as tokens like [MEMBER_ID-12]; they carry no meaning for these fields. Return only the JSON object."""
+
+ROUTE_SCHEMA = {  # the reading of the route (2026-09-12): every value from a registry-declared set
+    "type": "object", "additionalProperties": False,
+    "required": ["scope", "boundary_value", "program", "options", "years", "change", "as_of"],
+    "properties": {
+        "scope": {"type": "string", "enum": ["in_scope", "other_carrier", "medicare_program"]},
+        "boundary_value": {"type": ["string", "null"]},
+        "program": {"type": "string", "enum": ["FEHB", "PSHB", "none"]},  # constrained decoding: an enum cannot be nullable
+        "options": {"type": "array", "items": {"type": "string", "enum": ["hdhp", "elevate", "elevate_plus", "high", "standard"]}},
+        "years": {"type": "array", "items": {"type": "integer"}},
+        "change": {"type": "boolean"},
+        "as_of": {"type": ["string", "null"]},
+    },
+}
+
 PLAN_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -395,6 +418,75 @@ def _store_plan(conn, key, translated: str, plan: Plan, reason: str | None, late
         pass  # the store is an accelerator and a log, never a gate on answering
 
 
+READER_MENU_HASH = "reader-v1"  # the reader has no menu; this versions its prompt in the store key
+
+
+def _reading_from_dict(r: dict) -> router.Reading:
+    program = r.get("program")
+    return router.Reading(program=program if program in ("FEHB", "PSHB") else None, options=tuple(r.get("options") or ()),
+                          years=tuple(int(y) for y in (r.get("years") or ())), change=bool(r.get("change")),
+                          as_of=r.get("as_of") or None, scope=r.get("scope") or "in_scope",
+                          boundary_value=r.get("boundary_value") or None, origin="model")
+
+
+def _validate_reading(r: dict) -> None:
+    years = r.get("years") or []
+    if not all(isinstance(y, int) and 2000 <= y <= 2100 for y in years):
+        raise PlanError(f"reading names impossible years {years}")
+    if r.get("as_of") and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(r["as_of"])):
+        raise PlanError(f"reading as_of is not an ISO date: {r['as_of']!r}")
+
+
+def _call_reader(translated: str, client=None) -> dict:
+    import anthropic
+
+    client = client or anthropic.Anthropic(timeout=PLANNER_TIMEOUT_S, max_retries=1)
+    response = client.messages.create(
+        model=PLANNER_MODEL, max_tokens=200, system=READER_SYSTEM,
+        messages=[{"role": "user", "content": f"Question: {translated}"}],
+        output_config={"format": {"type": "json_schema", "schema": ROUTE_SCHEMA}},
+    )
+    text = next(b.text for b in response.content if b.type == "text")
+    return json.loads(text)
+
+
+def read_with_model(conn: psycopg.Connection, question: str, client=None) -> router.Reading:
+    """The reading of the route from the pinned model in its own constrained
+    call (2026-09-12, two calls: reading and planning are different judgments
+    with different gates). Stored reading first; the regex reader on any
+    failure, with the reason logged and never stored as the model's."""
+    translated = translated_for_planning(conn, question)
+    key = (_hash(translated), READER_MENU_HASH + ":" + _hash(READER_SYSTEM)[:12], PLANNER_MODEL)
+    if PLAN_CACHE:
+        row = _stored_plan(conn, key)
+        if row is not None:
+            return _reading_from_dict(row["plan"])
+    t0 = time.perf_counter()
+    try:
+        raw = _call_reader(translated, client)
+        _validate_reading(raw)
+        reading = _reading_from_dict(raw)
+        stored = Plan(shape="reading", legs=[], origin="model", model=PLANNER_MODEL)
+        stored.to_dict = lambda: raw  # the store holds the raw reading
+        reason = None
+    except Exception as exc:  # noqa: BLE001 — every model failure degrades to the regex reader, and says why
+        reason = f"{type(exc).__name__}: {str(exc)[:200]}"
+        reading = router.read(question)
+        stored = Plan(shape="reading", legs=[], origin="rules", model=PLANNER_MODEL)
+        stored.to_dict = lambda: {"origin": "rules"}
+    if PLAN_CACHE:
+        _store_plan(conn, key, translated, stored, reason, (time.perf_counter() - t0) * 1000)
+    return reading
+
+
+def read_route(conn: psycopg.Connection, question: str, client=None) -> router.Reading:
+    """The reading the platform routes on: the model's (stored first) by
+    configuration, else the regex reader's."""
+    if PLANNER == "model":
+        return read_with_model(conn, question, client)
+    return router.read(question)
+
+
 def plan_for(conn: psycopg.Connection, question: str, client=None, module: str | None = None) -> Plan:
     """The plan the platform would execute for a question, by configuration:
     the model (stored plan first) over the module's menu, or the rules fast path."""
@@ -435,9 +527,14 @@ def compose(
     if caller.persona is not None and caller.persona not in PERSONAS:
         raise ValueError(f"unknown persona {caller.persona!r}; expected one of {PERSONAS}")
     watch = Stopwatch()
+    available = menu(conn, module)
+    caller_plan = plan is not None
+    with watch.stage("read"):
+        # The model READS the route (stored reading first); the code enforces it.
+        reading = read_route(conn, question)
     with watch.stage("resolve"):
         from raglab.pipeline import _hierarchies, coverage_note
-        route = router.route(question, hierarchies=_hierarchies(conn))
+        route = router.route(question, hierarchies=_hierarchies(conn), reading=reading)
         ctx = retrieval.resolve_context(conn, member_id, question) if route.scope == "in_scope" \
             else retrieval.Context(query=question)
         if member_id:
@@ -450,12 +547,13 @@ def compose(
     _t(trace, "question", text=question, persona=caller.persona or "admin", warehouse_role=caller.warehouse_role,
        member_id=member_id, module=module)
     _t(trace, "route", scope=route.scope, years=list(route.years), plan_codes=list(route.plan_codes), as_of=route.as_of,
-       reasons=list(route.reasons))
+       reasons=list(route.reasons), reading={"origin": reading.origin, "program": reading.program, "options": list(reading.options),
+                                             "years": list(reading.years), "change": reading.change, "as_of": reading.as_of,
+                                             "scope": reading.scope})
     _t(trace, "identifiers", member_key=ctx.member_key, record=dict(ctx.record), as_of=ctx.as_of,
        unresolved=list(ctx.unresolved))
-    available = menu(conn, module)
     _t(trace, "menu", module=module, sources=list(available["sources"]), named_queries=list(available["named_queries"]))
-    if route.scope == "in_scope" and plan is None:
+    if route.scope == "in_scope" and not caller_plan:
         _t(trace, "translated_for_planner", text=translated_for_planning(conn, question) if PLANNER == "model" else None)
     plan = plan or (plan_for(conn, question, module=module) if route.scope == "in_scope" else plan_rules(question))
     with watch.stage("plan"):

@@ -43,7 +43,10 @@ def run_query(
         raise ValueError(f"unknown persona {persona!r}; expected one of {PERSONAS}")
 
     watch = Stopwatch()
-    decision = router.route(query, hierarchies=_hierarchies(conn))
+    from raglab import planner
+    with watch.stage("plan"):
+        reading = planner.read_route(conn, query)  # the model reads (stored plan first); the code enforces
+    decision = router.route(query, hierarchies=_hierarchies(conn), reading=reading)
     ctx = retrieval.resolve_context(conn, member_id, query) if decision.scope == "in_scope" \
         else retrieval.Context(query=query)
     probe = _probe(conn, query, persona, ctx, watch, decision=decision)

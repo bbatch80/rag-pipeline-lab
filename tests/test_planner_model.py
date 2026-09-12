@@ -11,6 +11,7 @@ from raglab import planner
 Q = "Was claim CLM-1363781509 for member M344317862 denied, and did the member appeal it?"
 MENU = {"sources": ("brochure", "appeal", "call_note"), "named_queries": ("claim_adjudication", "member_calls"),
         "source_docs": {"brochure": "Plan brochures (public)", "appeal": "Appeal case files (appeals)", "call_note": "Call notes (member services)"}}
+ROUTE = {"scope": "in_scope", "boundary_value": None, "program": "none", "options": [], "years": [], "change": False, "as_of": None}
 GOOD = {"shape": "compound", "legs": [
     {"name": "adjudication", "kind": "member_query", "text": None, "sources": [], "query_name": "claim_adjudication", "slots": ["claim_id"], "required": True},
     {"name": "appeal", "kind": "doc_probe", "text": "Did member [MEMBER_ID-1] appeal claim [CLAIM_ID-2]?", "sources": ["appeal"], "query_name": None, "slots": [], "required": True}]}
@@ -116,3 +117,31 @@ def test_rules_configuration_never_touches_the_model(monkeypatch):
     monkeypatch.setattr(planner, "menu", lambda conn: pytest.fail("menu must not be read on the rules path"))
     plan = planner.plan_for(None, Q, client=FakeClient(RuntimeError("no")))
     assert plan.origin == "rules" and plan.shape == "simple"
+
+
+def test_the_reader_call_is_stored_enforced_and_falls_back(translated, store):
+    """Two calls (2026-09-12): the reading is its own constrained call with
+    its own store key; the regex reader answers on failure and is never
+    stored as the model's."""
+    from raglab import router
+    q = "For FEHB High, does the member have to pick a PCP?"
+    reading = planner.read_with_model(None, q, client=FakeClient({**ROUTE, "program": "FEHB", "options": ["high"]}))
+    assert reading.origin == "model" and reading.program == "FEHB" and reading.options == ("high",)
+    assert router.route(q, reading=reading).plan_codes == ("71-006",)
+    again = planner.read_with_model(None, q, client=FakeClient(RuntimeError("must not be called")))
+    assert again == reading, "the stored reading is reused"
+    other = "Does FEHB Standard need a referral?"
+    fallback = planner.read_with_model(None, other, client=FakeClient(RuntimeError("down")))
+    assert fallback.origin == "rules"
+    retry = planner.read_with_model(None, other, client=FakeClient({**ROUTE, "program": "FEHB", "options": ["standard"]}))
+    assert retry.origin == "model", "a fallback is never reused as the model's reading"
+
+
+def test_an_impossible_reading_falls_back_to_the_regex_reader(translated, store):
+    reading = planner.read_with_model(None, Q, client=FakeClient({**ROUTE, "years": [1999]}))
+    assert reading.origin == "rules"
+
+
+def test_reading_and_planning_are_separate_calls(translated, store):
+    plan = planner.plan_with_model(None, Q, MENU, client=FakeClient(GOOD))
+    assert plan.origin == "model" and "route" not in plan.to_dict()

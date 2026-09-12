@@ -94,45 +94,84 @@ DEFAULT_HIERARCHIES = {"brochure": ("program", "plan_code", "year"), "clinical_p
 _FEHB = re.compile(r"\bfehb\b|\bfederal employees health benefits\b", re.IGNORECASE)
 
 
-def route(query: str, hierarchies: dict[str, tuple[str, ...]] | None = None) -> Route:
-    reasons = []
+@dataclass(frozen=True)
+class Reading:
+    """What the question SAYS — the reading half of routing. Produced by the
+    regex reader (`read`) or by the planner's model call (the model reads;
+    the code enforces). Every value is a member of a registry-declared set."""
+    program: str | None = None        # FEHB | PSHB | None
+    options: tuple[str, ...] = ()     # plan option keys named: hdhp, elevate, elevate_plus, high, standard
+    years: tuple[int, ...] = ()       # years explicitly mentioned
+    change: bool = False              # change / comparison language
+    as_of: str | None = None          # an explicit in-effect date, ISO
+    scope: str = "in_scope"           # in_scope | other_carrier | medicare_program
+    boundary_value: str | None = None  # the carrier named, when scope is other_carrier
+    origin: str = "rules"             # rules | model
 
+
+BOUNDARY_TEXT = {
+    "other_carrier": "This corpus covers GEHA plans only; '{value}' is a different carrier.",
+    "medicare_program": ("Medicare program facts (premiums, costs) are outside this corpus; it covers "
+                         "GEHA plan benefits, including how they coordinate with Medicare."),
+    "out_of_year": "The corpus covers plan years {first}-{last}; {value} is outside it.",
+}
+
+
+def read(query: str) -> Reading:
+    """The regex reader: the fallback when the planner model did not read the
+    question, and the eval's comparison."""
+    lower = query.lower()
     for carrier in _OTHER_CARRIERS:
-        if carrier in query.lower():
-            return Route(
-                scope="out_of_domain",
-                boundary_response=(
-                    f"This corpus covers GEHA plans only; '{carrier}' is a "
-                    "different carrier."
-                ),
-                reasons=(f"other-carrier term: {carrier!r}",),
-            )
+        if carrier in lower:
+            return Reading(scope="other_carrier", boundary_value=carrier)
     if _MEDICARE_OWN.search(query):
-        return Route(
-            scope="out_of_domain",
-            boundary_response=(
-                "Medicare program facts (premiums, costs) are outside this "
-                "corpus; it covers GEHA plan benefits, including how they "
-                "coordinate with Medicare."
-            ),
-            reasons=("medicare-own-program pattern",),
-        )
+        return Reading(scope="medicare_program")
+    years = tuple(sorted({int(y) for y in re.findall(r"\b(20\d{2})\b", query)}))
+    options = tuple(dict.fromkeys(key for pattern, key in _PLAN_PATTERNS if pattern.search(query)))
+    program = "PSHB" if _PSHB.search(query) else ("FEHB" if _FEHB.search(query) else None)
+    return Reading(program=program, options=options, years=years, change=bool(_CHANGE_LANGUAGE.search(query)),
+                   as_of=as_of_date(query), origin="rules")
 
-    mentioned_years = sorted(
-        {int(y) for y in re.findall(r"\b(20\d{2})\b", query)}
-    )
+
+def route(query: str, hierarchies: dict[str, tuple[str, ...]] | None = None,
+          reading: Reading | None = None) -> Route:
+    """The route for a question: enforce the data's declared shape on a
+    reading of the question (the planner's, else the regex reader's)."""
+    return enforce(reading or read(query), hierarchies)
+
+
+def enforce(reading: Reading, hierarchies: dict[str, tuple[str, ...]] | None = None) -> Route:
+    """The enforcing half: years default and change logic, plan codes,
+    coverage across the declared hierarchy, boundary responses. Deterministic;
+    never reads the question's words."""
+    reasons = [f"reading: {reading.origin}"]
+    if reading.scope == "other_carrier" and not (reading.boundary_value or "").strip():
+        # A boundary must name what it is bounding. A reader that says "other
+        # carrier" without naming one has guessed from a word ("carriers",
+        # "examiners"): measured 2026-09-12, 5 of 101 readings — every one an
+        # in-scope question. Enforcement: no name, no boundary.
+        reasons.append("other-carrier reading named no carrier -> treated as in scope")
+        reading = Reading(program=reading.program, options=reading.options, years=reading.years, change=reading.change,
+                          as_of=reading.as_of, scope="in_scope", origin=reading.origin)
+    if reading.scope == "other_carrier":
+        return Route(scope="out_of_domain",
+                     boundary_response=BOUNDARY_TEXT["other_carrier"].format(value=reading.boundary_value),
+                     reasons=(f"reading: {reading.origin}", f"other-carrier term: {reading.boundary_value!r}"))
+    if reading.scope == "medicare_program":
+        return Route(scope="out_of_domain", boundary_response=BOUNDARY_TEXT["medicare_program"],
+                     reasons=(f"reading: {reading.origin}", "medicare-own-program"))
+
+    mentioned_years = sorted(reading.years)
     out_of_range = [y for y in mentioned_years if y not in CORPUS_YEARS]
     if out_of_range:
         return Route(
             scope="out_of_year",
-            boundary_response=(
-                f"The corpus covers plan years {CORPUS_YEARS.start}-"
-                f"{CORPUS_YEARS.stop - 1}; {out_of_range[0]} is outside it."
-            ),
-            reasons=(f"year out of range: {out_of_range[0]}",),
+            boundary_response=BOUNDARY_TEXT["out_of_year"].format(
+                first=CORPUS_YEARS.start, last=CORPUS_YEARS.stop - 1, value=out_of_range[0]),
+            reasons=(f"reading: {reading.origin}", f"year out of range: {out_of_range[0]}"),
         )
 
-    change = bool(_CHANGE_LANGUAGE.search(query))
+    change = reading.change
     if mentioned_years:
         years = tuple(mentioned_years)
         reasons.append(f"explicit year(s): {years}")
@@ -147,22 +186,22 @@ def route(query: str, hierarchies: dict[str, tuple[str, ...]] | None = None) -> 
         years = (CURRENT_YEAR,)
         reasons.append("undated -> recency default (current year)")
 
-    program_codes = _PSHB_CODES if _PSHB.search(query) else _FEHB_CODES
-    if _PSHB.search(query):
+    program = reading.program
+    program_codes = _PSHB_CODES if program == "PSHB" else _FEHB_CODES
+    if program == "PSHB":
         reasons.append("PSHB program cue")
     plans = []
-    for pattern, key in _PLAN_PATTERNS:
-        if pattern.search(query) and program_codes[key] not in plans:
+    for key in reading.options:
+        if key in program_codes and program_codes[key] not in plans:
             # 'elevate plus' also matches the bare 'elevate' pattern; both
             # map to the same brochure, so dedupe handles it.
             plans.append(program_codes[key])
             reasons.append(f"plan cue: {key} -> {program_codes[key]}")
 
-    as_of = as_of_date(query)
+    as_of = reading.as_of
     if as_of:
         reasons.append(f"as of {as_of}")
     cover_field, cover_keys, cover_asked, cover_level = None, (), None, None
-    program = "PSHB" if _PSHB.search(query) else ("FEHB" if _FEHB.search(query) else None)
     hierarchy = (hierarchies or DEFAULT_HIERARCHIES).get("brochure", ())
     if program and not plans and "plan_code" in hierarchy:
         # The coverage rule: a level named (program), the level beneath it not
@@ -178,7 +217,7 @@ def route(query: str, hierarchies: dict[str, tuple[str, ...]] | None = None) -> 
         # Never a guess at FEHB. A member's enrollment, when bound, narrows
         # this to their plan (retrieval.bind_enrollment_plan).
         offered = _plan_years()
-        option_keys = [key for pattern, key in _PLAN_PATTERNS if pattern.search(query)]
+        option_keys = list(reading.options)
         keys = tuple(dict.fromkeys(
             codes[key] for key in option_keys for codes in (_FEHB_CODES, _PSHB_CODES)
             if any(y in offered.get(codes[key], set()) for y in years)))

@@ -62,3 +62,35 @@ def test_route_is_deterministic():
         change=True,
         cover_field="plan_code", cover_keys=("71-014", "71-026"), cover_asked="HDHP", cover_level="option",
     )
+
+
+def test_route_is_enforce_over_read():
+    """The router is two halves: a reading of the question (regex here, the
+    planner model in the pipeline) and deterministic enforcement."""
+    from raglab.router import Reading, enforce, read
+    for query, *_ in IN_SCOPE_CASES if "IN_SCOPE_CASES" in globals() else []:
+        assert route(query) == enforce(read(query))
+    reading = read("For FEHB High, does the member have to pick a PCP?")
+    assert reading.program == "FEHB" and reading.options == (), "the regex reader misses bare 'High' (factual-05)"
+    model = Reading(program="FEHB", options=("high",), origin="model")
+    r = enforce(model)
+    assert r.plan_codes == ("71-006",) and r.cover_field is None and "reading: model" in r.reasons
+    r = enforce(Reading(scope="other_carrier", boundary_value="aetna", origin="model"))
+    assert r.scope == "out_of_domain" and "aetna" in r.boundary_response
+    r = enforce(Reading(scope="medicare_program", origin="model"))
+    assert r.scope == "out_of_domain" and "Medicare" in r.boundary_response
+    r = enforce(Reading(years=(2019,), origin="model"))
+    assert r.scope == "out_of_year" and "2019" in r.boundary_response
+    r = enforce(Reading(options=("hdhp",), origin="model"))
+    assert set(r.cover_keys) == {"71-014", "71-026"}, "option without a program still covers both programs"
+
+
+def test_a_boundary_without_a_name_is_not_a_boundary():
+    """The reader said 'other carrier' about a claims bulletin because it
+    saw the word 'examiners' (run 506, 5 false refusals). No name, no boundary."""
+    from raglab.router import Reading, enforce
+    r = enforce(Reading(scope="other_carrier", boundary_value=None, years=(2026,), origin="model"))
+    assert r.scope == "in_scope" and r.years == (2026,)
+    assert any("named no carrier" in reason for reason in r.reasons)
+    r = enforce(Reading(scope="other_carrier", boundary_value="Aetna", origin="model"))
+    assert r.scope == "out_of_domain" and "Aetna" in r.boundary_response

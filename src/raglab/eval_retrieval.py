@@ -169,6 +169,7 @@ def run(
         # planner's decision is read from the stored plan (the model ran once
         # per question) or from the rules path by configuration. Reported now;
         # routing accuracy against expected legs gates from P3-PR4.
+        reading = planner.read_route(conn, item["question"])  # the model reads the route (stored first); the code enforces
         if category not in ("unanswerable",):
             expected_shape = item.get("expected_shape") or ("compound" if category == "compound" else "simple")
             plan = planner.plan_for(conn, item["question"], module=item.get("module"))
@@ -191,7 +192,7 @@ def run(
         if category == "version_negative":
             # A default (undated) question about a policy must not surface
             # its superseded version; a dated one must not surface the other.
-            decision = router.route(item["question"], hierarchies=registry.hierarchies())
+            decision = router.route(item["question"], hierarchies=registry.hierarchies(), reading=reading)
             ctx = retrieval.resolve_context(conn, None, item["question"])
             decision = retrieval.expand_versions(conn, decision, ctx, item["question"])
             decision = retrieval.bind_enrollment_plan(decision, ctx)
@@ -266,7 +267,7 @@ def run(
                            {"expected": item["allow_titles"]}))
             continue
 
-        decision = router.route(item["question"], hierarchies=registry.hierarchies())
+        decision = router.route(item["question"], hierarchies=registry.hierarchies(), reading=reading)
         # Member context, like the pipeline: the item's member_id field (the
         # member a rep would have open) or an identifier in the question.
         ctx = retrieval.resolve_context(conn, item.get("member_id"), item["question"])

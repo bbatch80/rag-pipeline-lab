@@ -16,10 +16,12 @@ import secrets
 from typing import Callable
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from pydantic import BaseModel
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 from starlette.middleware.sessions import SessionMiddleware
 
-from raglab import db, identity
+from raglab import context_services, db, identity, planner
 
 SESSION_SECRET_ENV = "RAGLAB_SESSION_SECRET"
 SESSION_KEY = "username"
@@ -35,9 +37,9 @@ SURFACE_MODULES: dict[tuple[str, str], str | None] = {
     ("console", "admin"): None,  # the Console composes nothing
 }
 
-# Request fields that would name an identity or a menu. A request carrying
-# one is rejected, not ignored: the browser never sends identity.
-IDENTITY_FIELDS = frozenset({"persona", "role", "warehouse_role", "user", "user_id", "username", "group", "module"})
+# Request fields that would name an identity or a menu — persona, role,
+# warehouse_role, user_id, module. No body model declares them and every
+# body model forbids extra fields, so a request carrying one is a 400.
 
 
 def module_for(surface: str, group: str) -> str | None:
@@ -53,10 +55,35 @@ class Login(BaseModel):
     password: str
 
 
-def create_app(connect: Callable = db.connect) -> FastAPI:
+class _Strict(BaseModel):
+    """Request bodies reject unknown fields, so a body naming an identity
+    or a menu (`persona`, `role`, `module`, ...) is a 400, never ignored."""
+    model_config = ConfigDict(extra="forbid")
+
+
+class Query(_Strict):
+    question: str
+    surface: str
+    member_id: str | None = None
+
+
+class Search(_Strict):
+    query: str
+    member_id: str | None = None
+
+
+class MemberData(_Strict):
+    query_name: str
+    surface: str
+    params: dict[str, str | int | None] = {}
+
+
+def create_app(connect: Callable = db.connect, warehouse: context_services.Warehouse | None = None) -> FastAPI:
     """`connect` opens a database connection context; tests hand in the
-    rolled-back fixture connection so nothing is committed."""
+    rolled-back fixture connection so nothing is committed. `warehouse`
+    holds the process's Snowflake sessions (one per role)."""
     app = FastAPI(title="raglab", docs_url=None, redoc_url=None)
+    warehouse = warehouse or context_services.Warehouse()
     app.add_middleware(
         SessionMiddleware,
         secret_key=os.environ.get(SESSION_SECRET_ENV) or secrets.token_hex(32),  # unset: sessions end with the process
@@ -65,6 +92,12 @@ def create_app(connect: Callable = db.connect) -> FastAPI:
         https_only=False,
     )
     app.state.connect = connect
+
+    @app.exception_handler(RequestValidationError)
+    def _bad_request(_request: Request, exc: RequestValidationError) -> JSONResponse:
+        """A malformed body — including one carrying an identity field — is a
+        400 (decision 1), with the offending fields named."""
+        return JSONResponse(status_code=400, content={"detail": exc.errors()})
 
     def current_identity(request: Request) -> identity.Identity:
         """The session's identity, resolved from the identity tables on every
@@ -114,6 +147,46 @@ def create_app(connect: Callable = db.connect) -> FastAPI:
     @app.get("/me")
     def me(ident: identity.Identity = Depends(current_identity)) -> dict:
         return _me(ident)
+
+    def _surface(ident: identity.Identity, surface: str) -> str | None:
+        """The grant check for a surface named in a request body, and the
+        module it composes under for this identity."""
+        if surface not in SURFACES:
+            raise HTTPException(status_code=400, detail=f"unknown surface {surface!r}; expected one of {SURFACES}")
+        require_surface(surface)(ident)
+        module = module_for(surface, ident.group)
+        if module is None:
+            raise HTTPException(status_code=400, detail=f"surface {surface!r} composes nothing")
+        return module
+
+    # ---- the three context services (mirror the MCP tools one for one) ----
+    @app.post("/query")
+    def query(body: Query, request: Request, ident: identity.Identity = Depends(current_identity)) -> dict:
+        """One question from a surface → the composed payload (spec 1.1.0).
+        The platform plans the legs within the surface's module and runs
+        every leg as the session identity."""
+        module = _surface(ident, body.surface)
+        with request.app.state.connect() as conn:
+            return context_services.compose(conn, ident, body.question, member_id=body.member_id, module=module,
+                                            source="web", warehouse=warehouse)
+
+    @app.post("/search")
+    def search(body: Search, request: Request, ident: identity.Identity = Depends(current_identity)) -> dict:
+        """A single document probe → payload. Any logged-in identity: the
+        engine trims what it may see."""
+        with request.app.state.connect() as conn:
+            return context_services.search(conn, ident, body.query, member_id=body.member_id, source="web")
+
+    @app.post("/member-data")
+    def member_data(body: MemberData, ident: identity.Identity = Depends(current_identity)) -> dict:
+        """One named catalog query from a surface's menu, as the session's
+        warehouse role; rows plus the columns the role's policies masked."""
+        module = _surface(ident, body.surface)
+        menu = planner.MODULES[module]["named_queries"]
+        if body.query_name not in menu:
+            raise HTTPException(status_code=400, detail={"error": f"{body.query_name!r} is not on the {body.surface!r} menu",
+                                                         "menu": list(menu)})
+        return context_services.member_data(ident, body.query_name, body.params, warehouse=warehouse)
 
     @app.get("/surfaces/{surface}")
     def surface_check(surface: str, request: Request) -> dict:

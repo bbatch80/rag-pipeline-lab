@@ -19,7 +19,7 @@ import os
 
 from mcp.server.mcpserver import MCPServer
 
-from raglab import db, snowlane
+from raglab import context_services, db
 
 # identity -> (Lane 1 Postgres persona, Lane 2 Snowflake role).
 # actuary holds no internal document tier (baseline documents only) but the
@@ -43,8 +43,6 @@ if USER is None and PERSONA not in IDENTITIES:
 
 mcp = MCPServer("raglab")
 
-_sf_conn = None
-
 
 def _identity(conn):
     """The session identity: RAGLAB_USER resolved through the identity tables
@@ -57,25 +55,7 @@ def _identity(conn):
     return identity_mod.Identity(0, PERSONA, PERSONA, PERSONA, lane1, role)
 
 
-def _snowflake(role: str):
-    global _sf_conn
-    if _sf_conn is None:
-        _sf_conn = snowlane.connect(role=role)
-    return _sf_conn
-
-
-class _SharedSession:
-    """The server keeps one warehouse session; a composed plan closes the
-    session it is handed after each leg, so hand it one that ignores close."""
-
-    def __init__(self, conn):
-        self._conn = conn
-
-    def cursor(self):
-        return self._conn.cursor()
-
-    def close(self):
-        pass
+_warehouse = context_services.Warehouse()
 
 
 @mcp.tool()
@@ -104,13 +84,9 @@ def compose_context(question: str, member_id: str | None = None, module: str | N
     `plan` shows what was looked at. Answer ONLY from chunk text and
     warehouse rows; cite source title + pages for every document fact;
     report `masked_columns` as 'not visible to your role'."""
-    from raglab import planner
-
     with db.connect() as conn:
-        ident = _identity(conn)
-        caller = planner.Caller(persona=ident.persona, warehouse_role=ident.warehouse_role, user_id=ident.user_id)
-        return planner.compose(conn, question, caller, member_id=member_id, source="mcp", module=module,
-                               sf_connect=lambda role: _SharedSession(_snowflake(role)))
+        return context_services.compose(conn, _identity(conn), question, member_id=member_id, module=module,
+                                        source="mcp", warehouse=_warehouse)
 
 
 @mcp.tool()
@@ -129,12 +105,8 @@ def search_documents(query: str, member_id: str | None = None) -> dict:
     HONOR THE STATUS: on insufficient_evidence say you cannot answer
     from the corpus; on out_of_scope relay boundary_response verbatim. Answer
     ONLY from chunk text and cite source title + pages for every fact."""
-    from raglab.pipeline import run_query
-
     with db.connect() as conn:
-        ident = _identity(conn)
-        return run_query(conn, query, persona=ident.persona, source="mcp", member_id=member_id,
-                         user_id=ident.user_id)
+        return context_services.search(conn, _identity(conn), query, member_id=member_id, source="mcp")
 
 
 @mcp.tool()
@@ -162,20 +134,11 @@ def query_member_data(
     for your role — report them as 'not visible to your role'. A NULL in
     any OTHER column is genuinely absent source data, not masking."""
     with db.connect() as conn:
-        role = _identity(conn).warehouse_role
-    if role is None:
-        return {
-            "status": "not_authorized",
-            "detail": (
-                "This session identity has no member-data entitlement. "
-                "Member claims require a claims, care-management, or "
-                "actuarial role."
-            ),
-        }
-    return snowlane.run_named_query(
-        _snowflake(role), query_name,
-        {"last_name": last_name, "first_name": first_name,
-         "description_like": description_like, "limit": limit},
+        ident = _identity(conn)
+    return context_services.member_data(
+        ident, query_name,
+        {"last_name": last_name, "first_name": first_name, "description_like": description_like, "limit": limit},
+        warehouse=_warehouse,
     )
 
 

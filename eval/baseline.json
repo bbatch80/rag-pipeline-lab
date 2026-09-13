@@ -1,0 +1,170 @@
+{
+  "run_id": 549,
+  "git_sha": "39c57f4",
+  "corpus_hash": "41a4fd0f60ed63d14e46a4356c5c8fbf6e7a1732f703c43853a015d6ed262b86",
+  "written_at": "2026-09-13T19:54:52+00:00",
+  "overall": {
+    "item_pass": 0.599,
+    "hit@5": 0.8173913043478261,
+    "precision@5": 0.391304347826087,
+    "source_coverage": 0.7734782608695653
+  },
+  "by_work": {
+    "0": {
+      "name": "Guardrails",
+      "rate": 0.76,
+      "n": 25
+    },
+    "1": {
+      "name": "Factual lookup",
+      "rate": 0.939,
+      "n": 33
+    },
+    "2": {
+      "name": "Explanation with exceptions",
+      "rate": 0.6,
+      "n": 15
+    },
+    "3": {
+      "name": "Summarization of a bounded set",
+      "rate": 0.4,
+      "n": 10
+    },
+    "4": {
+      "name": "Comparison",
+      "rate": 0.467,
+      "n": 15
+    },
+    "5": {
+      "name": "Linked discoveries",
+      "rate": 0.333,
+      "n": 15
+    },
+    "6": {
+      "name": "Comprehensive identification",
+      "rate": 0.4,
+      "n": 5
+    },
+    "7": {
+      "name": "Quantitative",
+      "rate": 0.0,
+      "n": 3
+    },
+    "8": {
+      "name": "Temporal",
+      "rate": 0.643,
+      "n": 14
+    },
+    "9": {
+      "name": "Diagnosis evidence",
+      "rate": 0.167,
+      "n": 12
+    }
+  },
+  "by_group": {
+    "adversarial": {
+      "rate": 1.0,
+      "n": 3
+    },
+    "appeal": {
+      "rate": 0.357,
+      "n": 14
+    },
+    "call_note": {
+      "rate": 0.364,
+      "n": 11
+    },
+    "carrier_letter": {
+      "rate": 0.714,
+      "n": 7
+    },
+    "clinical_note": {
+      "rate": 0.5,
+      "n": 2
+    },
+    "clinical_policy": {
+      "rate": 1.0,
+      "n": 12
+    },
+    "compound": {
+      "rate": 0.222,
+      "n": 18
+    },
+    "cross_plan": {
+      "rate": 0.0,
+      "n": 3
+    },
+    "factual": {
+      "rate": 0.75,
+      "n": 12
+    },
+    "internal_factual": {
+      "rate": 0.818,
+      "n": 11
+    },
+    "internal_table": {
+      "rate": 0.75,
+      "n": 4
+    },
+    "named_query": {
+      "rate": 0.4,
+      "n": 10
+    },
+    "persona_negative": {
+      "rate": 0.375,
+      "n": 8
+    },
+    "scope_negative": {
+      "rate": 1.0,
+      "n": 5
+    },
+    "table": {
+      "rate": 1.0,
+      "n": 4
+    },
+    "unanswerable": {
+      "rate": 0.833,
+      "n": 6
+    },
+    "version_negative": {
+      "rate": 0.75,
+      "n": 8
+    },
+    "yoy": {
+      "rate": 0.667,
+      "n": 9
+    }
+  },
+  "guardrails_passing": [
+    "adversarial-01",
+    "adversarial-02",
+    "adversarial-03",
+    "persona_negative-01",
+    "persona_negative-03",
+    "persona_negative-08",
+    "scope_negative-01",
+    "scope_negative-02",
+    "scope_negative-03",
+    "scope_negative-04",
+    "scope_negative-05",
+    "unanswerable-01",
+    "unanswerable-02",
+    "unanswerable-04",
+    "unanswerable-05",
+    "unanswerable-06",
+    "version_negative-01",
+    "version_negative-02",
+    "version_negative-03",
+    "version_negative-05",
+    "version_negative-06",
+    "version_negative-07"
+  ],
+  "health": {
+    "tie_rate": 0.317,
+    "median_margin": 0.0396,
+    "duplicate_share": 0.12,
+    "index_seat_share": 0.01,
+    "needless_split_rate": 0.289,
+    "n_payloads": 146
+  }
+}

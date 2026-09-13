@@ -1,0 +1,17 @@
+{# One named-query result: masked columns labeled, masked values shown as masked, never as absent. #}
+<article class="rows {{ extra_class or '' }}">
+  <header><strong>{{ title or result.query_name }}</strong>
+    {% if result.status != "ok" %}<span class="chip chip-muted">{{ result.status }}{% if result.detail %}: {{ result.detail }}{% endif %}</span>{% endif %}
+    {% if result.masked_columns %}<span class="chip chip-masked" title="policy-masked for your role">masked: {{ result.masked_columns | join(", ") }}</span>{% endif %}
+    {% if result.row_count is defined %}<small>{{ result.row_count }} row{{ "" if result.row_count == 1 else "s" }}</small>{% endif %}
+    {% if result.meaning %}<small>{{ result.meaning }}</small>{% endif %}
+  </header>
+  {% if result.rows %}
+  <div class="scroll"><table>
+    <thead><tr>{% for col in result.columns %}<th {% if col in result.masked_columns %}class="masked"{% endif %}>{{ col }}</th>{% endfor %}</tr></thead>
+    <tbody>{% for row in result.rows %}<tr>{% for v in row %}<td {% if result.columns[loop.index0] in result.masked_columns %}class="masked"{% endif %}>{% if v is none %}<span class="null">{{ "masked" if result.columns[loop.index0] in result.masked_columns else "—" }}</span>{% else %}{{ v }}{% endif %}</td>{% endfor %}</tr>{% endfor %}</tbody>
+  </table></div>
+  {% elif result.status == "ok" %}<p class="note">No rows.</p>{% endif %}
+  {% if result.known_queries %}<p class="note">Known queries: {{ result.known_queries | join(", ") }}</p>{% endif %}
+  {% if label %}<p class="note">{{ label }}</p>{% endif %}
+</article>

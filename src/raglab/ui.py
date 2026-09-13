@@ -12,11 +12,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from raglab import identifiers, identity
+from raglab import console, identifiers, identity, planner, snowlane
 
 TEMPLATES = Path(__file__).parent / "templates"
 STATIC = Path(__file__).parent / "static"
@@ -63,6 +63,23 @@ def render_workspace(*, header: dict | None, error: str | None = None, ask_url: 
 
 
 EVIDENCE_LABEL = "Evidence, never a determination: what the platform found for this case, for a person to weigh."
+
+
+def render_rows(result: dict, *, title: str | None = None, label: str | None = None) -> str:
+    """One named-query result as a table — pure."""
+    return env.get_template("partials/rows.html").render(result=result, title=title, label=label, extra_class="")
+
+
+PARAM_HINTS = {"description_like": "ILIKE pattern, e.g. %asthma%", "plan_code": "e.g. 71-006", "npi": "10 digits",
+               "speciality": "e.g. Cardiology (optional)", "zip_prefix": "first three digits (optional)", "limit": "rows, default 20",
+               "member_id": "e.g. M767394984", "last_name": "", "first_name": "", "case_id": "e.g. APL-…", "claim_id": "e.g. CLM-…",
+               "name": "organization or provider name"}
+
+
+def query_params(query_name: str) -> list[tuple[str, str]]:
+    """The declared parameters of a catalog query with a typing hint each."""
+    spec = snowlane.NAMED_QUERIES[query_name]
+    return [(name, PARAM_HINTS.get(name, "")) for name in spec.get("params", {})]
 
 
 def _page(name: str, request: Request, me: dict | None, **ctx) -> HTMLResponse:
@@ -176,6 +193,63 @@ def mount(app: FastAPI) -> None:
                       ident: identity.Identity = Depends(require_surface("appeals_workbench"))):
         payload = app.state.compose_for(ident, question.strip(), "appeals_workbench", member_id or None)
         return HTMLResponse(render_payload(payload, console_links="console" in ident.surfaces))
+
+    # ---- Analyst View: the module's named queries, no free text ----
+    @app.get("/analyst_view", response_class=HTMLResponse)
+    def analyst_page(request: Request, ident: identity.Identity = Depends(require_surface("analyst_view"))):
+        return _page("analyst_view.html", request, _me(ident), current="analyst_view",
+                     menu=planner.MODULES["analyst_view"]["named_queries"])
+
+    @app.get("/ui/analyst_view/params", response_class=HTMLResponse)
+    def analyst_params(query_name: str, ident: identity.Identity = Depends(require_surface("analyst_view"))):
+        if query_name not in planner.MODULES["analyst_view"]["named_queries"]:
+            raise HTTPException(status_code=400, detail=f"{query_name!r} is not on the analyst_view menu")
+        return HTMLResponse(env.get_template("partials/params.html").render(
+            doc=snowlane.NAMED_QUERIES[query_name]["doc"], params=query_params(query_name)))
+
+    @app.post("/ui/analyst_view/run", response_class=HTMLResponse)
+    async def analyst_run(request: Request, ident: identity.Identity = Depends(require_surface("analyst_view"))):
+        form = await request.form()
+        query_name = str(form.get("query_name", ""))
+        params = {k: (int(v) if k == "limit" and str(v).isdigit() else str(v).strip() or None)
+                  for k, v in form.items() if k != "query_name"}
+        result = app.state.member_data_for(ident, query_name, "analyst_view", params)
+        return HTMLResponse(render_rows(result))
+
+    # ---- Console: health, the disclosure log, the scorecard ----
+    @app.get("/console", response_class=HTMLResponse)
+    def console_page(request: Request, ident: identity.Identity = Depends(require_surface("console"))):
+        with app.state.connect() as conn:
+            status = console.status(conn)
+        return _page("console.html", request, _me(ident), current="console", status=status)
+
+    @app.get("/ui/console/audit", response_class=HTMLResponse)
+    def console_audit(username: str = "", persona: str = "", document: str = "", payload_id: str = "",
+                      ident: identity.Identity = Depends(require_surface("console"))):
+        if payload_id.strip():
+            return RedirectResponse(f"/console/payload/{payload_id.strip()}", status_code=303)
+        with app.state.connect() as conn:
+            audit = console.audit(conn, username=username.strip() or None, persona=persona.strip() or None,
+                                  document=document.strip() or None, limit=50)
+        return HTMLResponse(env.get_template("partials/audit.html").render(audit=audit))
+
+    @app.get("/console/payload/{payload_id}", response_class=HTMLResponse)
+    def console_payload(payload_id: str, request: Request, ident: identity.Identity = Depends(require_surface("console"))):
+        with app.state.connect() as conn:
+            rec = console.payload(conn, payload_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail=f"no payload {payload_id!r} in the disclosure log")
+        return _page("payload_page.html", request, _me(ident), current="console", rec=rec,
+                     rendered=render_payload(rec["payload"]))
+
+    @app.get("/console/dashboard")
+    def console_dashboard(ident: identity.Identity = Depends(require_surface("console"))):
+        """The evaluation dashboard as the last full run wrote it."""
+        from raglab.dashboard import OUT_PATH
+
+        if not OUT_PATH.exists():
+            return HTMLResponse("<p>No dashboard yet: run <code>raglab eval-retrieval</code> or <code>raglab dashboard</code>.</p>")
+        return FileResponse(OUT_PATH, media_type="text/html")
 
     @app.post("/ui/ask", response_class=HTMLResponse)
     def ask_fragment(question: str = Form(...), ident: identity.Identity = Depends(require_surface("ask"))):

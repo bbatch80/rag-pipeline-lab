@@ -281,3 +281,75 @@ def test_surfaces_are_granted_per_group(surfaces):
     assert analyst.get("/agent_assist").status_code == 403
     sam = _session(surfaces, "benefits.sam")
     assert sam.get("/agent_assist").status_code == 403 and sam.get("/ask").status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# PR3: Analyst View and the Console.
+
+class _AggregateCursor(_RecordCursor):
+    """Adds the analyst's aggregate to the record cursor."""
+
+    def execute(self, sql, params=None):
+        if "GROUP BY" in sql or "description_like" in sql:
+            self.description = [(c,) for c in ("DESCRIPTION", "MEMBERS", "CLAIM_LINES", "AVG_COST", "TOTAL_COST")]
+            self._rows = [("Asthma follow-up", 412, 1830, 96.4, 176412.0)] if params.get("description_like") else []
+            return self
+        return super().execute(sql, params)
+
+
+class _AggregateWarehouse(_RecordWarehouse):
+    def cursor(self):
+        return _AggregateCursor(self.role)
+
+
+@pytest.fixture
+def analyst_app(db, monkeypatch):
+    identity.seed(db, password=PASSWORD)
+    return webapp.create_app(connect=lambda: _Lease(_NoCommit(db)),
+                             warehouse=context_services.Warehouse(connect=lambda role: _AggregateWarehouse(role)))
+
+
+def test_analyst_view_offers_the_menu_and_runs_as_the_warehouse_role(analyst_app):
+    jo = _session(analyst_app, "actuary.jo")
+    page = jo.get("/analyst_view").text
+    for q in ("cost_by_condition", "providers_by_specialty", "provider_network_status"):
+        assert f'<option value="{q}">' in page
+    assert "member_claims_summary" not in page  # not on this screen's menu
+    params = jo.get("/ui/analyst_view/params", params={"query_name": "cost_by_condition"}).text
+    assert 'name="description_like"' in params and "Aggregate across members" in params
+    assert jo.get("/ui/analyst_view/params", params={"query_name": "member_claims_summary"}).status_code == 400
+    out = jo.post("/ui/analyst_view/run", data={"query_name": "cost_by_condition", "description_like": "%asthma%"}).text
+    assert "Asthma follow-up" in out and "176412.0" in out and "1 row" in out
+    assert "chip-masked" not in out  # nothing identifying in an aggregate: nothing masked
+    off_menu = jo.post("/ui/analyst_view/run", data={"query_name": "member_claims_summary", "member_id": FAKE_MEMBER})
+    assert off_menu.status_code == 400
+    assert _session(analyst_app, "rep.dana").get("/analyst_view").status_code == 403
+
+
+@pytest.mark.clean_corpus
+def test_console_health_audit_and_payload_page(surfaces, db, monkeypatch, tmp_path):
+    from raglab import dashboard, pipeline
+
+    monkeypatch.setitem(pipeline.DISCLOSURE_FAILURES, "count", 0)
+    rep = _session(surfaces, "rep.dana")
+    html = rep.post("/ui/ask", data={"question": "what do the secret facts say"}).text
+    db.execute("RESET ROLE")
+    pid = re.search(r"payload <code>([0-9a-f-]{36})</code>", html).group(1)
+    assert rep.get("/console").status_code == 403 and rep.get(f"/console/payload/{pid}").status_code == 403
+
+    admin = _session(surfaces, "admin")
+    page = admin.get("/console").text
+    assert "Platform Console" in page and "documents" in page and "gate baseline" in page and "/console/dashboard" in page
+    rows = admin.get("/ui/console/audit", params={"username": "rep.dana"}).text
+    assert "rep.dana" in rows and "member_services" in rows and pid[:8] in rows and "secret facts" in rows
+    assert "No disclosures match" in admin.get("/ui/console/audit", params={"username": "nobody"}).text
+    jump = admin.get("/ui/console/audit", params={"payload_id": pid}, follow_redirects=False)
+    assert jump.status_code == 303 and jump.headers["location"] == f"/console/payload/{pid}"
+    detail = admin.get(f"/console/payload/{pid}").text
+    assert f"QUERY_TAG = {pid}" in detail and "rep.dana" in detail and 'class="evidence"' in detail and "doc-employee" in detail
+    assert admin.get("/console/payload/00000000-0000-0000-0000-000000000000").status_code == 404
+    # the scorecard: the dashboard file as the last full run wrote it, or a pointer when none exists
+    monkeypatch.setattr(dashboard, "OUT_PATH", tmp_path / "none.html")
+    assert "No dashboard yet" in admin.get("/console/dashboard").text
+    (tmp_path / "none.html").write_text("<title>raglab — evaluation dashboard</title><p>scorecard</p>")
+    assert "scorecard" in admin.get("/console/dashboard").text

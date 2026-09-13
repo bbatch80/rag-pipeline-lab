@@ -624,6 +624,36 @@ curl -b c -X POST :8000/query -H 'content-type: application/json' \
      -d '{"question":"recent claims for this member","surface":"agent_assist","member_id":"M767394984"}'
 ```
 
+## Surfaces (Phase 5)
+
+Five server-rendered pages over the web doorway — Jinja and htmx from the
+same FastAPI process, Pico.css and one small stylesheet, no JS toolchain.
+After login the portal shows the tiles the user's group is granted. Every
+surface renders a payload and nothing else: no generated answer, no
+retrieval or entitlement logic in a template (each is rendered from a
+fixture payload with no database in the tests).
+
+| Surface | Who | What the page sends | What it renders |
+|---|---|---|---|
+| **Ask** | every role | one question | the payload, in the fixed order below |
+| **Agent Assist** | rep, care manager | a typed member ID, then questions | the member's enrollment row, then payloads composed under the job's module — `agent_assist` for the rep (call notes, benefits documents), `care_management` for the care manager (clinical notes, policies) — same screen, context per job |
+| **Appeals Workbench** | appeals analyst | a typed case ID, then questions | the case row; the case's member becomes the member context and the question box starts with the case id (visible, editable); "evidence, never a determination" |
+| **Analyst View** | actuary | a named query and its parameters | rows with masked columns labeled; nothing operational |
+| **Console** | admin | — | health, the disclosure log searchable by user / persona / document / payload id, one payload reproduced as delivered with its Snowflake `QUERY_TAG` pairing, the evaluation dashboard |
+
+Nothing is preloaded: a record-first surface holds nothing about anyone
+until a key is typed, validated by shape and check digit (the pipeline's
+rule), and found. **The render contract**, the same on every surface:
+status banner (none for `ok`; "insufficient evidence — missing: …";
+the boundary sentence for `out_of_scope`) → evidence (chunks with title,
+pages, section, record, the ACL basis that admitted them, and the
+rerank score; warehouse rows with masked values shown as *masked*, never
+as absent) → plan line ("looked in: <leg> (found | nothing)") → footer
+with the payload id. The two-window flagship is a test: two sessions,
+the same question in Ask, two payload ids, each page holding exactly its
+role's documents; the rep's Agent Assist page for a member with clinical
+notes contains no clinical text, asserted on the HTML.
+
 ## Production mapping
 
 The lab runs on the tools the posting names; the same shape maps onto an

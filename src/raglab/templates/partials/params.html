@@ -1,0 +1,8 @@
+<p class="note">{{ doc }}</p>
+<div class="grid">
+{% for name, hint in params %}
+  <label>{{ name }}
+    <input type="text" name="{{ name }}" placeholder="{{ hint }}" autocomplete="off">
+  </label>
+{% endfor %}
+</div>

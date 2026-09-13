@@ -41,3 +41,14 @@ nav form { margin: 0; }
 .payloadfoot { border-top: 1px dashed var(--pico-muted-border-color); padding-top: .4rem; margin-top: .5rem; }
 .payloadfoot code { font-size: .75rem; }
 .headerrow { border-left: .35rem solid #2f5d3a; }
+
+.cards article { padding: .75rem 1rem; margin: 0; }
+.cards article header { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--pico-muted-color); padding: 0; margin-bottom: .3rem; background: none; border: 0; }
+.cards ul { margin: 0; padding-left: 1rem; }
+.auditform { align-items: end; }
+.auditform button { margin-bottom: var(--pico-spacing); }
+.auditrows { font-size: .8rem; }
+.auditrows td.q { max-width: 22rem; }
+.auditrows td.docs { max-width: 22rem; font-size: .72rem; color: var(--pico-muted-color); }
+.queryform { max-width: 40rem; }
+iframe.dashboard { width: 100%; height: 70vh; border: 1px solid var(--pico-muted-border-color); border-radius: var(--pico-border-radius); background: white; }

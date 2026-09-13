@@ -295,3 +295,72 @@ def test_an_identity_without_a_warehouse_role_gets_not_authorized():
     ident = identity.Identity(0, "benefits.sam", "Sam", "benefits", "employee", None, ("ask",))
     out = context_services.member_data(ident, "member_claims_summary", {}, warehouse=context_services.Warehouse(connect=None))
     assert out["status"] == "not_authorized"
+
+
+# ---------------------------------------------------------------------------
+# PR3: Console reads — admin only; the disclosure log in both directions.
+
+def test_console_reads_are_admin_only(client):
+    for username in ("rep.dana", "cm.priya", "actuary.jo", "appeals.lee", "benefits.sam"):
+        _login(client, username)
+        assert client.get("/status").status_code == 403, username
+        assert client.get("/audit").status_code == 403, username
+        assert client.get("/payload/00000000-0000-0000-0000-000000000000").status_code == 403, username
+    client.post("/logout")
+    assert client.get("/status").status_code == 401
+
+
+@pytest.mark.clean_corpus
+def test_a_payload_is_reproduced_exactly_from_the_disclosure_log(client_with_corpus, db):
+    """A rep's search writes one disclosure row; the admin reads back the
+    same payload, who asked, and what it was built from."""
+    client = client_with_corpus
+    _login(client, "rep.dana")
+    delivered = _search(client, db, "what do the secret facts say").json()
+    _login(client, "admin")
+    resp = client.get(f"/payload/{delivered['payload_id']}")
+    assert resp.status_code == 200, resp.text
+    rec = resp.json()
+    # stage timings are stamped after the disclosure row is written (they time
+    # the disclose step itself), so the record holds everything but them
+    assert rec["payload"] == {k: v for k, v in delivered.items() if k != "timings"}
+    assert rec["username"] == "rep.dana" and rec["persona"] == "member_services" and rec["source"] == "web"
+    assert rec["payload_status"] == delivered["status"] and set(rec["acl_basis"]) == {"public", "employee"}
+    assert len(rec["chunk_ids"]) == len(delivered["chunks"]) == len(rec["content_hashes"])
+    assert client.get("/payload/00000000-0000-0000-0000-000000000000").status_code == 404
+
+
+@pytest.mark.clean_corpus
+def test_audit_reads_both_directions(client_with_corpus, db):
+    client = client_with_corpus
+    _login(client, "rep.dana")
+    _search(client, db)
+    _login(client, "cm.priya")
+    _search(client, db)
+    _login(client, "admin")
+    everything = client.get("/audit").json()
+    assert everything["totals"]["disclosures"] >= 2 and everything["totals"]["users"] >= 2
+    who = client.get("/audit", params={"username": "cm.priya"}).json()
+    assert who["rows"] and {r["username"] for r in who["rows"]} == {"cm.priya"} and {r["persona"] for r in who["rows"]} == {"care_team"}
+    by_persona = client.get("/audit", params={"persona": "member_services"}).json()
+    assert by_persona["rows"] and {r["persona"] for r in by_persona["rows"]} == {"member_services"}
+    which = client.get("/audit", params={"document": "doc-employee"}).json()  # lineage: which payloads used this document
+    assert which["rows"] and all(any("doc-employee" in t for t in r["doc_titles"]) for r in which["rows"])
+    assert {r["username"] for r in which["rows"]} == {"rep.dana"}  # the care manager cannot have used an employee document
+    assert client.get("/audit", params={"limit": 1}).json()["rows"].__len__() == 1
+
+
+def test_status_is_the_health_snapshot_as_data(client, monkeypatch):
+    from raglab import pipeline
+
+    monkeypatch.setitem(pipeline.DISCLOSURE_FAILURES, "count", 0)  # process memory; another test may have tripped it
+    _login(client, "admin")
+    out = client.get("/status").json()
+    assert {"postgres", "pgvector", "counts", "hnsw_index", "disclosure_failures", "baseline", "problems", "ok"} <= set(out)
+    assert set(out["counts"]) >= {"documents", "chunks", "quarantine", "disclosure_log"}
+    assert out["disclosure_failures"] == 0 and out["latency_budget_p95_ms"] == 1000
+    if out["baseline"]:
+        assert out["baseline"]["item_pass"] and out["baseline"]["run_id"]
+    monkeypatch.setitem(pipeline.DISCLOSURE_FAILURES, "count", 2)
+    out = client.get("/status").json()
+    assert out["disclosure_failures"] == 2 and not out["ok"] and any("withheld" in p for p in out["problems"])

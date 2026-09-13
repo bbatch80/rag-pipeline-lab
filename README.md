@@ -585,6 +585,45 @@ consumer; grounding is enforced at the generation layer, whose contract
 (answer only from supplied chunks, refuse otherwise) is exercised by
 abstention-trap questions in the generation eval.
 
+## Web doorway (Phase 4)
+
+The third consumer of the payload spec: a FastAPI app (`raglab serve`)
+whose routes mirror the MCP tools one for one — `POST /query` (a question
+from a surface → the composed payload), `POST /search` (one document
+probe), `POST /member-data` (one named query from the surface's menu) —
+plus `POST /login`, `POST /logout`, `GET /me`, and the Console reads
+`GET /status`, `GET /audit`, `GET /payload/{id}` (admin only). All three
+data endpoints, the MCP tools, and the CLI call the same functions
+(`raglab.context_services`): one implementation, three adapters.
+
+Identity is a login session, prototype-grade by design (six seeded
+accounts, one shared demo password, a signed cookie holding the
+username). Every request resolves the username through the identity
+tables to a document persona, a warehouse role, and the **surfaces** the
+user's group may open; `/me` is what a frontend renders from. A route
+names the surface it serves and a session without the grant gets 403.
+**No request carries identity or a menu**: bodies forbid unknown fields,
+so `persona`, `role`, `user_id`, or `module` in a request is a 400, not
+ignored. The page names the *surface* it asked from; the server maps
+surface × group to the planner's *module* — the care manager opens the
+same Agent Assist screen as a rep and composes under the
+`care_management` menu (clinical notes, policies) rather than the rep's
+(call notes, benefits documents): same screen, context per job.
+
+Every `/query` and `/search` writes the same disclosure row as the CLI
+(`source = web`, the user id stamped); `/payload/{id}` returns that row
+with the payload as delivered, and `/audit` reads the log in both
+directions — what a user or persona saw, which payloads used a document.
+Tests run the identical-question control through HTTP for all six users
+on a seeded tier corpus inside a rolled-back transaction.
+
+```sh
+uv run raglab serve                       # http://127.0.0.1:8000
+curl -c c -X POST :8000/login -H 'content-type: application/json' -d '{"username":"cm.priya","password":"..."}'
+curl -b c -X POST :8000/query -H 'content-type: application/json' \
+     -d '{"question":"recent claims for this member","surface":"agent_assist","member_id":"M767394984"}'
+```
+
 ## Production mapping
 
 The lab runs on the tools the posting names; the same shape maps onto an

@@ -1,0 +1,25 @@
+{# After a key is committed: one header row confirming what is open (the
+   record the platform found for the key), then a question box carrying
+   the key as page state. Every evidence panel is a question. #}
+{% if error %}
+<p class="banner banner-error">{{ error }}</p>
+{% else %}
+<article class="rows headerrow">
+  <header><strong>{{ header.title }}</strong>
+    {% if header.masked_columns %}<span class="chip chip-masked" title="policy-masked for your role">masked: {{ header.masked_columns | join(", ") }}</span>{% endif %}
+    <small>{{ header.meaning }}</small>
+  </header>
+  <div class="scroll"><table>
+    <thead><tr>{% for col in header.columns %}<th {% if col in header.masked_columns %}class="masked"{% endif %}>{{ col }}</th>{% endfor %}</tr></thead>
+    <tbody>{% for row in header.rows %}<tr>{% for v in row %}<td {% if header.columns[loop.index0] in header.masked_columns %}class="masked"{% endif %}>{% if v is none %}<span class="null">{{ "masked" if header.columns[loop.index0] in header.masked_columns else "—" }}</span>{% else %}{{ v }}{% endif %}</td>{% endfor %}</tr>{% endfor %}</tbody>
+  </table></div>
+  {% if label %}<p class="note">{{ label }}</p>{% endif %}
+</article>
+<form hx-post="{{ ask_url }}" hx-target="#result" hx-indicator="#asking" class="askbox">
+  <input type="hidden" name="member_id" value="{{ member_id }}">
+  <input type="text" name="question" value="{{ prefill }}" placeholder="{{ placeholder }}" required autofocus>
+  <button type="submit">Ask</button>
+</form>
+<p id="asking" class="htmx-indicator" aria-busy="true">Routing, searching, reranking…</p>
+<section id="result"></section>
+{% endif %}

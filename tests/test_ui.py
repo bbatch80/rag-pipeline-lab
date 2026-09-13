@@ -137,3 +137,147 @@ def test_two_window_flagship_in_ask(app, db):
     assert rep.post("/ui/draft", data={"payload_id": ids[0]}).status_code == 404  # no generated answer, by ruling
     assert rep.post("/ui/logout", follow_redirects=False).headers["location"] == "/login"
     assert rep.get("/ask", follow_redirects=False).status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# PR2: Agent Assist and the Appeals Workbench — nothing loads until a key
+# is typed; the key is validated like the pipeline validates it; one header
+# row confirms what is open; every panel is a question.
+
+import psycopg  # noqa: E402
+
+from raglab import identifiers  # noqa: E402
+from test_identical_question_control import FAKE_MEMBER, FAKE_PATIENT  # noqa: E402
+
+KNOWN_CASE = identifiers.case_id(7)          # APL-1215086, check digit valid
+UNKNOWN_MEMBER = "M999900012"                # shape + check digit valid, nobody's
+
+
+class _RecordCursor:
+    """A warehouse cursor that answers the two header queries: an enrollment
+    row for the fake member, the case row for the known case, nothing else."""
+
+    def __init__(self, role):
+        self.role = role
+        self.description = None
+        self._rows = []
+
+    def execute(self, sql, params=None):
+        if "CURRENT_ROLE" in sql:
+            self._rows, self.description = [(self.role,)], [("CURRENT_ROLE()",)]
+        elif sql.startswith("ALTER SESSION"):
+            self._rows = []
+        elif "FROM ENROLLMENT" in sql:
+            self.description = [(c,) for c in ("MEMBER_ID", "YEAR", "LINE_OF_BUSINESS", "PLAN_CODE", "PLAN_OPTION", "TIER", "ENROLLMENT_CODE")]
+            self._rows = [(FAKE_MEMBER, 2026, "FEHB", "71-006", "High", "Self Only", "311")] if params["member_id"] == FAKE_MEMBER else []
+        elif "FROM APPEALS" in sql:
+            self.description = [(c,) for c in ("CASE_ID", "MEMBER_ID", "CLAIM_ID", "CALL_ID", "FILED_DATE", "APPEAL_TYPE",
+                                               "DENIAL_REASON", "DECISION", "DECIDED_DATE", "REVIEWER", "POLICY_ID")]
+            self._rows = [(KNOWN_CASE, FAKE_MEMBER, "CLM-136378150", "CALL-1", "2025-03-04", "clinical",
+                           "not medically necessary", "upheld", "2025-03-28", "R. Vale", "CP-0003")] if params["case_id"] == KNOWN_CASE else []
+        else:
+            raise AssertionError(f"unexpected warehouse query: {sql[:60]}")
+        return self
+
+    def fetchone(self):
+        return self._rows[0]
+
+    def fetchall(self):
+        return self._rows
+
+
+class _RecordWarehouse:
+    def __init__(self, role):
+        self.role = role
+
+    def cursor(self):
+        return _RecordCursor(self.role)
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def surfaces(db, monkeypatch):
+    """Seeded tiers scoped to one fake member, fake models, a fake
+    warehouse answering the header queries; Ask-style composition stands
+    in for the planner."""
+    identity.seed(db, password=PASSWORD)
+    _seed_tiers(db, per_tier=1, embed=True)
+    _fake_models(monkeypatch)
+    _exact_scan(db)
+    try:
+        with db.transaction():
+            db.execute("INSERT INTO synthea.patients (id, member_id) VALUES (%s, %s)", (FAKE_PATIENT, FAKE_MEMBER))
+    except (psycopg.errors.UndefinedTable, psycopg.errors.NotNullViolation) as exc:
+        pytest.skip(f"no usable synthea.patients here: {exc.__class__.__name__}")
+    db.execute("UPDATE documents SET member_key = %s WHERE title LIKE 'doc-%%'", (FAKE_PATIENT,))
+    db.execute("UPDATE chunks SET member_key = %s WHERE document_id IN (SELECT id FROM documents WHERE title LIKE 'doc-%%')", (FAKE_PATIENT,))
+    seen = []
+
+    def compose(conn, ident, question, member_id=None, module=None, source="web", warehouse=None):
+        seen.append({"question": question, "member_id": member_id, "module": module, "persona": ident.persona})
+        return context_services.search(conn, ident, question, member_id=member_id, source=source)
+
+    monkeypatch.setattr(context_services, "compose", compose)
+    app = webapp.create_app(connect=lambda: _Lease(_NoCommit(db)),
+                            warehouse=context_services.Warehouse(connect=lambda role: _RecordWarehouse(role)))
+    app.state.seen = seen
+    return app
+
+
+def test_agent_assist_loads_nothing_until_a_valid_known_member_is_typed(surfaces):
+    rep = _session(surfaces, "rep.dana")
+    page = rep.get("/agent_assist").text
+    assert "Nothing is loaded until you open a member" in page and "headerrow" not in page and FAKE_MEMBER not in page
+    bad = rep.post("/ui/agent_assist/open", data={"member_id": "M12345"}).text
+    assert "not a valid member id" in bad and "headerrow" not in bad
+    nobody = rep.post("/ui/agent_assist/open", data={"member_id": UNKNOWN_MEMBER}).text
+    assert f"No member id {UNKNOWN_MEMBER} on record" in nobody and "headerrow" not in nobody
+    opened = rep.post("/ui/agent_assist/open", data={"member_id": " m999900004 "}).text  # surface form → canonical
+    assert "headerrow" in opened and f"Member {FAKE_MEMBER} — enrollment" in opened and "71-006" in opened
+    assert f'name="member_id" value="{FAKE_MEMBER}"' in opened and 'hx-post="/ui/agent_assist/ask"' in opened
+    assert 'value=""' in opened  # the question box starts empty: no canned question
+
+
+@pytest.mark.clean_corpus
+def test_rep_s_agent_assist_shows_no_clinical_text_and_the_care_manager_s_does(surfaces, db):
+    """The durable Phase 5 test: the same member, the same screen, the same
+    question — the rep's page carries no clinical note text; the care
+    manager's does, and carries none of the rep's call-note tier."""
+    rep, cm = _session(surfaces, "rep.dana"), _session(surfaces, "cm.priya")
+    rep_html = rep.post("/ui/agent_assist/ask", data={"question": "what do the secret facts say", "member_id": FAKE_MEMBER}).text
+    db.execute("RESET ROLE")
+    cm_html = cm.post("/ui/agent_assist/ask", data={"question": "what do the secret facts say", "member_id": FAKE_MEMBER}).text
+    db.execute("RESET ROLE")
+    assert "doc-care_team" not in rep_html and "doc-member_services" in rep_html and "doc-employee" in rep_html
+    assert "doc-care_team" in cm_html and "doc-member_services" not in cm_html and "doc-employee" not in cm_html
+    assert f"member {FAKE_MEMBER}" in rep_html  # the plan line names the member context
+    modules = [s["module"] for s in surfaces.state.seen]
+    assert modules == ["agent_assist", "care_management"]  # same screen, the job's module
+    assert all(s["member_id"] == FAKE_MEMBER for s in surfaces.state.seen)
+
+
+def test_workbench_opens_a_case_and_starts_the_question_with_it(surfaces):
+    analyst = _session(surfaces, "appeals.lee")
+    assert "Nothing is loaded until you open a case" in analyst.get("/appeals_workbench").text
+    assert "not a valid case id" in analyst.post("/ui/appeals_workbench/open", data={"case_id": "APL-000000"}).text
+    assert "on record" in analyst.post("/ui/appeals_workbench/open", data={"case_id": identifiers.case_id(8)}).text
+    opened = analyst.post("/ui/appeals_workbench/open", data={"case_id": KNOWN_CASE}).text
+    assert f"Case {KNOWN_CASE}" in opened and "not medically necessary" in opened and "CP-0003" in opened
+    assert f'value="Case {KNOWN_CASE}: "' in opened  # the box starts with the case, visible and editable
+    assert f'name="member_id" value="{FAKE_MEMBER}"' in opened  # the case's member, from the platform's row
+    assert "Evidence, never a determination" in opened
+    analyst.post("/ui/appeals_workbench/ask", data={"question": f"Case {KNOWN_CASE}: why was it upheld?", "member_id": FAKE_MEMBER})
+    assert surfaces.state.seen[-1] == {"question": f"Case {KNOWN_CASE}: why was it upheld?", "member_id": FAKE_MEMBER,
+                                       "module": "appeals_workbench", "persona": "appeals"}
+
+
+def test_surfaces_are_granted_per_group(surfaces):
+    rep = _session(surfaces, "rep.dana")
+    assert rep.get("/appeals_workbench").status_code == 403
+    assert rep.post("/ui/appeals_workbench/open", data={"case_id": KNOWN_CASE}).status_code == 403
+    analyst = _session(surfaces, "appeals.lee")
+    assert analyst.get("/agent_assist").status_code == 403
+    sam = _session(surfaces, "benefits.sam")
+    assert sam.get("/agent_assist").status_code == 403 and sam.get("/ask").status_code == 200

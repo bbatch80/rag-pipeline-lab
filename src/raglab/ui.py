@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from raglab import identity
+from raglab import identifiers, identity
 
 TEMPLATES = Path(__file__).parent / "templates"
 STATIC = Path(__file__).parent / "static"
@@ -52,6 +52,17 @@ def render_payload(payload: dict, *, console_links: bool = False) -> str:
     """The render contract over one payload — pure: no database, no request."""
     return env.get_template("partials/payload.html").render(
         payload=payload, leg_found=leg_outcomes(payload), console=console_links)
+
+
+def render_workspace(*, header: dict | None, error: str | None = None, ask_url: str = "", member_id: str = "",
+                     prefill: str = "", placeholder: str = "", label: str | None = None) -> str:
+    """The header row after a key is committed, and the question box — pure."""
+    return env.get_template("partials/workspace.html").render(
+        header=header, error=error, ask_url=ask_url, member_id=member_id, prefill=prefill,
+        placeholder=placeholder, label=label)
+
+
+EVIDENCE_LABEL = "Evidence, never a determination: what the platform found for this case, for a person to weigh."
 
 
 def _page(name: str, request: Request, me: dict | None, **ctx) -> HTMLResponse:
@@ -104,6 +115,67 @@ def mount(app: FastAPI) -> None:
     @app.get("/ask", response_class=HTMLResponse)
     def ask_page(request: Request, ident: identity.Identity = Depends(require_surface("ask"))):
         return _page("ask.html", request, _me(ident), current="ask")
+
+    def open_record(ident: identity.Identity, surface: str, query_name: str, kind: str, value: str) -> tuple[dict | None, str | None]:
+        """Validate a typed key the way the pipeline does (shape + check
+        digit), then fetch the one row the platform holds for it through
+        the surface's menu. Fail closed: a well-formed key that matches
+        nothing is said so, and nothing else is loaded."""
+        canon = identifiers.canonicalize(kind, value)
+        if canon is None:
+            return None, f"{value.strip()!r} is not a valid {kind.replace('_', ' ')} (shape and check digit)."
+        out = app.state.member_data_for(ident, query_name, surface, {kind: canon})
+        if out.get("status") != "ok":
+            return None, f"This role cannot look up a {kind.replace('_', ' ')}: {out.get('status')}."
+        if not out["rows"]:
+            return None, f"No {kind.replace('_', ' ')} {canon} on record."
+        return {**out, "canonical": canon}, None
+
+    # ---- Agent Assist: a member on the screen, then questions ----
+    @app.get("/agent_assist", response_class=HTMLResponse)
+    def agent_assist_page(request: Request, ident: identity.Identity = Depends(require_surface("agent_assist"))):
+        return _page("agent_assist.html", request, _me(ident), current="agent_assist")
+
+    @app.post("/ui/agent_assist/open", response_class=HTMLResponse)
+    def agent_assist_open(member_id: str = Form(...), ident: identity.Identity = Depends(require_surface("agent_assist"))):
+        header, error = open_record(ident, "agent_assist", "member_enrollment", "member_id", member_id)
+        if error:
+            return HTMLResponse(render_workspace(header=None, error=error))
+        return HTMLResponse(render_workspace(
+            header={**header, "title": f"Member {header['canonical']} — enrollment"},
+            ask_url="/ui/agent_assist/ask", member_id=header["canonical"],
+            placeholder="e.g. What did she call about last time? Is a referral needed for a specialist?"))
+
+    @app.post("/ui/agent_assist/ask", response_class=HTMLResponse)
+    def agent_assist_ask(question: str = Form(...), member_id: str = Form(...),
+                         ident: identity.Identity = Depends(require_surface("agent_assist"))):
+        payload = app.state.compose_for(ident, question.strip(), "agent_assist", member_id)
+        return HTMLResponse(render_payload(payload, console_links="console" in ident.surfaces))
+
+    # ---- Appeals Workbench: a case on the screen, then questions ----
+    @app.get("/appeals_workbench", response_class=HTMLResponse)
+    def workbench_page(request: Request, ident: identity.Identity = Depends(require_surface("appeals_workbench"))):
+        return _page("appeals_workbench.html", request, _me(ident), current="appeals_workbench")
+
+    @app.post("/ui/appeals_workbench/open", response_class=HTMLResponse)
+    def workbench_open(case_id: str = Form(...), ident: identity.Identity = Depends(require_surface("appeals_workbench"))):
+        header, error = open_record(ident, "appeals_workbench", "appeal_case", "case_id", case_id)
+        if error:
+            return HTMLResponse(render_workspace(header=None, error=error))
+        # the case's member is the member context (the platform's own row, not typed);
+        # the case id itself binds from the question text, so the box starts with it
+        row = dict(zip(header["columns"], header["rows"][0]))
+        return HTMLResponse(render_workspace(
+            header={**header, "title": f"Case {header['canonical']}"},
+            ask_url="/ui/appeals_workbench/ask", member_id=row.get("MEMBER_ID") or "",
+            prefill=f"Case {header['canonical']}: ", placeholder="e.g. Case APL-…: why was the denial upheld?",
+            label=EVIDENCE_LABEL))
+
+    @app.post("/ui/appeals_workbench/ask", response_class=HTMLResponse)
+    def workbench_ask(question: str = Form(...), member_id: str = Form(""),
+                      ident: identity.Identity = Depends(require_surface("appeals_workbench"))):
+        payload = app.state.compose_for(ident, question.strip(), "appeals_workbench", member_id or None)
+        return HTMLResponse(render_payload(payload, console_links="console" in ident.surfaces))
 
     @app.post("/ui/ask", response_class=HTMLResponse)
     def ask_fragment(question: str = Form(...), ident: identity.Identity = Depends(require_surface("ask"))):

@@ -1,51 +1,42 @@
-"""Named-query golden items (category named_query): warehouse-only
-assertions — the roster and enrollment lookups a rep composes — run under
-the identity's Snowflake role. Each item lists its queries in order and,
-per query, what the result must contain. Requires live Snowflake."""
+"""Warehouse roles × masking policies, run live: the same catalog query
+returns the same rows to every role while the role's policy nulls the
+columns it may not see — costs for the care manager, identifiers for the
+actuary, the SSN for every operations role. Requires live Snowflake; the
+golden named_query items exercise the same queries through the composed
+path in the eval."""
 
 import os
 
 import pytest
 
 from raglab import snowlane
-from raglab.ablation import load_golden
-from raglab.mcp_server import IDENTITIES
+from raglab.snowlane import MASKED_FOR_ROLE
 
 pytestmark = [pytest.mark.slow, pytest.mark.skipif(
     not os.environ.get("SNOWFLAKE_ACCOUNT"),
     reason="no Snowflake credentials (verified locally, CI is zero-secret)",
 )]
 
-ITEMS = [g for g in load_golden() if g["category"] == "named_query"]
+MEMBER = "M767394984"  # golden named_query-05's member: 35 claim lines
 
 
-def _norm(v):
-    return v.lower() if isinstance(v, str) else v
-
-
-def _row_matches(row: dict, want: dict) -> bool:
-    return all(_norm(row.get(k)) == _norm(v) for k, v in want.items())
-
-
-@pytest.mark.parametrize("item", ITEMS, ids=[g["id"] for g in ITEMS])
-def test_named_query_item(item):
-    _, role = IDENTITIES[item["identity"]]
+@pytest.mark.parametrize("role", ["CLAIMS_EXAMINER", "CARE_MANAGER", "ACTUARY"])
+def test_claims_summary_masks_by_role(role):
     sf = snowlane.connect(role=role)
     try:
-        for spec, expect in zip(item["queries"], item["expect"], strict=True):
-            params = dict(spec)
-            name = params.pop("query_name")
-            result = snowlane.run_named_query(sf, name, params)
-            assert result["status"] == "ok", result
-            rows = [dict(zip(result["columns"], r)) for r in result["rows"]]
-            assert len(rows) >= expect.get("rows_min", 1), (name, len(rows))
-            if "match" in expect:
-                assert _row_matches(rows[0], expect["match"]), (name, rows[0])
-            if "any" in expect:
-                assert any(_row_matches(r, expect["any"]) for r in rows), (name, expect["any"])
-            if "all" in expect:
-                assert all(_row_matches(r, expect["all"]) for r in rows), name
-            if "all_prefix" in expect:
-                assert all(str(r.get(k, "")).startswith(v) for r in rows for k, v in expect["all_prefix"].items()), name
+        result = snowlane.run_named_query(sf, "member_claims_summary", {"member_id": MEMBER})
     finally:
         sf.close()
+    assert result["status"] == "ok", result
+    row = dict(zip(result["columns"], result["rows"][0])) if result["rows"] else {}
+    expected_masked = MASKED_FOR_ROLE.get(role, set()) & set(result["columns"])
+    assert set(result["masked_columns"]) == expected_masked, (role, result["masked_columns"])
+    for col in expected_masked:
+        assert row.get(col) is None, (role, col, "masked column carried a value")
+    if role == "CLAIMS_EXAMINER":
+        assert row["CLAIM_LINES"] == 35 and row["TOTAL_COST"] is not None
+    if role == "ACTUARY":
+        # The mask nulls MEMBER_ID before the predicate runs, so a lookup by id
+        # finds nothing: an actuary cannot profile one member (status stays ok,
+        # zero rows — the silent empty-ok is logged as an open failure mode).
+        assert result["row_count"] == 0 and result["rows"] == [], "the identifier mask hides the individual"

@@ -2,14 +2,15 @@
 the eval store. Health verdicts against the CI thresholds first, history
 second, detail last. No external assets — viewable from any browser."""
 
+import html
 from pathlib import Path
 
 import psycopg
 
-from raglab import config
+from raglab import ablation, config
 from raglab import stats
 from raglab.timing import BUDGET_P95_MS, percentile
-from raglab.eval_retrieval import THRESHOLDS
+from raglab.eval_retrieval import load_baseline
 from raglab import taxonomy
 
 OUT_PATH = config.REPO_ROOT / "data" / "eval" / "dashboard.html"
@@ -69,6 +70,8 @@ summary { cursor: pointer; color: var(--muted); font-size: .82rem; }
 .note { color: var(--muted); font-size: .78rem; margin-top: .4rem; }
 td.left, th.left { text-align: left; }
 td.cat { text-align: left; font-weight: 600; white-space: nowrap; }
+td.desc { text-align: left; font-size: .8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 0; width: 100%; }
+td.failing { text-align: left; font-size: .72rem; color: var(--muted); white-space: nowrap; }
 td.cat small { display: block; font-weight: 400; color: var(--muted); white-space: normal; }
 td.ex { text-align: left; color: var(--muted); font-style: italic; }
 tr.band td { background: var(--chip); color: var(--muted); font-size: .72rem;
@@ -159,7 +162,8 @@ def _item_verdicts(conn: psycopg.Connection) -> tuple[dict, dict, tuple | None]:
     partial or sabotage run). An item skipped in the latest run keeps the
     verdict of the last run that verified it, so a CI run without warehouse
     credentials neither hides nor fakes the warehouse-backed items.
-    Returns (by_work, by_group, (oldest_run, newest_run))."""
+    Returns (by_work, by_group, (oldest_run, newest_run)); each bucket is a
+    list of (item id, passed)."""
     rows = conn.execute(
         "SELECT DISTINCT ON (s.question_id) s.question_id, s.category, s.value, "
         "s.detail->>'work_category', r.id "
@@ -168,61 +172,56 @@ def _item_verdicts(conn: psycopg.Connection) -> tuple[dict, dict, tuple | None]:
         "AND r.config_label NOT LIKE '%%SABOTAGE%%' AND r.config_label NOT LIKE '%%-partial:%%' "
         "ORDER BY s.question_id, r.id DESC"
     ).fetchall()
-    by_work: dict[int, list[int]] = {}
-    by_group: dict[str, list[int]] = {}
+    current = {item["id"] for item in ablation.load_golden()}  # retired sets leave verdicts in the store
+    by_work: dict[int, list[tuple[str, bool]]] = {}
+    by_group: dict[str, list[tuple[str, bool]]] = {}
     run_ids = []
-    for _qid, group, value, work, run_id in rows:
-        by_work.setdefault(int(work), []).append(int(float(value) >= 1.0))
-        by_group.setdefault(group, []).append(int(float(value) >= 1.0))
+    for qid, group, value, work, run_id in rows:
+        if qid not in current:
+            continue
+        by_work.setdefault(int(work), []).append((qid, float(value) >= 1.0))
+        by_group.setdefault(group, []).append((qid, float(value) >= 1.0))
         run_ids.append(run_id)
     span = (min(run_ids), max(run_ids)) if run_ids else None
     return by_work, by_group, span
 
 
-def _pass_cells(verdicts: list[int] | None) -> str:
+def _rate_row(label: str, name: str, description: str, verdicts: list[tuple[str, bool]] | None) -> tuple[float, int, str]:
+    """One table row: (rate, n, html) — the rate and n are the sort keys.
+    Every row stays one line tall: the description and the failing list
+    truncate with the full text on hover. A bucket with no verdicts shows
+    dashes and sorts to the bottom."""
+    desc = f'<td class="desc" title="{html.escape(description, quote=True)}">{html.escape(description)}</td>'
     if not verdicts:
-        return '<td class="num">0</td><td class="num">–</td><td></td>'
-    n, passed = len(verdicts), sum(verdicts)
+        return (-1.0, 0, f'<tr><td class="num">{label}</td><td class="cat">{name}</td>{desc}'
+                         '<td class="num">–</td><td class="num">–</td><td class="ci">–</td><td class="failing"></td></tr>')
+    n = len(verdicts)
+    passed = sum(1 for _, ok in verdicts if ok)
+    failing = sorted(q for q, ok in verdicts if not ok)
     rate = passed / n
-    return (f'<td class="num">{n}</td><td class="num">{rate * 100:.0f}%</td>'
-            f'<td>{_pct_bar(rate, low=1.0)}</td>')
+    low, high = stats.wilson(passed, n)
+    shown = ", ".join(failing[:3]) + (f" +{len(failing) - 3}" if len(failing) > 3 else "")
+    return (rate, n, f'<tr><td class="num">{label}</td><td class="cat">{name}</td>{desc}'
+                     f'<td class="num">{passed}/{n}</td><td class="num">{rate:.2f}</td>'
+                     f'<td class="ci">[{low:.2f}, {high:.2f}]</td>'
+                     f'<td class="failing" title="{", ".join(failing)}">{shown or "—"}</td></tr>')
+
+
+def _rate_table_html(rows: list[tuple[float, int, str]]) -> str:
+    """Highest pass rate first; equal rates by size (a larger bucket is the
+    tighter interval), then the html itself for a stable order."""
+    ordered = sorted(rows, key=lambda r: (-r[0], -r[1], r[2]))
+    return "".join(html for _, _, html in ordered)
 
 
 def _capability_html(conn: psycopg.Connection) -> str:
     by_work, by_group, span = _item_verdicts(conn)
-    open_defects: dict[int, int] = {}
-    for number, _text in taxonomy.DEFECTS:
-        open_defects[number] = open_defects.get(number, 0) + 1
-
-    work_rows = []
-    for band, title in taxonomy.BANDS:
-        work_rows.append(f'<tr class="band"><td colspan="7">{title}</td></tr>')
-        for c in taxonomy.WORK_CATEGORIES.values():
-            if c.band != band:
-                continue
-            label = "G" if c.number == taxonomy.GUARDRAILS else str(c.number)
-            if band == "designed_out":
-                cells = '<td class="num">–</td><td class="num">–</td><td></td>'
-            else:
-                cells = _pass_cells(by_work.get(c.number))
-            work_rows.append(
-                f'<tr><td class="num">{label}</td>'
-                f'<td class="cat">{c.name}<small>{c.description}</small></td>'
-                f'<td class="ex">“{c.example}”</td>{cells}'
-                f'<td class="num">{open_defects.get(c.number, 0) or "–"}</td></tr>'
-            )
-
-    group_rows = []
-    for band, title in taxonomy.GROUP_BANDS:
-        group_rows.append(f'<tr class="band"><td colspan="6">{title}</td></tr>')
-        for g in taxonomy.GROUPS.values():
-            if g.band != band:
-                continue
-            group_rows.append(
-                f'<tr><td class="num">{g.number}</td>'
-                f'<td class="cat">{g.name}<small>{g.description}</small></td>'
-                f'<td class="left">{g.metric}</td>{_pass_cells(by_group.get(g.name))}</tr>'
-            )
+    work_rows = [
+        _rate_row("G" if c.number == taxonomy.GUARDRAILS else str(c.number), c.name, c.description, by_work.get(c.number))
+        for c in taxonomy.WORK_CATEGORIES.values() if c.band != "designed_out"
+    ]
+    group_rows = [_rate_row(str(g.number), g.name, g.description, by_group.get(g.name)) for g in taxonomy.GROUPS.values()]
+    designed_out = ", ".join(c.name for c in taxonomy.WORK_CATEGORIES.values() if c.band == "designed_out")
 
     defect_items = "".join(
         f"<li><b>{'G' if n == taxonomy.GUARDRAILS else n}</b>{text}</li>" for n, text in taxonomy.DEFECTS
@@ -244,19 +243,21 @@ def _capability_html(conn: psycopg.Connection) -> str:
     verified = (f"verdicts from full runs {span[0]}–{span[1]}" if span and span[0] != span[1]
                 else f"verdicts from full run {span[0]}" if span else "no full retrieval run yet")
     return (
-        "\n<h2>Capability — by the work a question needs</h2>\n"
-        '<table><tr><th>#</th><th class="left">category</th><th class="left">example question</th>\n'
-        "<th>gated items</th><th>pass rate</th><th></th><th>open defects</th></tr>\n"
-        f"{''.join(work_rows)}</table>\n"
-        '<p class="note">Pass = every gate metric on the item is 1.0. A check skipped in a run '
-        "(no warehouse credentials) never counts as a pass: the item keeps the verdict of the "
-        f"last full run that verified it. {verified}. Descriptions are general on purpose so "
-        "the rows mean the same thing as the corpus grows; only the payload is judged, never "
-        "the answering model's prose.</p>\n"
-        "\n<h2>Capability — by mechanism and source (the groups the gate is built on)</h2>\n"
-        '<table><tr><th>#</th><th class="left">group</th><th class="left">metric</th><th>gated items</th>\n'
-        "<th>pass rate</th><th></th></tr>\n"
-        f"{''.join(group_rows)}</table>\n"
+        "\n<h2>Pass rate by question category</h2>\n"
+        '<table><tr><th>#</th><th class="left">category</th><th class="left">what the question needs</th>'
+        '<th>pass</th><th>rate</th><th>95% CI</th><th class="left">failing</th></tr>\n'
+        f"{_rate_table_html(work_rows)}</table>\n"
+        '<p class="note">Pass = every expectation the item declares holds in the composed payload; '
+        "an item skipped in a run (no warehouse credentials) never counts as a pass — it keeps the "
+        f"verdict of the last full run that verified it ({verified}). Sorted by pass rate; the Wilson "
+        "interval is the honest width of a small bucket. Hover a description or a failing list for the full text. Only the payload is judged, never the "
+        f"answering model's prose. Designed out of the payload: {designed_out}.</p>\n"
+        "\n<h2>Pass rate by question group</h2>\n"
+        '<table><tr><th>#</th><th class="left">group</th><th class="left">mechanism and source</th>'
+        '<th>pass</th><th>rate</th><th>95% CI</th><th class="left">failing</th></tr>\n'
+        f"{_rate_table_html(group_rows)}</table>\n"
+        '<p class="note">The CI gate ratchets every category and group against the stored baseline '
+        "(eval/baseline.json) and every guardrail item individually.</p>\n"
         "\n<h2>Open defects</h2>\n"
         f'<ul class="defects">{defect_items}</ul>\n'
         '<p class="note">Each defect is pinned to the category it blocks; a row\'s pass rate can be '
@@ -273,14 +274,8 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
         "ORDER BY id DESC LIMIT 1"
     ).fetchone()
 
-    overall, by_cat, by_source, counts = {}, {}, {}, {}
+    overall, by_source, counts = {}, {}, {}
     if latest_run:
-        for cat, metric, val, n, hits in conn.execute(
-            "SELECT category, metric, round(avg(value), 3), count(*), sum(value) "
-            "FROM eval_scores WHERE run_id = %s GROUP BY 1, 2", (latest_run[0],)
-        ).fetchall():
-            by_cat.setdefault(cat, {})[metric] = float(val)
-            counts[("cat", cat, metric)] = (int(n), int(round(float(hits))))
         for src, metric, val, n, hits in conn.execute(
             "SELECT coalesce(detail->>'source', 'none'), metric, round(avg(value), 3), "
             "count(*), sum(value) FROM eval_scores WHERE run_id = %s GROUP BY 1, 2",
@@ -354,20 +349,24 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
         "GROUP BY r.id ORDER BY r.id DESC LIMIT 30"
     ).fetchall()
 
-    # ---- health strip: current values vs the CI thresholds -------------
+    # ---- health strip: current values vs the stored baseline (the ratchet) ---
+    baseline = load_baseline() or {}
+    base_hit = (baseline.get("overall") or {}).get("hit@5")
+    base_pass = (baseline.get("overall") or {}).get("item_pass")
     cards = []
     if overall:
         hit = overall.get("hit@5")
         ci = overall.get("hit@5_ci")
-        rule = f"gate ≥ {THRESHOLDS['hit@5']}" + (f" · 95% CI {ci[0]:.2f}–{ci[1]:.2f}" if ci else "")
-        cards.append(_card("hit@5", hit, rule, hit is not None and hit >= THRESHOLDS["hit@5"]))
+        rule = (f"baseline {base_hit:.3f}" if base_hit is not None else "reported") + (f" · 95% CI {ci[0]:.2f}–{ci[1]:.2f}" if ci else "")
+        cards.append(_card("hit@5", hit, rule, None if base_hit is None or hit is None else hit >= base_hit))
+        item_pass = overall.get("item_pass")
+        if item_pass is not None:
+            cards.append(_card("items passing", item_pass,
+                               f"baseline {base_pass:.3f} · ratchet by category/group" if base_pass is not None else "no baseline stored",
+                               None if base_pass is None else item_pass >= base_pass))
         gate = overall.get("gate_correct")
-        cards.append(_card("scope gate", gate, "gate = 1.0",
-                           gate is not None and gate >= 1.0))
-        wrong = overall.get("wrong_abstention", 0.0)
-        cards.append(_card("wrong abstention", wrong,
-                           f"gate ≤ {THRESHOLDS['wrong_abstention_rate']}",
-                           wrong <= THRESHOLDS["wrong_abstention_rate"]))
+        if gate is not None:
+            cards.append(_card("scope gate", gate, "gate = 1.0", gate >= 1.0))
         for key, label in (("deny_clean", "persona: deny clean"),
                            ("allow_answered", "persona: allow served")):
             val = overall.get(key)
@@ -384,8 +383,7 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
                            "verbatim survivors", None))
 
     # ---- per-category table -------------------------------------------
-    metrics_order = ["hit@5", "precision@5", "source_coverage", "gate_correct",
-                     "deny_clean", "allow_answered", "allow_hit", "scope_clean", "version_clean"]
+    metrics_order = ["hit@5", "precision@5", "source_coverage", "item_pass"]
     def _slice_rows(kind: str, table: dict) -> list[str]:
         rows_html = []
         for name in sorted(table):
@@ -407,7 +405,6 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
             rows_html.append("<tr>" + "".join(cells) + "</tr>")
         return rows_html
 
-    cat_rows = _slice_rows("cat", by_cat)
     source_rows = _slice_rows("src", by_source)
 
     gen_rows = "".join(
@@ -444,9 +441,9 @@ set. {stamp}</p>
 <div class="chart-box">
   <div class="legend"><span class="k" style="background:var(--teal)"></span>hit@5
   <span class="k" style="background:var(--indigo)"></span>source_coverage
-  <span class="k" style="background:var(--amber)"></span>CI gate ({THRESHOLDS['hit@5']})
+  <span class="k" style="background:var(--amber)"></span>baseline hit@5 ({base_hit if base_hit is not None else 'none'})
   &nbsp;·&nbsp; hover a point for the run's config</div>
-  {_trend_svg(trend, THRESHOLDS['hit@5'])}
+  {_trend_svg(trend, base_hit if base_hit is not None else 0.85)}
 </div>
 
 <p class="note">Latency per stage over the golden set (ms, p50 / p95):
@@ -456,18 +453,9 @@ set. {stamp}</p>
 <p class="note">Vector recall under row-level security, per persona (latest measurement, recall@k vs exact scan as the same persona):
 {' · '.join(f"{c} sees {v}/{t}: mean {float(m):.3f}, min {float(mn):.3f}, underfilled {int(float(u))}" for c, m, mn, u, v, t in rls) or 'not measured yet'}</p>
 
-<h2>Latest run — by question category</h2>
-<table><tr><th>category</th><th colspan="2">hit@5</th><th>precision@5</th>
-<th>coverage</th><th>gate</th><th>deny</th><th>allow</th><th>allow_hit</th></tr>
-{''.join(cat_rows)}</table>
-<p class="note">unanswerable is scored on the gate; persona_negative on
-deny/allow — dashes are metrics that don't apply to a category. Under each
-hit@5: 95% Wilson interval and question count — a slice under ~8 questions
-is low-power, not hidden.</p>
-
 <h2>Latest run — by expected source</h2>
 <table><tr><th>source</th><th colspan="2">hit@5</th><th>precision@5</th>
-<th>coverage</th><th>gate</th><th>deny</th><th>allow</th><th>allow_hit</th></tr>
+<th>coverage</th><th>item pass</th></tr>
 {''.join(source_rows)}</table>
 <p class="note">The source(s) a question's expected evidence lives in. A new
 source cannot degrade an old one without a number moving here.</p>

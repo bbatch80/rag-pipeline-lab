@@ -781,18 +781,21 @@ def ablation_cmd():
 
 @main.command("eval-retrieval")
 @click.option("--label", default="baseline", help="config_label recorded with the run.")
-@click.option("--gate", is_flag=True, help="Exit non-zero if thresholds are breached.")
+@click.option("--gate", is_flag=True, help="Exit non-zero when the run falls below the stored baseline (eval/baseline.json): any category or group pass rate lower, or any guardrail item that passed at the baseline failing.")
+@click.option("--write-baseline", is_flag=True, help="Store this run as the baseline every later run ratchets against.")
 @click.option("--sabotage", is_flag=True, help="Discrimination check: junk query vectors.")
 @click.option("--category", "categories", multiple=True,
-              help="Only these golden categories (iteration aid; partial runs never gate).")
+              help="Only these golden groups (iteration aid; partial runs never gate).")
 @click.option("--replan", is_flag=True,
               help="Ask the live planner model fresh for every golden question and report plans that differ from the stored ones (reported, never gated).")
-def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool, categories: tuple[str, ...], replan: bool):
-    """Tier-1 deterministic retrieval eval over the golden set (free)."""
-    if categories and gate:
-        raise click.UsageError("--gate needs the whole golden set; drop --category")
+def eval_retrieval_cmd(label: str, gate: bool, write_baseline: bool, sabotage: bool, categories: tuple[str, ...], replan: bool):
+    """Tier-1 deterministic eval over the golden set on the composed path (free)."""
+    if categories and (gate or write_baseline):
+        raise click.UsageError("--gate / --write-baseline need the whole golden set; drop --category")
     if replan and gate:
         raise click.UsageError("--replan is a drift report, not a gate; drop --gate")
+    if sabotage and (gate or write_baseline):
+        raise click.UsageError("a sabotage run never gates and never becomes the baseline")
     from raglab import eval_retrieval
     from raglab.timing import BUDGET_P95_MS
 
@@ -811,12 +814,23 @@ def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool, categories: tuple
         for metric, value in result.overall.items():
             if value is not None:
                 ci = result.overall_ci.get(metric)
-                receipt.add(metric, f"{value:.3f}" + (f"  95% CI [{ci[0]:.3f}, {ci[1]:.3f}]" if ci else ""))
+                receipt.add(metric, (f"{value:.3f}" if isinstance(value, float) else str(value))
+                            + (f"  95% CI [{ci[0]:.3f}, {ci[1]:.3f}]" if ci else ""))
+        receipt.add("by category", "pass / n  [95% CI]  failing")
+        for number, w in result.by_work.items():
+            receipt.add(f"  {'G' if number == 0 else number}: {w['name']}", _fmt_rate(w))
+        receipt.add("by group", "pass / n  [95% CI]  failing")
+        for group, g in result.by_group.items():
+            receipt.add(f"  {group}", _fmt_rate(g))
+        if result.health:
+            h = result.health
+            receipt.add("health", "reported, not gated")
+            receipt.add("  tie rate / median margin", f"{h.get('tie_rate')} / {h.get('median_margin')}")
+            receipt.add("  duplicate share", f"{h.get('duplicate_share')}")
+            receipt.add("  index seat share", f"{h.get('index_seat_share')}")
+            receipt.add("  needless split rate", f"{h.get('needless_split_rate')}")
         for category, metrics in sorted(result.by_category.items()):
-            receipt.add(f"  {category}", _fmt_slice(metrics))
-        for number, w in sorted(result.by_work.items()):
-            unverified = f"  unverified={w['unverified']}" if w["unverified"] else ""
-            receipt.add(f"  work {number}: {w['name']}", f"pass {w['passed']}/{w['n']}{unverified}")
+            receipt.add(f"  metrics:{category}", _fmt_slice(metrics))
         for slice_name, metrics in sorted(result.by_source.items()):
             receipt.add(f"  source:{slice_name}", _fmt_slice(metrics))
         for stage, pct in result.latency.items():
@@ -825,19 +839,24 @@ def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool, categories: tuple
         if result.diff_against is not None:
             if result.diff:
                 for metric, d in result.diff.items():
-                    receipt.add(f"vs run {result.diff_against}: {metric}",
-                                _fmt_diff(d))
+                    receipt.add(f"vs run {result.diff_against}: {metric}", _fmt_diff(d))
             else:
                 receipt.add(f"vs run {result.diff_against}", "no question flipped")
         if replan:
             receipt.add("replan", f"{len(result.replan)} plan(s) the live model would change")
             for qid, stored, fresh in result.replan[:20]:
                 receipt.add(f"  {qid}", f"stored {stored}  ->  fresh {fresh}")
-        for failure in result.failures:
-            if gate and not sabotage:
-                receipt.fail(f"THRESHOLD: {failure}")
-            else:
-                receipt.add("below threshold", failure)
+        if write_baseline and not sabotage:
+            baseline = eval_retrieval.write_baseline(result)
+            receipt.add("baseline written", f"{eval_retrieval.BASELINE_PATH} (run {baseline['run_id']}, "
+                        f"{len(baseline['by_work'])} categories, {len(baseline['by_group'])} groups, "
+                        f"{len(baseline['guardrails_passing'])} guardrails passing)")
+        elif not sabotage and not categories:
+            for failure in eval_retrieval.ratchet(result, eval_retrieval.load_baseline()):
+                if gate:
+                    receipt.fail(f"RATCHET: {failure}")
+                else:
+                    receipt.add("below baseline", failure)
         if not sabotage and not categories:
             # A full run rewrites the dashboard so the page and the store never disagree.
             from raglab import dashboard
@@ -847,6 +866,20 @@ def eval_retrieval_cmd(label: str, gate: bool, sabotage: bool, categories: tuple
     except Exception as exc:
         receipt.fail(f"{type(exc).__name__}: {exc}")
     receipt.finish()
+
+
+def _fmt_rate(slot: dict) -> str:
+    """12/15  [0.60, 0.91]  failing: a, b  (unverified 1)"""
+    if not slot.get("n"):
+        return f"0/0  (unverified {slot.get('unverified', 0)})" if slot.get("unverified") else "0/0"
+    ci = slot.get("ci")
+    out = f"{slot['passed']}/{slot['n']}" + (f"  [{ci[0]:.2f}, {ci[1]:.2f}]" if ci else "")
+    if slot.get("failing"):
+        shown = slot["failing"][:8]
+        out += "  failing: " + ", ".join(shown) + (f" +{len(slot['failing']) - len(shown)}" if len(slot["failing"]) > len(shown) else "")
+    if slot.get("unverified"):
+        out += f"  (unverified {slot['unverified']})"
+    return out
 
 
 def _fmt_slice(metrics: dict) -> str:
@@ -1285,7 +1318,7 @@ def query_cmd(prompt: str, persona: str | None, member_id: str | None, no_plan: 
 
 @main.command("trace")
 @click.argument("question")
-@click.option("--persona", default=None, help="public | employee | care_team | member_services | appeals (omit = admin)")
+@click.option("--persona", default=None, help="public | employee | care_team | member_services | appeals | actuary (omit = admin)")
 @click.option("--module", default=None, help="ask | agent_assist | appeals_workbench | care_management | analyst_view (omit = unscoped)")
 @click.option("--member-id", default=None, help="The member the screen has open.")
 @click.option("--generate", is_flag=True, help="Also hand the composed payload to both answer models and print their answers.")
@@ -1299,10 +1332,12 @@ def trace_cmd(question: str, persona: str | None, module: str | None, member_id:
     from raglab import planner
     from raglab.mcp_server import IDENTITIES
 
-    role = IDENTITIES.get(persona or "", (None, None))[1] if persona else None
+    # The identity table maps a job persona to its document persona + warehouse
+    # role (actuary = public documents + the ACTUARY warehouse role).
+    doc_persona, role = IDENTITIES.get(persona, (persona, None)) if persona else (None, None)
     events: list = []
     with db.connect() as conn:
-        built = planner.compose(conn, question, planner.Caller(persona=persona, warehouse_role=role),
+        built = planner.compose(conn, question, planner.Caller(persona=doc_persona, warehouse_role=role),
                                 member_id=member_id, source="trace", module=module, trace=events)
     step = 0
     for ev in events:

@@ -27,22 +27,25 @@ def test_unknown_query_name_refused_with_catalog():
 
 
 def test_golden_compound_schema():
-    """Offline: compound golden entries carry a known identity and their
-    expected legs from the menu (the live execution runs in
-    test_two_lane_golden.py; routing accuracy in the eval)."""
+    """Offline: compound golden entries carry a known persona and expected
+    legs from the menu (execution and routing are scored by the eval on the
+    composed path). A member leg naming a query the catalog lacks is allowed
+    only when the item says so (`note`): that is the semantic-layer measure."""
+    from raglab import checks
     from raglab.ablation import load_golden
 
     compound = [g for g in load_golden() if g["category"] == "compound"]
     assert len(compound) >= 10
     for item in compound:
-        assert item["identity"] in IDENTITIES
-        assert 1 <= len(item["expected_legs"]) <= 3
-        for leg in item["expected_legs"]:
+        assert item.get("persona") in IDENTITIES, item["id"]
+        legs = [checks.normalize_leg(l) for l in item.get("expected_legs") or []]
+        assert len(legs) <= 3, item["id"]  # population items declare coverage, not legs
+        for leg in legs:
             assert leg["kind"] in ("doc_probe", "member_query")
-            if leg["kind"] == "member_query":
+            if leg["kind"] == "member_query" and not item.get("note"):
                 names = leg.get("query_name_any") or [leg["query_name"]]
-                assert set(names) <= set(snowlane.NAMED_QUERIES), names
-        assert item.get("required_evidence") or item.get("expect_status")
+                assert set(names) <= set(snowlane.NAMED_QUERIES), (item["id"], names)
+        assert checks.declared_checks(item) or item.get("sources"), item["id"]
 
 
 def test_public_identity_gets_no_member_data(monkeypatch):

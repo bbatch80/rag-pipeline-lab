@@ -461,6 +461,19 @@ def download_letters_cmd(rebuild_manifest: bool):
     receipt.finish()
 
 
+@main.command("serve")
+@click.option("--host", default="127.0.0.1", show_default=True)
+@click.option("--port", default=8000, show_default=True, type=int)
+@click.option("--reload", is_flag=True, help="Restart on source changes (development).")
+def serve_cmd(host: str, port: int, reload: bool):
+    """The web doorway (Phase 4): login sessions, the surfaces, the same pipeline as the CLI and MCP."""
+    import uvicorn
+
+    click.echo(f"raglab web on http://{host}:{port}  (identity: RAGLAB_DEMO_PASSWORD accounts; sessions signed with "
+               f"RAGLAB_SESSION_SECRET{'' if os.environ.get('RAGLAB_SESSION_SECRET') else ' — unset, per-process secret'})")
+    uvicorn.run("raglab.webapp:app", host=host, port=port, reload=reload, log_level="info")
+
+
 @main.command("seed-identity")
 @click.option("--password", default=None, help="Demo password for every seeded account (default: RAGLAB_DEMO_PASSWORD or 'raglab-demo').")
 def seed_identity_cmd(password: str | None):

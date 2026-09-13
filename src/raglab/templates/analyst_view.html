@@ -1,0 +1,16 @@
+{% extends "layout.html" %}
+{% block title %}Analyst View{% endblock %}
+{% block content %}
+<hgroup><h2>Analyst View</h2><p>Named aggregate queries, run as your warehouse role. No free text; masked columns are labeled.</p></hgroup>
+<form hx-post="/ui/analyst_view/run" hx-target="#result" hx-indicator="#busy" class="queryform">
+  <label>Query
+    <select name="query_name" hx-get="/ui/analyst_view/params" hx-target="#params" hx-trigger="change, load">
+      {% for q in menu %}<option value="{{ q }}">{{ q }}</option>{% endfor %}
+    </select>
+  </label>
+  <div id="params"></div>
+  <button type="submit">Run</button>
+</form>
+<p id="busy" class="htmx-indicator" aria-busy="true">Running as {{ me.warehouse_role }}…</p>
+<section id="result"></section>
+{% endblock %}

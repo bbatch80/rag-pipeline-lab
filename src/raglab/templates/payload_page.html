@@ -1,0 +1,12 @@
+{% extends "layout.html" %}
+{% block title %}Payload {{ rec.payload_id[:8] }}{% endblock %}
+{% block content %}
+<hgroup><h2>Payload <code>{{ rec.payload_id }}</code></h2><p>Reproduced from the disclosure log exactly as delivered.</p></hgroup>
+<article class="rows">
+  <header><strong>who saw what</strong></header>
+  <p>{{ rec.asked_at.replace("T", " ") }} · <strong>{{ rec.username or "—" }}</strong> as <code>{{ rec.persona }}</code> via {{ rec.source }} · status {{ rec.payload_status }}
+    · basis {{ rec.acl_basis | join(", ") }} · {{ rec.chunk_ids | length }} chunk{{ "" if rec.chunk_ids | length == 1 else "s" }}</p>
+  <p class="note">Warehouse pairing: every named query in this payload ran with Snowflake <code>QUERY_TAG = {{ rec.payload_id }}</code>, so <code>ACCESS_HISTORY</code> / <code>QUERY_HISTORY</code> join to this row on the tag.</p>
+</article>
+{{ rendered | safe }}
+{% endblock %}

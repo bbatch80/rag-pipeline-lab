@@ -168,7 +168,19 @@ def create_app(connect: Callable = db.connect, warehouse: context_services.Wareh
             return context_services.compose(conn, ident, question, member_id=member_id, module=module,
                                             source="web", warehouse=warehouse)
 
+    def member_data_for(ident: identity.Identity, query_name: str, surface: str, params: dict) -> dict:
+        """One named query from a surface's menu as the identity's warehouse
+        role — the grant and the menu check, then the same call the MCP tool
+        makes. The JSON route and the pages both come through here."""
+        module = _surface(ident, surface)
+        menu = planner.MODULES[module]["named_queries"]
+        if query_name not in menu:
+            raise HTTPException(status_code=400, detail={"error": f"{query_name!r} is not on the {surface!r} menu",
+                                                         "menu": list(menu)})
+        return context_services.member_data(ident, query_name, params, warehouse=warehouse)
+
     app.state.compose_for = compose_for
+    app.state.member_data_for = member_data_for
 
     # ---- the three context services (mirror the MCP tools one for one) ----
     @app.post("/query")
@@ -189,12 +201,7 @@ def create_app(connect: Callable = db.connect, warehouse: context_services.Wareh
     def member_data(body: MemberData, ident: identity.Identity = Depends(current_identity)) -> dict:
         """One named catalog query from a surface's menu, as the session's
         warehouse role; rows plus the columns the role's policies masked."""
-        module = _surface(ident, body.surface)
-        menu = planner.MODULES[module]["named_queries"]
-        if body.query_name not in menu:
-            raise HTTPException(status_code=400, detail={"error": f"{body.query_name!r} is not on the {body.surface!r} menu",
-                                                         "menu": list(menu)})
-        return context_services.member_data(ident, body.query_name, body.params, warehouse=warehouse)
+        return member_data_for(ident, body.query_name, body.surface, body.params)
 
     # ---- Console reads (admin only) ----
     @app.get("/status")

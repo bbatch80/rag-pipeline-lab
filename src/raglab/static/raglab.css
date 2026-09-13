@@ -40,4 +40,4 @@ nav form { margin: 0; }
 .planline .origin { display: block; }
 .payloadfoot { border-top: 1px dashed var(--pico-muted-border-color); padding-top: .4rem; margin-top: .5rem; }
 .payloadfoot code { font-size: .75rem; }
-.header-row { display: flex; gap: 1rem; flex-wrap: wrap; align-items: baseline; }
+.headerrow { border-left: .35rem solid #2f5d3a; }

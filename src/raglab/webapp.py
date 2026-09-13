@@ -159,16 +159,24 @@ def create_app(connect: Callable = db.connect, warehouse: context_services.Wareh
             raise HTTPException(status_code=400, detail=f"surface {surface!r} composes nothing")
         return module
 
+    def compose_for(ident: identity.Identity, question: str, surface: str, member_id: str | None) -> dict:
+        """One question from a surface → the composed payload: the grant, the
+        surface's module, then the same compose the MCP tool runs. The JSON
+        route and the pages both come through here."""
+        module = _surface(ident, surface)
+        with app.state.connect() as conn:
+            return context_services.compose(conn, ident, question, member_id=member_id, module=module,
+                                            source="web", warehouse=warehouse)
+
+    app.state.compose_for = compose_for
+
     # ---- the three context services (mirror the MCP tools one for one) ----
     @app.post("/query")
-    def query(body: Query, request: Request, ident: identity.Identity = Depends(current_identity)) -> dict:
+    def query(body: Query, ident: identity.Identity = Depends(current_identity)) -> dict:
         """One question from a surface → the composed payload (spec 1.1.0).
         The platform plans the legs within the surface's module and runs
         every leg as the session identity."""
-        module = _surface(ident, body.surface)
-        with request.app.state.connect() as conn:
-            return context_services.compose(conn, ident, body.question, member_id=body.member_id, module=module,
-                                            source="web", warehouse=warehouse)
+        return compose_for(ident, body.question, body.surface, body.member_id)
 
     @app.post("/search")
     def search(body: Search, request: Request, ident: identity.Identity = Depends(current_identity)) -> dict:
@@ -220,6 +228,9 @@ def create_app(connect: Callable = db.connect, warehouse: context_services.Wareh
         ident = require_surface(surface)(current_identity(request))
         return {"surface": surface, "module": module_for(surface, ident.group)}
 
+    from raglab import ui
+
+    ui.mount(app)
     return app
 
 

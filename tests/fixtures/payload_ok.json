@@ -1,0 +1,205 @@
+{
+ "spec_version": "1.1.0",
+ "query": "What is the calendar year deductible for the High Option in 2026?",
+ "status": "ok",
+ "confidence": 0.9942,
+ "retrieved_at": "2026-09-13T23:08:30+00:00",
+ "router": {
+  "years": [
+   2026
+  ],
+  "plan_codes": [
+   "71-006",
+   "71-021"
+  ],
+  "as_of": null,
+  "plan_from_enrollment": false
+ },
+ "chunks": [
+  {
+   "text": "This chunk is from GEHA FEHB 71-006 (High, Standard) 2026, section 'High Option'.\n\nHigh Option\n\nIn-network: Under a Self Only enrollment, the deductible is considered satisfied, and benefits are payable for you when your covered expenses applied to the calendar year deductible for your enrollment re \u2026",
+   "source": {
+    "title": "GEHA FEHB 71-006 (High, Standard) 2026",
+    "path": "data/raw/2026/71-006.pdf",
+    "plan_code": "71-006",
+    "year": 2026,
+    "pages": [
+     28
+    ],
+    "section": "High Option",
+    "content_hash": "5af5df7a3c15a22187441014399daa5387f8a39ef64ad488451eb2dc921a060c",
+    "record": {},
+    "doc_type": "brochure"
+   },
+   "acl_basis": "public",
+   "scores": {
+    "rrf": 0.0328,
+    "rerank": 0.9942
+   },
+   "leg": "Brochure search for 2026 High Option deductible"
+  },
+  {
+   "text": "This chunk is from GEHA PSHB 71-021 (High, Standard) 2026, section 'Benefits Description'.\n\nAmbulance (cont.)\n\n2026 G.E.H.A Benefit Plan Government Employees Health Association\n\n74\n\nHigh and Standard Option Section 5(c)\n\nSection 5(d). Emergency Services/Accidents\n\nImportant things you should keep in \u2026",
+   "source": {
+    "title": "GEHA PSHB 71-021 (High, Standard) 2026",
+    "path": "data/raw/2026/71-021.pdf",
+    "plan_code": "71-021",
+    "year": 2026,
+    "pages": [
+     76,
+     77
+    ],
+    "section": "Benefits Description",
+    "content_hash": "5a81341c60e0f3ce8440310cf65e0f52f42de036c5ab465eb73e1e8f8f08f136",
+    "record": {},
+    "doc_type": "brochure"
+   },
+   "acl_basis": "public",
+   "scores": {
+    "rrf": 0.0237,
+    "rerank": 0.994
+   },
+   "leg": "Brochure search for 2026 High Option deductible"
+  },
+  {
+   "text": "This chunk is from GEHA PSHB 71-021 (High, Standard) 2026, section 'High Option'.\n\nHigh Option\n\nIn-network: Under a Self Only enrollment, the deductible is considered satisfied, and benefits are payable for you when your covered expenses applied to the calendar year deductible for your enrollment re \u2026",
+   "source": {
+    "title": "GEHA PSHB 71-021 (High, Standard) 2026",
+    "path": "data/raw/2026/71-021.pdf",
+    "plan_code": "71-021",
+    "year": 2026,
+    "pages": [
+     27
+    ],
+    "section": "High Option",
+    "content_hash": "5a81341c60e0f3ce8440310cf65e0f52f42de036c5ab465eb73e1e8f8f08f136",
+    "record": {},
+    "doc_type": "brochure"
+   },
+   "acl_basis": "public",
+   "scores": {
+    "rrf": 0.0328,
+    "rerank": 0.9934
+   },
+   "leg": "Brochure search for 2026 High Option deductible"
+  }
+ ],
+ "plan": {
+  "shape": "simple",
+  "origin": "model",
+  "model": "claude-haiku-4-5-20251001",
+  "module": null,
+  "widened": false,
+  "fallback_reason": null,
+  "legs": [
+   {
+    "name": "Brochure search for 2026 High Option deductible",
+    "kind": "doc_probe",
+    "text": "calendar year deductible High Option 2026",
+    "sources": [
+     "brochure"
+    ],
+    "query_name": null,
+    "slots": [],
+    "params": {},
+    "required": true
+   },
+   {
+    "name": "member_claims_summary",
+    "kind": "member_query",
+    "query_name": "member_claims_summary",
+    "params": {
+     "member_id": "M767394984"
+    }
+   }
+  ]
+ },
+ "sub_results": [
+  {
+   "leg": "Brochure search for 2026 High Option deductible",
+   "status": "ok",
+   "confidence": 0.9942,
+   "router": {
+    "years": [
+     2026
+    ],
+    "plan_codes": [
+     "71-006",
+     "71-021"
+    ],
+    "as_of": null,
+    "plan_from_enrollment": false
+   },
+   "chunk_indexes": [
+    0,
+    1,
+    2
+   ],
+   "widened": false,
+   "reason": null
+  }
+ ],
+ "warehouse_results": [
+  {
+   "leg": "member_claims_summary",
+   "status": "ok",
+   "query_name": "member_claims_summary",
+   "meaning": "One row per member: claim-line count, total cost, payer coverage, date span.",
+   "columns": [
+    "MEMBER_ID",
+    "CLAIM_LINES",
+    "TOTAL_COST",
+    "FIRST_SERVICE"
+   ],
+   "rows": [
+    [
+     "M767394984",
+     35,
+     null,
+     "2019-03-02"
+    ]
+   ],
+   "row_count": 1,
+   "masked_columns": [
+    "TOTAL_COST"
+   ]
+  }
+ ],
+ "missing": [],
+ "subject": null,
+ "unresolved_identifiers": [],
+ "as_of_defaulted": false,
+ "coverage": {
+  "field": "plan_code",
+  "asked": "High Option",
+  "level": "option",
+  "keys": [
+   "71-006",
+   "71-021"
+  ],
+  "in_corpus": [
+   "71-006",
+   "71-021"
+  ],
+  "with_evidence": [
+   "71-006",
+   "71-021"
+  ],
+  "missing_from_corpus": [],
+  "not_offered": []
+ },
+ "search": {
+  "readings": 2,
+  "candidates": 201,
+  "trimmed": 0,
+  "cap": 600
+ },
+ "payload_id": "92fd2566-864a-41bf-892b-ee5b17c59ebe",
+ "persona": "public",
+ "member_context": null,
+ "record_context": {},
+ "timings": {
+  "total": 1234.5,
+  "rerank": 900.0
+ }
+}

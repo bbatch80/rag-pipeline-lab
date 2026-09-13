@@ -1,0 +1,81 @@
+{# The render contract (Phase 5 decision 3), fixed order on every surface:
+   status banner → evidence → plan line → footer. The template receives the
+   payload dict and nothing else. #}
+{% set p = payload %}
+{% if p.status == "out_of_scope" %}
+<p class="banner banner-scope"><strong>Outside this platform's scope.</strong> {{ p.boundary_response }}</p>
+{% elif p.status == "insufficient_evidence" %}
+<p class="banner banner-insufficient"><strong>Insufficient evidence</strong>{% if p.missing %} — missing: {{ p.missing | join(", ") }}{% endif %}.
+  {% if p.unresolved_identifiers %}Unresolved identifiers: {{ p.unresolved_identifiers | join(", ") }}.{% endif %}</p>
+{% elif p.status == "not_permitted" %}
+<p class="banner banner-scope"><strong>Not available to your role.</strong></p>
+{% endif %}
+
+{% if p.coverage and (p.coverage.missing_from_corpus or p.coverage.not_offered) %}
+<p class="note">Coverage of {{ p.coverage.asked }}:
+  {% if p.coverage.missing_from_corpus %}missing from the corpus: {{ p.coverage.missing_from_corpus | join(", ") }}. {% endif %}
+  {% if p.coverage.not_offered %}not offered: {{ p.coverage.not_offered | join(", ") }}.{% endif %}</p>
+{% endif %}
+
+{% if p.status != "out_of_scope" %}
+<section class="evidence">
+  {% for c in p.chunks %}
+  <details class="chunk" {% if loop.index <= 3 %}open{% endif %}>
+    <summary>
+      <span class="title">{{ c.source.title }}</span>
+      {% if c.source.pages %}<span class="chip">p. {{ c.source.pages | join(", ") if c.source.pages is iterable and c.source.pages is not string else c.source.pages }}</span>{% endif %}
+      {% if c.source.section %}<span class="chip chip-muted">{{ c.source.section }}</span>{% endif %}
+      {% if c.source.record %}<span class="chip chip-record">{{ c.source.record.kind if c.source.record.kind else "record" }}{% if c.source.record.id %} {{ c.source.record.id }}{% endif %}</span>{% endif %}
+      <span class="chip chip-acl" title="the entitlement that admitted this chunk">{{ c.acl_basis }}</span>
+      {% if c.scores and c.scores.rerank is not none %}<span class="score">{{ "%.2f" | format(c.scores.rerank) }}</span>{% endif %}
+    </summary>
+    <pre class="chunktext">{{ c.text }}</pre>
+  </details>
+  {% endfor %}
+
+  {% for w in p.warehouse_results %}
+  <article class="rows">
+    <header><strong>{{ w.query_name or w.leg }}</strong>
+      {% if w.status != "ok" %}<span class="chip chip-muted">{{ w.status }}{% if w.reason %}: {{ w.reason }}{% endif %}</span>{% endif %}
+      {% if w.masked_columns %}<span class="chip chip-masked" title="policy-masked for your role">masked: {{ w.masked_columns | join(", ") }}</span>{% endif %}
+      {% if w.row_count is defined %}<small>{{ w.row_count }} row{{ "" if w.row_count == 1 else "s" }}</small>{% endif %}
+    </header>
+    {% if w.meaning %}<p><small>{{ w.meaning }}</small></p>{% endif %}
+    {% if w.rows %}
+    <div class="scroll"><table>
+      <thead><tr>{% for col in w.columns %}<th {% if col in w.masked_columns %}class="masked"{% endif %}>{{ col }}</th>{% endfor %}</tr></thead>
+      <tbody>{% for row in w.rows %}<tr>{% for v in row %}<td {% if w.columns[loop.index0] in w.masked_columns %}class="masked"{% endif %}>{% if v is none %}<span class="null">{{ "masked" if w.columns[loop.index0] in w.masked_columns else "—" }}</span>{% else %}{{ v }}{% endif %}</td>{% endfor %}</tr>{% endfor %}</tbody>
+    </table></div>
+    {% endif %}
+  </article>
+  {% endfor %}
+
+  {% if not p.chunks and not p.warehouse_results and p.status == "ok" %}<p class="note">No evidence in the payload.</p>{% endif %}
+</section>
+
+<p class="planline">
+  {% if p.plan %}looked in:
+    {% for leg in p.plan.legs %}
+      {% set found = leg_found[loop.index0] %}
+      <span class="leg {{ 'leg-found' if found else 'leg-empty' }}">{{ leg.name or leg.query_name or (leg.sources | join('+')) }} ({{ "found" if found else "nothing" }})</span>{% if not loop.last %} · {% endif %}
+    {% endfor %}
+    {% if p.plan.origin %}<small class="origin">plan by {{ p.plan.origin }}{% if p.plan.fallback_reason %} — {{ p.plan.fallback_reason }}{% endif %}{% if p.plan.widened %} · widened once{% endif %}</small>{% endif %}
+  {% elif p.router %}looked in: {{ p.router.years | join(", ") }}{% if p.router.plan_codes %} · plans {{ p.router.plan_codes | join(", ") }}{% endif %}{% if p.router.as_of %} · as of {{ p.router.as_of }}{% endif %}
+  {% endif %}
+  {% if p.member_context %} · member {{ p.member_context }}{% endif %}
+</p>
+{% endif %}
+
+<footer class="payloadfoot">
+  <small>payload <code>{{ p.payload_id }}</code>{% if console %} · <a href="/console/payload/{{ p.payload_id }}">audit</a>{% endif %}
+  · {{ p.persona }} · spec {{ p.spec_version }}{% if p.confidence is not none %} · confidence {{ "%.2f" | format(p.confidence) }}{% endif %}
+  {% if p.timings %} · {{ "%.0f" | format(p.timings.total) }} ms{% if p.timings.rerank %} (rerank {{ "%.0f" | format(p.timings.rerank) }}){% endif %}{% endif %}</small>
+</footer>
+
+{% if draft_url and p.status == "ok" and (p.chunks or p.warehouse_results) %}
+<div class="draft">
+  <button class="outline" hx-post="{{ draft_url }}" hx-vals='{"payload_id": "{{ p.payload_id }}"}' hx-target="#draft-{{ p.payload_id }}" hx-indicator="#draft-busy-{{ p.payload_id }}">Draft an answer from this evidence</button>
+  <span id="draft-busy-{{ p.payload_id }}" class="htmx-indicator" aria-busy="true"></span>
+  <div id="draft-{{ p.payload_id }}"></div>
+</div>
+{% endif %}

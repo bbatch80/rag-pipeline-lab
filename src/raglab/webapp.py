@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from starlette.middleware.sessions import SessionMiddleware
 
-from raglab import context_services, db, identity, planner
+from raglab import console, context_services, db, identity, planner
 
 SESSION_SECRET_ENV = "RAGLAB_SESSION_SECRET"
 SESSION_KEY = "username"
@@ -187,6 +187,28 @@ def create_app(connect: Callable = db.connect, warehouse: context_services.Wareh
             raise HTTPException(status_code=400, detail={"error": f"{body.query_name!r} is not on the {body.surface!r} menu",
                                                          "menu": list(menu)})
         return context_services.member_data(ident, body.query_name, body.params, warehouse=warehouse)
+
+    # ---- Console reads (admin only) ----
+    @app.get("/status")
+    def status(request: Request, ident: identity.Identity = Depends(require_surface("console"))) -> dict:
+        with request.app.state.connect() as conn:
+            return console.status(conn)
+
+    @app.get("/audit")
+    def audit(request: Request, persona: str | None = None, username: str | None = None,
+              document: str | None = None, limit: int = 20,
+              ident: identity.Identity = Depends(require_surface("console"))) -> dict:
+        with request.app.state.connect() as conn:
+            return console.audit(conn, persona=persona, username=username, document=document, limit=min(limit, 200))
+
+    @app.get("/payload/{payload_id}")
+    def payload(payload_id: str, request: Request,
+                ident: identity.Identity = Depends(require_surface("console"))) -> dict:
+        with request.app.state.connect() as conn:
+            rec = console.payload(conn, payload_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail=f"no payload {payload_id!r} in the disclosure log")
+        return rec
 
     @app.get("/surfaces/{surface}")
     def surface_check(surface: str, request: Request) -> dict:

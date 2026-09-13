@@ -2,8 +2,9 @@
 Templates receive a payload dict and nothing else — no database, no
 retrieval or entitlement logic — so `render_payload` can be exercised
 from a fixture payload with nothing connected. The render contract is
-fixed: status banner → evidence → plan line → footer; a draft answer is
-optional, below the evidence, and never shown when evidence is missing.
+fixed: status banner → evidence → plan line → footer. The page returns
+the payload and nothing else — no generated answer (user ruling
+2026-09-13; a draft answer is a possible later version).
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from raglab import console, identity
+from raglab import identity
 
 TEMPLATES = Path(__file__).parent / "templates"
 STATIC = Path(__file__).parent / "static"
@@ -47,14 +48,10 @@ def leg_outcomes(payload: dict) -> list[bool]:
     return [bool(found.get(leg.get("name"))) for leg in legs]
 
 
-def render_payload(payload: dict, *, draft_url: str | None = None, console_links: bool = False) -> str:
+def render_payload(payload: dict, *, console_links: bool = False) -> str:
     """The render contract over one payload — pure: no database, no request."""
     return env.get_template("partials/payload.html").render(
-        payload=payload, leg_found=leg_outcomes(payload), draft_url=draft_url, console=console_links)
-
-
-def render_draft(text: str, model: str, payload_id: str) -> str:
-    return env.get_template("partials/draft.html").render(text=text, model=model, payload_id=payload_id)
+        payload=payload, leg_found=leg_outcomes(payload), console=console_links)
 
 
 def _page(name: str, request: Request, me: dict | None, **ctx) -> HTMLResponse:
@@ -111,24 +108,4 @@ def mount(app: FastAPI) -> None:
     @app.post("/ui/ask", response_class=HTMLResponse)
     def ask_fragment(question: str = Form(...), ident: identity.Identity = Depends(require_surface("ask"))):
         payload = app.state.compose_for(ident, question.strip(), "ask", None)
-        return HTMLResponse(render_payload(payload, draft_url="/ui/draft", console_links="console" in ident.surfaces))
-
-    @app.post("/ui/draft", response_class=HTMLResponse)
-    def draft_fragment(payload_id: str = Form(...), ident: identity.Identity = Depends(current_identity)):
-        """The optional draft: generated from the payload exactly as stored in
-        the disclosure log — the user's own payload, or any for the admin —
-        and never for a payload without evidence."""
-        with app.state.connect() as conn:
-            rec = console.payload(conn, payload_id)
-        if rec is None or (rec["username"] != ident.username and "console" not in ident.surfaces):
-            raise HTTPException(status_code=404, detail="no such payload for this session")
-        payload = rec["payload"]
-        if payload.get("status") != "ok" or not (payload.get("chunks") or payload.get("warehouse_results")):
-            raise HTTPException(status_code=409, detail="no draft without evidence")
-        generator = app.state.generator()
-        return HTMLResponse(render_draft(generator.generate(payload), generator.name, payload_id))
-
-    if not hasattr(app.state, "generator"):
-        from raglab.generators import ClaudeGenerator
-
-        app.state.generator = ClaudeGenerator
+        return HTMLResponse(render_payload(payload, console_links="console" in ident.surfaces))

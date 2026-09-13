@@ -71,11 +71,3 @@
   · {{ p.persona }} · spec {{ p.spec_version }}{% if p.confidence is not none %} · confidence {{ "%.2f" | format(p.confidence) }}{% endif %}
   {% if p.timings %} · {{ "%.0f" | format(p.timings.total) }} ms{% if p.timings.rerank %} (rerank {{ "%.0f" | format(p.timings.rerank) }}){% endif %}{% endif %}</small>
 </footer>
-
-{% if draft_url and p.status == "ok" and (p.chunks or p.warehouse_results) %}
-<div class="draft">
-  <button class="outline" hx-post="{{ draft_url }}" hx-vals='{"payload_id": "{{ p.payload_id }}"}' hx-target="#draft-{{ p.payload_id }}" hx-indicator="#draft-busy-{{ p.payload_id }}">Draft an answer from this evidence</button>
-  <span id="draft-busy-{{ p.payload_id }}" class="htmx-indicator" aria-busy="true"></span>
-  <div id="draft-{{ p.payload_id }}"></div>
-</div>
-{% endif %}

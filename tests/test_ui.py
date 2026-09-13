@@ -2,7 +2,7 @@
 render contract in its fixed order for every status, from a fixture
 payload with no database connected; then the pages over the Phase 4
 identity — the portal shows the granted tiles, Ask runs the two-window
-flagship, the draft is optional and below the evidence."""
+flagship. The page returns the payload and nothing else."""
 
 import json
 import re
@@ -30,10 +30,11 @@ def _order(html: str, *markers: str) -> list[int]:
 # ---------------------------------------------------------------- no database
 
 def test_ok_renders_evidence_then_plan_line_then_footer_and_no_banner():
-    html = ui.render_payload(FIXTURE, draft_url="/ui/draft")
+    html = ui.render_payload(FIXTURE)
     assert "banner" not in html
-    evidence, plan, foot, draft = _order(html, 'class="evidence"', 'class="planline"', 'class="payloadfoot"', 'class="draft"')
-    assert evidence < plan < foot < draft
+    evidence, plan, foot = _order(html, 'class="evidence"', 'class="planline"', 'class="payloadfoot"')
+    assert evidence < plan < foot
+    assert "draft" not in html.lower()  # the page returns the payload and nothing else
     assert FIXTURE["chunks"][0]["source"]["title"] in html and FIXTURE["payload_id"] in html
     assert "chip-acl" in html and "public" in html
     assert "1234 ms" in html and "(rerank 900)" in html
@@ -45,23 +46,22 @@ def test_ok_renders_evidence_then_plan_line_then_footer_and_no_banner():
     assert "member_claims_summary (found)" in html and "plan by model" in html
 
 
-def test_insufficient_evidence_banner_first_and_no_draft():
+def test_insufficient_evidence_banner_first():
     payload = {**FIXTURE, "status": "insufficient_evidence", "missing": ["member_claims_summary"], "warehouse_results": [],
                "unresolved_identifiers": ["M999900004"]}
-    html = ui.render_payload(payload, draft_url="/ui/draft")
+    html = ui.render_payload(payload)
     banner, evidence = _order(html, "banner-insufficient", 'class="evidence"')
     assert banner < evidence
     assert "missing: member_claims_summary" in html and "Unresolved identifiers: M999900004" in html
-    assert 'class="draft"' not in html  # never a draft without evidence
     assert "member_claims_summary (nothing)" in html
 
 
 def test_out_of_scope_shows_the_boundary_sentence_and_no_evidence():
     payload = {**FIXTURE, "status": "out_of_scope", "chunks": [], "warehouse_results": [], "plan": None,
                "boundary_response": "This platform answers questions about GEHA plans only."}
-    html = ui.render_payload(payload, draft_url="/ui/draft")
+    html = ui.render_payload(payload)
     assert "banner-scope" in html and "GEHA plans only" in html
-    assert 'class="evidence"' not in html and 'class="planline"' not in html and 'class="draft"' not in html
+    assert 'class="evidence"' not in html and 'class="planline"' not in html
     assert 'class="payloadfoot"' in html  # the payload id is always shown
 
 
@@ -84,13 +84,6 @@ def test_leg_outcomes_pair_legs_with_their_results():
 
 # ---------------------------------------------------------------- the pages
 
-class _Generator:
-    name = "fake-generator"
-
-    def generate(self, payload):
-        return f"Drafted from {len(payload['chunks'])} chunks of payload {payload['payload_id'][:8]}."
-
-
 @pytest.fixture
 def app(db, monkeypatch):
     identity.seed(db, password=PASSWORD)
@@ -102,9 +95,7 @@ def app(db, monkeypatch):
     monkeypatch.setattr(context_services, "compose",
                         lambda conn, ident, question, member_id=None, module=None, source="web", warehouse=None:
                         context_services.search(conn, ident, question, member_id=member_id, source=source))
-    app = webapp.create_app(connect=lambda: _Lease(_NoCommit(db)), warehouse=context_services.Warehouse(connect=None))
-    app.state.generator = _Generator
-    return app
+    return webapp.create_app(connect=lambda: _Lease(_NoCommit(db)), warehouse=context_services.Warehouse(connect=None))
 
 
 def _session(app, username):
@@ -143,10 +134,6 @@ def test_two_window_flagship_in_ask(app, db):
     assert "doc-employee" in rep_html and "doc-care_team" not in rep_html
     assert "doc-employee" not in cm_html and "doc-member_services" not in cm_html
     assert "doc-public" in rep_html and "doc-public" in cm_html
-    # the draft is offered below the evidence, drawn from the stored payload, and only for the session's own payload
-    assert rep_html.index('class="evidence"') < rep_html.index('class="draft"')
-    draft = rep.post("/ui/draft", data={"payload_id": ids[0]})
-    assert draft.status_code == 200 and "Drafted from" in draft.text and "fake-generator" in draft.text
-    assert cm.post("/ui/draft", data={"payload_id": ids[0]}).status_code == 404
+    assert rep.post("/ui/draft", data={"payload_id": ids[0]}).status_code == 404  # no generated answer, by ruling
     assert rep.post("/ui/logout", follow_redirects=False).headers["location"] == "/login"
     assert rep.get("/ask", follow_redirects=False).status_code == 401

@@ -118,6 +118,9 @@ GROUPS: dict[str, Group] = {
         Group(14, "unanswerable", "A question the corpus cannot answer is declared so", "gate correct", "guardrail"),
         Group(15, "version_negative", "A superseded version never outranks the current one", "version clean", "guardrail"),
         Group(16, "adversarial", "Instructions hidden in a question do not change the payload", "adversarial ok", "guardrail"),
+        Group(17, "clinical_note", "One member's clinical record (a care-team note)", "hit@5 · set coverage", "retrieval"),
+        Group(18, "cross_plan", "Two plan options in one year, one value each (the option-coverage rule)",
+              "values per side", "retrieval"),
     )
 }
 
@@ -128,14 +131,21 @@ GROUP_BANDS = (
 )
 
 # The metrics that decide whether one item passes. An item passes when every
-# gate metric recorded for it is 1.0; a metric that was SKIPPED (no warehouse
-# credentials) never counts as a pass — the item is reported as unverified in
-# that run and the dashboard reads it from the latest run that verified it.
+# gate metric recorded for it is 1.0. Every declared check (`check_<field>`,
+# see raglab.checks) is a gate metric; the legacy names stay for stored runs.
+# A metric that was SKIPPED (no warehouse credentials) never counts as a pass
+# — the item is reported as unverified in that run and the dashboard reads
+# it from the latest run that verified it.
 GATE_METRICS = frozenset({
     "hit@5", "routing_accuracy", "complete_recall", "deny_clean", "allow_answered",
     "scope_clean", "adversarial_ok", "version_clean", "gate_correct",
 })
-SKIP_MARKERS = frozenset({"complete_recall_skipped"})
+GATE_PREFIX = "check_"
+SKIP_MARKERS = frozenset({"complete_recall_skipped", "warehouse_skipped"})
+
+
+def is_gate_metric(metric: str) -> bool:
+    return metric in GATE_METRICS or metric.startswith(GATE_PREFIX)
 
 # Open defects, each pinned to the work category it blocks. Closing a defect
 # means removing its line in the PR that fixes it.
@@ -161,7 +171,7 @@ def item_verdicts(scores: list[tuple]) -> dict[str, tuple[bool | None, list[str]
     gates: dict[str, list[float]] = {}
     skipped: dict[str, list[str]] = {}
     for qid, _cat, metric, value, _detail in scores:
-        if metric in GATE_METRICS:
+        if is_gate_metric(metric):
             gates.setdefault(qid, []).append(float(value))
         elif metric in SKIP_MARKERS:
             skipped.setdefault(qid, []).append(metric)

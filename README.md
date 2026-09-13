@@ -28,7 +28,7 @@ Iterating (nothing verified before a merge changes; these only shorten the loop)
 ```sh
 uv run pytest -m "not slow"                          # model-loading, network, and eval tests carry the slow marker
 uv run raglab eval-retrieval --category call_note    # one golden slice; partial runs never gate
-uv run raglab explain-golden C6                      # did the expected chunk reach the pool, where did it rerank, what text was scored
+uv run raglab explain-golden factual-01              # did the expected chunk reach the pool, where did it rerank, what text was scored
 ```
 
 Query embeddings are cached by exact text (`query_embeddings`), so repeat
@@ -86,9 +86,10 @@ reranking) → cross-encoder reranker (BAAI/bge-reranker-base, local). Change
 questions are searched per plan year: the latest year with the question as
 asked, prior years with a year-neutral form of it, and each year's candidates
 are reranked against that year's query.
-Measured as hit@5 on the 29 answerable questions of a 43-question golden set
-with human-verified source labels (`eval/golden.jsonl`); reproduce with
-`raglab ablation`, inspect any query with `raglab explain "<query>"`.
+Measured as hit@5 on the 29 answerable questions of the v1 43-question golden
+set with human-verified source labels (the current 147-question set is
+described under Evaluation experiments); reproduce with `raglab ablation`,
+inspect any query with `raglab explain "<query>"`.
 
 | arm | hit@5 (v1: Postgres FTS, rare lexemes) | hit@5 (BM25) |
 |---|---:|---:|
@@ -245,25 +246,40 @@ warehouse under the identity's role rather than by the retrieval eval.
 
 ## Evaluation experiments
 
-Deterministic retrieval suite (`raglab eval-retrieval`) over the golden set,
-writing to a metrics store; discrimination-checked (a sabotaged retriever
-trips the gate thresholds). Rebuild equivalence verified: wipe + re-ingest
-reproduces baseline metrics exactly.
+Deterministic suite (`raglab eval-retrieval`) over a 147-question golden set
+(`eval/golden.jsonl`) spanning ten work categories (lookup, explanation with
+exceptions, bounded summarization, comparison, linked discoveries,
+comprehensive identification, quantitative, temporal, diagnosis evidence,
+guardrails) and eighteen retrieval / composition / guardrail groups. Every
+question runs through the composed path as its own identity (persona +
+warehouse role, member on the screen or typed in the question) and is scored
+by the checks it declares: the values each side must carry, the documents of
+a bounded set, the legs a plan must run, the rows and masked columns a
+warehouse query must return, one evidence chunk per plan of a population,
+versions that must stay out, the route's years and time points, a persona
+wall served and denied. A question that declares nothing is scored by hit@5
+on its labelled sources; hit@5, precision@5 and source coverage are reported
+for every question that lists sources. Discrimination-checked: a sabotaged
+retriever collapses hit@5.
 
 Every run records the git commit and a corpus hash (digest over the
-documents' content hashes), reports each 0/1 metric with a 95% Wilson
-interval and question count — overall, per question category, and per
-expected source — and diffs itself against the previous run, naming the
-questions that flipped (`raglab eval-diff A B` for any two runs). Per-stage
-latency (embed, search, rerank, total) is recorded per question and
-summarized as p50/p95 against a stated sub-second budget, displayed rather
-than gated. `raglab recall-rls` measures HNSW recall under row-level
-security per persona against an exact scan run as the same persona. The
-gate runs in CI on a self-hosted runner beside the fully indexed database.
-Year-over-year source coverage is ratchet-gated at its reproduced baseline
-(0.688): the prior-year page reaches the candidate pool, but change-worded
-questions score the prior-year brochure's own "changes" section higher at
-rerank; the floor rises when that is fixed.
+documents' content hashes); reports pass rate per category and per group
+with 95% Wilson intervals and the failing question ids; four payload-health
+numbers (top-two tie rate and median margin, duplicate-chunk share,
+needless leg splits, index-page seats); per-stage latency p50/p95 against a
+stated budget, displayed rather than gated; and a paired diff against the
+previous run naming the questions that flipped (`raglab eval-diff A B` for
+any two runs). The CI gate is a ratchet against a stored baseline
+(`eval/baseline.json`, written with `--write-baseline`): a change fails when
+any category's or group's pass rate falls below the baseline or any
+guardrail question that passed at the baseline fails; a fix that raises a
+rate raises the floor. The baseline stores every question's verdict, and a
+run is compared over the questions it could verify — CI holds no warehouse
+credentials, so the warehouse-backed questions are reported as unverified
+there and judged against the baseline's verdicts on the rest. `raglab recall-rls` measures HNSW recall under
+row-level security per persona against an exact scan run as the same
+persona. The gate runs in CI on a self-hosted runner beside the fully
+indexed database.
 
 | experiment | arm | hit@5 | yoy coverage | conclusion |
 |---|---|---:|---:|---|
@@ -388,7 +404,7 @@ given document.
 ```sh
 uv run raglab query "<question>" --persona care_team   # full context payload JSON
 uv run raglab explain "<question>" --persona employee --generate
-uv run raglab explain-golden C6             # a golden item: pool, rerank position, scored text
+uv run raglab explain-golden factual-01     # a golden item: pool, rerank position, scored text
 uv run raglab audit --document "<title>"    # lineage: payloads that used it
 uv run raglab audit --persona public        # disclosure: what a role saw
 ```
@@ -556,10 +572,10 @@ the unauthorized persona's results (it may abstain, or answer from what it
 is entitled to) and the authorized persona must answer citing the expected
 document, run through the full persona pipeline (RLS, vault translation,
 disclosure). Scope-negative questions assert member scoping: a question
-asked in one member's context returns no other member's records.
-`deny_clean`, `scope_clean`, `allow_answered`, and
-retrieval `hit@5` gate CI; the entitlement metrics are thresholded at 1.0 —
-a single leak fails the build. The gate job runs on a self-hosted runner
+asked in one member's context returns no other member's records. Every
+guardrail question is ratcheted individually: one that passed at the
+baseline may not fail — a single new leak fails the build, whatever the
+group's rate does. The gate job runs on a self-hosted runner
 beside the loaded database (no corpus or keys on hosted runners) on pull
 requests only — a squash merge re-runs CI on the tree the PR gate just
 verified, so push-to-main runs only the fast `test` job; `main` is

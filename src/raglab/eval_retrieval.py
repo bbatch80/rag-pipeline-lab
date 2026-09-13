@@ -1,92 +1,68 @@
-"""Tier-1 evaluation: deterministic retrieval metrics over the golden set.
+"""Tier-1 evaluation: deterministic checks over the golden set, on the
+composed path.
 
-Free to run, reproducible, writes to the metrics tables, and (with gate
-thresholds) fails loudly on regression — this is what CI enforces and what
-every A/B experiment is decided on.
+Every golden item runs through `planner.compose` as its own identity
+(persona + warehouse role, member on the screen or typed in the question)
+and is scored by the checks it declares — `expected_values`, `expected_set`,
+`expected_legs`, `expected_rows`, `expected_coverage`, `exclude_sources`,
+... (see `raglab.checks`). An item that declares nothing falls back to
+hit@5 on its `sources`. hit@5, precision@5 and source_coverage are reported
+for every item that lists sources, whether or not they gate.
 
-Metrics per answerable question:
-- hit@5            — any relevant chunk in the post-rerank top 5
-- precision@5      — fraction of the post-rerank top 5 that is relevant
-- source_coverage  — fraction of expected sources represented in top 10
-                     (YoY questions need BOTH years; this catches one-year
-                     shortcuts)
-- abstained        — whether the funnel wrongly abstained (must be 0)
+Guardrail shapes: a persona wall composes the question as the entitled
+persona (must answer and cite) and as each denied persona (must hold none of
+the protected documents); an adversarial item composes the question and its
+control and compares the route; an unanswerable item expects a status or a
+trigger (scope gate, unresolved or invalid identifier).
 
-Per unanswerable question:
-- gate_correct     — scope gate fired iff expected
-- abstained        — for low-confidence-type questions, funnel must abstain
+Every run writes one row per item per check to `eval_scores`, an
+`item_pass` verdict per item, and a `payload_health` row (top-two gap,
+duplicates, index seats, needless leg splits). The summary reports pass
+rate per work category and per group with Wilson intervals, the health
+numbers, and a paired diff against the previous run.
 
-Per persona_negative question (entitlement assertions, run through the full
-persona pipeline — RLS, vault translation, disclosure — in both directions):
-- deny_clean       — the protected document is absent from the unauthorized
-                     persona's results (it may abstain, or answer from what
-                     it is entitled to)
-- allow_answered   — the authorized persona must get status ok
-- allow_hit        — the authorized answer cites the expected document
+The gate is a RATCHET against `eval/baseline.json` (`ratchet`): a run fails
+when any category's or group's pass rate falls below the stored rate, or
+when a guardrail item that passed at the baseline fails. Nothing gates on
+an absolute bar. `write_baseline` stores a run as the reference.
 """
 
 import hashlib
+import json
+import os
+import statistics
 import subprocess
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 import psycopg
 
-from raglab import planner
-from raglab import ablation, config, deid, rerank, retrieval, router, sources, stats, taxonomy
-from raglab.timing import BUDGET_P95_MS, Stopwatch, percentile
+from raglab import ablation, checks, config, deid, planner, rerank, retrieval, router, sources, stats, taxonomy
+from raglab.mcp_server import IDENTITIES
+from raglab.timing import Stopwatch, percentile
 
 EVAL_SCHEMA_PATH = config.REPO_ROOT / "db" / "eval.sql"
-
-# Gate thresholds — a regression below any of these fails the build.
-# Entitlement metrics are absolute: a single persona leak or blocked
-# authorized answer fails the run.
-THRESHOLDS = {
-    "hit@5": 0.85,
-    "gate_correct": 1.0,
-    "wrong_abstention_rate": 0.05,
-    "deny_clean": 1.0,
-    "allow_answered": 1.0,
-    # Ratchet: a floor raised whenever a fix lands, so year-over-year
-    # coverage cannot slip unnoticed. History: 0.688 in v1 (the golden set
-    # listed one page per year; the reranker preferred "changes" sections);
-    # 2026-09-09: each year's label accepts every page that states that
-    # year's value, and prior years are searched with a year-neutral form of
-    # the question (router.year_queries) → measured 1.0 on 8 questions. The
-    # floor sits one half-miss below (7.5/8) so a single borderline page is
-    # a finding, not a red build.
-    "yoy_source_coverage": 0.9,
-    # Member scoping: a question about one member never returns another
-    # member's records. Absolute.
-    "scope_clean": 1.0,
-    # Version precedence: no superseded policy version in a default top-10.
-    "version_clean": 1.0,
-    # Phase 3 (decision 6): the planner's legs equal the item's expected legs
-    # (type + source/query, order-free) — plans are stored, so a miss is a
-    # defect in menu, prompt, or item, not variance. Absolute.
-    "routing_accuracy": 1.0,
-    # Every required leg returned its evidence (needs the warehouse: skipped
-    # where no credentials, reported as such).
-    "complete_recall": 0.9,
-    # Adversarial cases (D15): partial entitlement never answers from half;
-    # contradictory sources both surface.
-    "adversarial_ok": 1.0,
-}
+BASELINE_PATH = config.REPO_ROOT / "eval" / "baseline.json"
+WAREHOUSE_SKIPPED = "warehouse_skipped"
 
 
 @dataclass
 class RetrievalEvalResult:
     run_id: int
-    by_category: dict = field(default_factory=dict)
+    by_category: dict = field(default_factory=dict)   # group -> metric means (reported)
     by_source: dict = field(default_factory=dict)
+    by_work: dict = field(default_factory=dict)       # work category number -> {name, n, passed, unverified, rate, ci, failing}
+    by_group: dict = field(default_factory=dict)      # group -> same shape
     overall: dict = field(default_factory=dict)
-    overall_ci: dict = field(default_factory=dict)  # metric -> (low, high), 95% Wilson
-    diff: dict = field(default_factory=dict)        # vs the previous run: metric -> paired_diff
-    latency: dict = field(default_factory=dict)     # stage -> {p50, p95} ms over the golden set
+    overall_ci: dict = field(default_factory=dict)
+    health: dict = field(default_factory=dict)        # tie rate, margin, duplicate share, index seats, needless splits
+    diff: dict = field(default_factory=dict)
+    latency: dict = field(default_factory=dict)
     diff_against: int | None = None
-    failures: list = field(default_factory=list)
-    replan: list = field(default_factory=list)  # [(qid, stored shape/legs, fresh shape/legs)] — plans the live model would change
+    failures: list = field(default_factory=list)      # ratchet breaches (only with a baseline)
+    replan: list = field(default_factory=list)
     corpus_hash: str = ""
-    by_work: dict = field(default_factory=dict)  # work category number -> {name, n, passed, unverified}
+    guardrails_passing: list = field(default_factory=list)
 
 
 def _git_sha() -> str:
@@ -108,8 +84,6 @@ def expected_source(item: dict, registry) -> str:
         if "plan_code" in source:
             types.add("brochure")
         elif "internal" in source:
-            # a path under a source directory — data/internal/ (authored,
-            # generated) or data/raw/ (fetched: carrier letters)
             for rel in ("data/internal/" + source["internal"], "data/raw/" + source["internal"]):
                 for s in registry.all:
                     if s.dir and rel.startswith(s.dir + "/") and s.doc_type:
@@ -127,6 +101,105 @@ def corpus_hash(conn: psycopg.Connection) -> str:
     return hashlib.sha256((row[0] or "").encode()).hexdigest()
 
 
+# ---------------------------------------------------------------- identities
+def caller_for(item: dict) -> planner.Caller:
+    """The identity an item runs as: its persona through the MCP identity
+    table (persona -> document persona + warehouse role); no persona = admin."""
+    persona = item.get("persona")
+    if persona is None:
+        return planner.Caller()
+    doc_persona, role = IDENTITIES[persona]
+    return planner.Caller(persona=doc_persona, warehouse_role=role)
+
+
+def _member_on_screen(item: dict) -> str | None:
+    """The member the screen has open — unless the item types the id into
+    the question on purpose (`typed_member_id`), which tests that path."""
+    return None if item.get("typed_member_id") else item.get("member_id")
+
+
+def _compose(conn, item: dict, question: str, persona: str | None = None) -> dict:
+    caller = caller_for({**item, "persona": persona}) if persona is not None else caller_for(item)
+    return planner.compose(conn, question, caller, member_id=_member_on_screen(item),
+                           module=item.get("module"), source="eval")
+
+
+# ---------------------------------------------------------------- one item
+def score_item(conn, item: dict) -> list[tuple]:
+    """(metric, value, detail) rows for one golden item on the composed path."""
+    qid, category = item["id"], item["category"]
+    rows: list[tuple] = []
+
+    def add(metric, value, detail=None):
+        rows.append((metric, float(value), detail or {}))
+
+    # Malformed / unknown identifiers never reach a search: the resolver raises.
+    trigger = item.get("expected_trigger")
+    try:
+        payload = _compose(conn, item, item["question"])
+    except ValueError as exc:
+        add("check_expected_trigger", trigger == "invalid_identifier", {"error": str(exc)[:160], "expected": trigger})
+        return rows
+    if trigger == "invalid_identifier":
+        add("check_expected_trigger", 0.0, {"expected": trigger, "status": payload.get("status"), "note": "no error raised"})
+    elif trigger == "unresolved_identifier":
+        add("check_expected_trigger", bool(payload.get("unresolved_identifiers")) and payload.get("status") != "ok",
+            {"unresolved": payload.get("unresolved_identifiers"), "status": payload.get("status")})
+
+    # Reported retrieval metrics on the item's sources, then the declared checks.
+    for metric, value, detail in checks.source_metrics(item, payload):
+        add(metric, value, detail)
+    declared = checks.declared_checks(item)
+    warehouse_off = checks._warehouse_unavailable(payload)
+    for metric, value, detail in checks.run_declared(item, payload, conn):
+        field_name = metric[len(checks.CHECK_PREFIX):]
+        if warehouse_off and field_name in checks.WAREHOUSE_CHECKS:
+            add(WAREHOUSE_SKIPPED, 1.0, {"check": metric, "reason": "warehouse unavailable"})
+        else:
+            add(metric, value, detail)
+    if warehouse_off and any(l.get("kind") == "member_query" for l in (payload.get("plan") or {}).get("legs") or []) \
+            and "expected_legs" not in item and not declared:
+        add(WAREHOUSE_SKIPPED, 1.0, {"check": "compose", "reason": "warehouse unavailable"})
+
+    # Guardrail shapes.
+    if "persona_allow" in item or "persona_deny" in item:
+        if item.get("persona_allow"):
+            allowed = _compose(conn, item, item["question"], persona=item["persona_allow"])
+            add(*checks.check_allow_titles(item, allowed))
+            for metric, value, detail in checks.source_metrics(item, allowed):
+                add(metric, value, detail)
+            payload = allowed
+        for persona in (item.get("persona_deny"), item.get("persona_deny_2")):
+            if persona:
+                denied = _compose(conn, item, item["question"], persona=persona)
+                add(*checks.check_deny_titles(item, denied, persona))
+    if item.get("control_question") and ("expect_only_plan" in item or "expect_only_member" in item):
+        # Route invariance: the instruction in the question must not move the
+        # plan / year filters (items that test a different layer skip this).
+        control = _compose(conn, item, item["control_question"])
+        same = (sorted((payload.get("router") or {}).get("plan_codes") or []) == sorted((control.get("router") or {}).get("plan_codes") or [])
+                and sorted((payload.get("router") or {}).get("years") or []) == sorted((control.get("router") or {}).get("years") or []))
+        add("check_control_route", same, {"route": payload.get("router"), "control": control.get("router")})
+
+    # Nothing declared and nothing guardrail-shaped: hit@5 is the check.
+    gated = [m for m, *_ in rows if m.startswith(checks.CHECK_PREFIX) or m == WAREHOUSE_SKIPPED]
+    if not gated:
+        hit = next((v for m, v, _ in rows if m == "hit@5"), None)
+        if hit is not None:
+            add("check_hit", hit, {"fallback": "no expectation declared: hit@5 gates"})
+        else:
+            add("check_hit", 0.0, {"fallback": "no expectation and no sources: nothing to judge"})
+
+    # Health and timings.
+    add("payload_health", 1.0, checks.payload_health(payload))
+    snap = payload.get("timings") or {}
+    for stage in ("embed", "search", "rerank", "total"):
+        if stage in snap:
+            add(f"latency_{stage}", snap[stage], {"host": snap.get("host")})
+    return rows
+
+
+# ---------------------------------------------------------------- the run
 def run(
     conn: psycopg.Connection,
     config_label: str = "baseline",
@@ -134,14 +207,14 @@ def run(
     categories: tuple[str, ...] = (),
     replan: bool = False,
 ) -> RetrievalEvalResult:
-    """categories: run only those golden categories (iteration aid; the
-    run is labelled partial and never gates a merge).
+    """categories: run only those golden groups (iteration aid; the run is
+    labelled partial and never gates a merge). replan: ask the live planner
+    model fresh for every item and report plans that differ from the stored
+    ones (reported, never gated).
 
-    sabotage=True breaks BOTH retrieval arms — a fixed junk vector and a
-    nonsense lexical query — while the reranker still sees the real
-    question. The discrimination check: a broken retriever MUST score badly.
-    (Vector-only sabotage stopped discriminating once BM25 landed: the
-    lexical arm alone finds 24/29 and the reranker sorts them.)"""
+    sabotage=True runs the discrimination check on the direct search path:
+    a fixed junk vector and a nonsense lexical query while the reranker
+    still sees the real question — a broken retriever MUST score badly."""
     conn.execute(EVAL_SCHEMA_PATH.read_text())
     digest = corpus_hash(conn)
     run_id = conn.execute(
@@ -154,199 +227,35 @@ def run(
     scores: list[tuple] = []  # (qid, category, metric, value, detail)
     replans: list[tuple] = []
     registry = sources.load(conn)
-    junk_vector = "[" + ",".join(["0.01"] * 1536) + "]"
-    junk_text = "zzqx zzqv zzqw"  # matches no chunk: the lexical arm returns nothing
 
     for item in ablation.load_golden():
         qid, category = item["id"], item["category"]
         if categories and category not in categories:
             continue
-        if category == "named_query":  # warehouse-only assertions live in tests/test_named_queries.py
+        if sabotage:
+            scores.extend((qid, category, m, v, d) for m, v, d in _score_sabotaged(conn, item, registry))
             continue
-
-        # Planner shape (Phase 3): every golden item has an expected shape —
-        # compound for the two-lane items, simple for everything else. The
-        # planner's decision is read from the stored plan (the model ran once
-        # per question) or from the rules path by configuration. Reported now;
-        # routing accuracy against expected legs gates from P3-PR4.
-        reading = planner.read_route(conn, item["question"])  # the model reads the route (stored first); the code enforces
-        if category not in ("unanswerable",):
-            expected_shape = item.get("expected_shape") or ("compound" if category == "compound" else "simple")
-            plan = planner.plan_for(conn, item["question"], module=item.get("module"))
-            if replan:
-                stored, fresh = planner.replan(conn, item["question"])
-                if _legs_key(stored) != _legs_key(fresh.to_dict()):
-                    replans.append((qid, _legs_key(stored), _legs_key(fresh.to_dict())))
-            scores.append((qid, category, "shape_accuracy", float(plan.shape == expected_shape),
-                           {"shape": plan.shape, "origin": plan.origin, "legs": len(plan.legs),
-                            "fallback": plan.fallback_reason}))
-
-        if category in ("compound", "adversarial"):
-            # Composition runs the real funnel per leg; a sabotage run breaks the
-            # retrieval ARMS and must see only junk inputs, so these are skipped
-            # there like the persona items are.
-            if not sabotage:
-                scores.extend(_score_composed(conn, item))
-            continue
-
-        if category == "version_negative":
-            # A default (undated) question about a policy must not surface
-            # its superseded version; a dated one must not surface the other.
-            decision = router.route(item["question"], hierarchies=registry.hierarchies(), reading=reading)
-            ctx = retrieval.resolve_context(conn, None, item["question"])
-            decision = retrieval.expand_versions(conn, decision, ctx, item["question"])
-            decision = retrieval.bind_enrollment_plan(decision, ctx)
-            question = deid.translate_query(conn, ctx.query)
-            vector = junk_vector if sabotage else retrieval.embed_cached(conn, question)
-            candidates = retrieval.search(conn, junk_text if sabotage else question, vector, decision,
-                                          embed=(lambda t: junk_vector) if sabotage else (lambda t: retrieval.embed_cached(conn, t)),
-                                          member_key=ctx.member_key, record=ctx.record)
-            reranked = rerank.rerank(question, candidates, top_n=10, stratify_years=decision.years,
-                                     stratify_plans=decision.cover_keys if decision.cover_field == "plan_code" else ())
-            titles = [c.doc_title for c in reranked[:10]]
-            leaked = [t for t in titles if any(a in t for a in item["absent_titles"])]
-            scores.append((qid, category, "version_clean", float(not leaked), {"leaked": leaked, "as_of": decision.as_of}))
-            continue
-
-        if category == "scope_negative":
-            # Member scoping: every chunk returned for a question about
-            # member X belongs to X or to a source that is not member-scoped.
-            # Runs the real employee path (identifier translation included).
-            if sabotage:
-                continue
-            from raglab.pipeline import run_query
-
-            person = conn.execute(
-                "SELECT id FROM synthea.patients WHERE member_id = %s", (item["member_id"],)
-            ).fetchone()
-            # The governance gates test the WALLS under the composed path (one
-            # payload, one disclosure, spec 1.1.0), not routing: the plan is the
-            # rules plan — one document probe on the question. Routing quality is
-            # its own metric (shape_accuracy now; routing accuracy in P3-PR4).
-            payload = planner.compose(conn, item["question"], planner.Caller(persona=item.get("persona", "member_services")),
-                                      member_id=item.get("member_id"), plan=planner.plan_rules(item["question"]), source="eval")
-            hashes = [c["source"]["content_hash"] for c in payload.get("chunks", [])]
-            others = 0
-            if hashes:
-                others = conn.execute(
-                    "SELECT count(*) FROM documents WHERE content_hash = ANY(%s) "
-                    "AND member_key IS NOT NULL AND member_key::text <> %s",
-                    (hashes, person[0] if person else ""),
-                ).fetchone()[0]
-            scores.append((qid, category, "scope_clean", float(others == 0),
-                           {"foreign_chunks": others, "returned": len(hashes)}))
-            continue
-
-        if category == "persona_negative":
-            # Entitlement assertions exercise the REAL persona path
-            # (SET ROLE, vault translation, disclosure log) — a junk vector
-            # can't stand in for it, so sabotage runs skip them.
-            if sabotage:
-                continue
-            from raglab.pipeline import run_query
-
-            denied = planner.compose(conn, item["question"], planner.Caller(persona=item["persona_deny"]),
-                                     member_id=item.get("member_id"), plan=planner.plan_rules(item["question"]), source="eval")
-            allowed = planner.compose(conn, item["question"], planner.Caller(persona=item["persona_allow"]),
-                                      member_id=item.get("member_id"), plan=planner.plan_rules(item["question"]), source="eval")
-            titles = [c["source"]["title"] for c in allowed.get("chunks", [])]
-            denied_titles = [c["source"]["title"] for c in denied.get("chunks", [])]
-            leaked = [t for t in denied_titles if any(e in t for e in item["allow_titles"])]
-            allow_hit = float(any(
-                expected in title
-                for expected in item["allow_titles"] for title in titles[:5]
-            ))
-            scores.append((qid, category, "deny_clean", float(not leaked),
-                           {"persona": item["persona_deny"], "status": denied["status"],
-                            "leaked": leaked}))
-            scores.append((qid, category, "allow_answered",
-                           float(allowed["status"] == "ok"),
-                           {"persona": item["persona_allow"],
-                            "confidence": allowed.get("confidence")}))
-            scores.append((qid, category, "allow_hit", allow_hit,
-                           {"expected": item["allow_titles"]}))
-            continue
-
-        decision = router.route(item["question"], hierarchies=registry.hierarchies(), reading=reading)
-        # Member context, like the pipeline: the item's member_id field (the
-        # member a rep would have open) or an identifier in the question.
-        ctx = retrieval.resolve_context(conn, item.get("member_id"), item["question"])
-        decision = retrieval.expand_versions(conn, decision, ctx, item["question"])
-        decision = retrieval.bind_enrollment_plan(decision, ctx)
-        member_key, record = ctx.member_key, ctx.record
-        # The eval runs as admin, which is entitled to the vault: translate
-        # like the pipeline does (names -> pseudonyms); resolved identifiers
-        # are already context, not search words.
-        question = deid.translate_query(conn, ctx.query)
-
-        if item.get("unanswerable"):
-            expected_gate = item["expected_trigger"] == "scope_gate"
-            gated = decision.scope != "in_scope"
-            scores.append((qid, category, "gate_correct", float(gated == expected_gate), {}))
-            if not gated:
-                vector = junk_vector if sabotage else retrieval.embed_cached(conn, question)
-                candidates = retrieval.search(conn, junk_text if sabotage else question, vector, decision,
-                                              embed=(lambda t: junk_vector) if sabotage else (lambda t: retrieval.embed_cached(conn, t)),
-                                              member_key=member_key, record=record)
-                reranked = rerank.rerank(question, candidates)
-                abstained, best = rerank.abstention_verdict(reranked)
-                scores.append((qid, category, "abstained", float(abstained),
-                               {"best_score": round(best, 4)}))
-            continue
-
-        watch = Stopwatch()
-        with watch.stage("embed"):
-            vector = junk_vector if sabotage else retrieval.embed_cached(conn, question)
-        with watch.stage("search"):
-            candidates = retrieval.search(conn, junk_text if sabotage else question, vector, decision,
-                                              embed=(lambda t: junk_vector) if sabotage else (lambda t: retrieval.embed_cached(conn, t)),
-                                              member_key=member_key, record=record)
-        with watch.stage("rerank"):
-            reranked = rerank.rerank(
-                question, candidates, top_n=10,
-                stratify_years=decision.years,
-                stratify_plans=decision.cover_keys if decision.cover_field == "plan_code" else (),
-            )
-        abstained, best = rerank.abstention_verdict(reranked)
-        snap = watch.snapshot()
-        for stage in ("embed", "search", "rerank", "total"):
-            scores.append((qid, category, f"latency_{stage}", snap[stage], {"host": snap["host"]}))
-
-        top5 = reranked[:5]
-        relevant_flags = [ablation.is_relevant(c, item["sources"]) for c in top5]
-        hit = float(any(relevant_flags))
-        precision = sum(relevant_flags) / len(top5) if top5 else 0.0
-        covered = sum(
-            1 for source in item["sources"]
-            if any(ablation.is_relevant(c, [source]) for c in reranked[:10])
-        )
-        coverage = covered / len(item["sources"])
-
-        scores.append((qid, category, "hit@5", hit, {"top_scores": [round(c.rerank_score or 0.0, 4) for c in top5]}))
-        scores.append((qid, category, "precision@5", precision, {}))
-        scores.append((qid, category, "source_coverage", coverage,
-                       {"expected_sources": len(item["sources"])}))
-        scores.append((qid, category, "wrong_abstention", float(abstained),
-                       {"best_score": round(best, 4)}))
-
-    import json as _json
+        if replan and not item.get("unanswerable"):
+            stored, fresh = planner.replan(conn, item["question"], module=item.get("module"))
+            if _legs_key(stored) != _legs_key(fresh.to_dict()):
+                replans.append((qid, _legs_key(stored), _legs_key(fresh.to_dict())))
+        scores.extend((qid, category, m, v, d) for m, v, d in score_item(conn, item))
 
     scores.extend(_item_verdict_rows(scores))
     by_qid = {item["id"]: expected_source(item, registry) for item in ablation.load_golden()}
-    scores = [
-        (qid, cat, metric, value, {**detail, "source": by_qid.get(qid, "none")})
-        for qid, cat, metric, value, detail in scores
-    ]
+    scores = [(qid, cat, metric, value, {**detail, "source": by_qid.get(qid, "none")})
+              for qid, cat, metric, value, detail in scores]
 
     with conn.cursor() as cur:
         cur.executemany(
             "INSERT INTO eval_scores (run_id, question_id, category, metric, value, detail) "
             "VALUES (%s, %s, %s, %s, %s, %s)",
-            [(run_id, q, c, m, v, _json.dumps(d)) for q, c, m, v, d in scores],
+            [(run_id, q, c, m, v, json.dumps(d, default=str)) for q, c, m, v, d in scores],
         )
     conn.commit()
     result = _summarize(run_id, scores)
     result.corpus_hash = digest
+    result.replan = replans
     if not sabotage:
         previous = conn.execute(
             "SELECT max(id) FROM eval_runs WHERE kind = 'retrieval' "
@@ -358,11 +267,41 @@ def run(
     return result
 
 
+def _score_sabotaged(conn, item: dict, registry) -> list[tuple]:
+    """The discrimination check: both retrieval arms broken on the direct
+    search path (a junk vector, a nonsense lexical query), the reranker
+    seeing the real question. Only items with sources take part; the
+    reported hit@5 must collapse."""
+    if not item.get("sources") or item.get("unanswerable"):
+        return []
+    junk_vector = "[" + ",".join(["0.01"] * 1536) + "]"
+    junk_text = "zzqx zzqv zzqw"
+    reading = planner.read_route(conn, item["question"])
+    decision = router.route(item["question"], hierarchies=registry.hierarchies(), reading=reading)
+    ctx = retrieval.resolve_context(conn, _member_on_screen(item), item["question"])
+    decision = retrieval.expand_versions(conn, decision, ctx, item["question"])
+    decision = retrieval.bind_enrollment_plan(decision, ctx)
+    question = deid.translate_query(conn, ctx.query)
+    candidates = retrieval.search(conn, junk_text, junk_vector, decision, embed=lambda t: junk_vector,
+                                  member_key=ctx.member_key, record=ctx.record)
+    reranked = rerank.rerank(question, candidates, top_n=10, stratify_years=decision.years,
+                             stratify_plans=decision.cover_keys if decision.cover_field == "plan_code" else ())
+    top5 = reranked[:5]
+    flags = [ablation.is_relevant(c, item["sources"]) for c in top5]
+    return [("hit@5", float(any(flags)), {"sabotage": True}),
+            ("precision@5", (sum(flags) / len(top5)) if top5 else 0.0, {"sabotage": True})]
+
+
+# ---------------------------------------------------------------- summaries
 def diff_runs(conn: psycopg.Connection, before: int, after: int) -> dict:
     """Which questions flipped, per 0/1 metric, between two eval runs. The
     number that moved is never the story; the questions that flipped are."""
     out = {}
-    for metric in sorted(stats.BINARY_METRICS):
+    metrics = sorted({m for (m,) in conn.execute(
+        "SELECT DISTINCT metric FROM eval_scores WHERE run_id IN (%s, %s) "
+        "AND (metric = 'item_pass' OR metric LIKE 'check\\_%%' OR metric IN ('hit@5', 'source_coverage'))",
+        (before, after)).fetchall()})
+    for metric in metrics:
         rows = conn.execute(
             "SELECT run_id, question_id, value FROM eval_scores "
             "WHERE metric = %s AND run_id IN (%s, %s)", (metric, before, after)
@@ -376,9 +315,7 @@ def diff_runs(conn: psycopg.Connection, before: int, after: int) -> dict:
     return out
 
 
-_SLICE_METRICS = ("hit@5", "precision@5", "source_coverage", "gate_correct",
-                  "deny_clean", "allow_answered", "allow_hit", "scope_clean", "version_clean", "shape_accuracy",
-                  "routing_accuracy", "complete_recall", "widened_rescue", "adversarial_ok")
+_SLICE_METRICS = ("hit@5", "precision@5", "source_coverage", "item_pass")
 
 
 def _slice(rows: list[tuple]) -> dict:
@@ -390,7 +327,7 @@ def _slice(rows: list[tuple]) -> dict:
         if not vals:
             continue
         out[metric] = round(sum(vals) / len(vals), 3)
-        if metric in stats.BINARY_METRICS:
+        if metric in stats.BINARY_METRICS or metric == "item_pass":
             low, high = stats.wilson(int(round(sum(vals))), len(vals))
             out[f"{metric}_ci"] = (round(low, 3), round(high, 3))
     out["n"] = len({q for q, *_ in rows})
@@ -398,9 +335,9 @@ def _slice(rows: list[tuple]) -> dict:
 
 
 def _item_verdict_rows(scores: list[tuple]) -> list[tuple]:
-    """One `item_pass` row per gated item (1.0 / 0.0) carrying its work
-    category, or `item_unverified` when a gate metric was skipped in this
-    run. The dashboard reads these; a skipped check never counts as a pass."""
+    """One `item_pass` row per item (1.0 / 0.0) carrying its work category
+    and group, or `item_unverified` when a check was skipped in this run
+    (no warehouse). A skipped check never counts as a pass."""
     by_id = {item["id"]: item for item in ablation.load_golden()}
     rows = []
     for qid, (passed, skipped) in sorted(taxonomy.item_verdicts(scores).items()):
@@ -415,104 +352,149 @@ def _item_verdict_rows(scores: list[tuple]) -> list[tuple]:
     return rows
 
 
-def _summarize(run_id: int, scores: list[tuple]) -> RetrievalEvalResult:
-    result = RetrievalEvalResult(run_id=run_id)
-
+def _rate_table(scores: list[tuple], key) -> dict:
+    """Pass rate per bucket from the item_pass / item_unverified rows:
+    {bucket: {n, passed, unverified, rate, ci, failing}}."""
+    table: dict = {}
     for qid, cat, metric, value, detail in scores:
         if metric not in ("item_pass", "item_unverified"):
             continue
-        number = int(detail["work_category"])
-        slot = result.by_work.setdefault(
-            number, {"name": taxonomy.WORK_CATEGORIES[number].name, "n": 0, "passed": 0, "unverified": 0})
+        bucket = key(cat, detail)
+        slot = table.setdefault(bucket, {"n": 0, "passed": 0, "unverified": 0, "failing": [], "passing": []})
         if metric == "item_unverified":
             slot["unverified"] += 1
         else:
             slot["n"] += 1
-            slot["passed"] += int(value >= 1.0)
+            if value >= 1.0:
+                slot["passed"] += 1
+                slot["passing"].append(qid)
+            else:
+                slot["failing"].append(qid)
+    for slot in table.values():
+        slot["rate"] = round(slot["passed"] / slot["n"], 3) if slot["n"] else None
+        slot["ci"] = tuple(round(x, 3) for x in stats.wilson(slot["passed"], slot["n"])) if slot["n"] else None
+        slot["failing"].sort()
+        slot["passing"].sort()
+    return table
+
+
+def _summarize(run_id: int, scores: list[tuple]) -> RetrievalEvalResult:
+    result = RetrievalEvalResult(run_id=run_id)
+
+    by_work = _rate_table(scores, lambda cat, d: int(d["work_category"]))
+    for number, slot in by_work.items():
+        slot["name"] = taxonomy.WORK_CATEGORIES[number].name
+    result.by_work = dict(sorted(by_work.items()))
+    result.by_group = dict(sorted(_rate_table(scores, lambda cat, d: d.get("group", cat)).items()))
 
     def mean(metric, rows):
         vals = [v for _, _, m, v, _ in rows if m == metric]
         return sum(vals) / len(vals) if vals else None
 
-    categories = sorted({c for _, c, _, _, _ in scores})
-    for category in categories:
+    for category in sorted({c for _, c, _, _, _ in scores}):
         result.by_category[category] = _slice([s for s in scores if s[1] == category])
-
-    # Per-source slice: which source the expected evidence lives in. Every
-    # retrieval metric, reported by source, so a new source cannot degrade an
-    # old one without a number moving.
-    slices = sorted({d.get("source", "none") for *_, d in scores})
-    for slice_name in slices:
-        result.by_source[slice_name] = _slice(
-            [s for s in scores if s[4].get("source", "none") == slice_name]
-        )
+    for slice_name in sorted({d.get("source", "none") for *_, d in scores}):
+        result.by_source[slice_name] = _slice([s for s in scores if s[4].get("source", "none") == slice_name])
 
     for stage in ("embed", "search", "rerank", "total"):
         vals = [v for _, _, m, v, _ in scores if m == f"latency_{stage}"]
         if vals:
             result.latency[stage] = {"p50": percentile(vals, 50), "p95": percentile(vals, 95), "n": len(vals)}
 
+    passes = [v for _, _, m, v, _ in scores if m == "item_pass"]
     result.overall = {
+        "item_pass": round(sum(passes) / len(passes), 3) if passes else None,
         "hit@5": mean("hit@5", scores),
         "precision@5": mean("precision@5", scores),
         "source_coverage": mean("source_coverage", scores),
-        "gate_correct": mean("gate_correct", scores),
-        "wrong_abstention_rate": mean("wrong_abstention", scores),
     }
-    for metric in ("hit@5", "gate_correct"):
+    if passes:
+        result.overall_ci["item_pass"] = tuple(round(x, 3) for x in stats.wilson(int(round(sum(passes))), len(passes)))
+    for metric in ("hit@5",):
         vals = [v for _, _, m, v, _ in scores if m == metric]
         if vals:
-            result.overall_ci[metric] = tuple(
-                round(x, 3) for x in stats.wilson(int(round(sum(vals))), len(vals))
-            )
-
-    if result.overall["hit@5"] is not None and result.overall["hit@5"] < THRESHOLDS["hit@5"]:
-        result.failures.append(
-            f"hit@5 {result.overall['hit@5']:.3f} < {THRESHOLDS['hit@5']}"
-        )
-    if result.overall["gate_correct"] is not None and result.overall["gate_correct"] < THRESHOLDS["gate_correct"]:
-        result.failures.append("scope gate leaked")
-    if (result.overall["wrong_abstention_rate"] or 0) > THRESHOLDS["wrong_abstention_rate"]:
-        result.failures.append(
-            f"wrong abstentions {result.overall['wrong_abstention_rate']:.3f}"
-        )
-    yoy = result.by_category.get("yoy", {}).get("source_coverage")
-    if yoy is not None and yoy < THRESHOLDS["yoy_source_coverage"]:
-        result.failures.append(
-            f"yoy source_coverage {yoy:.3f} < ratchet {THRESHOLDS['yoy_source_coverage']}"
-        )
-    version = mean("version_clean", scores)
-    if version is not None:
-        result.overall["version_clean"] = version
-        if version < THRESHOLDS["version_clean"]:
-            result.failures.append("version leak: a superseded policy version reached a default top-10")
-    scope = mean("scope_clean", scores)
-    if scope is not None:
-        result.overall["scope_clean"] = scope
-        if scope < THRESHOLDS["scope_clean"]:
-            result.failures.append("member scope leaked: another member's record was returned")
-    # Phase 3 gates (decision 6): routing 1.0, complete recall 0.9, adversarial 1.0.
-    for metric, message in (("routing_accuracy", "planner routed a compound question to the wrong legs"),
-                            ("complete_recall", "a required leg did not return its evidence"),
-                            ("adversarial_ok", "adversarial case failed (answered from half, or a conflicting source hidden)")):
-        value = mean(metric, scores)
-        if value is not None:
-            result.overall[metric] = round(value, 3)
-            if value < THRESHOLDS[metric]:
-                result.failures.append(f"{message}: {metric} {value:.3f} < {THRESHOLDS[metric]}")
-    skipped = [q for q, _, m, _, _ in scores if m == "complete_recall_skipped"]
+            result.overall_ci[metric] = tuple(round(x, 3) for x in stats.wilson(int(round(sum(vals))), len(vals)))
+    skipped = {q for q, _, m, _, _ in scores if m == WAREHOUSE_SKIPPED}
     if skipped:
-        result.overall["complete_recall_skipped"] = len(skipped)
-    for metric in ("deny_clean", "allow_answered"):
-        value = mean(metric, scores)
-        result.overall[metric] = value
-        if value is not None and value < THRESHOLDS[metric]:
-            result.failures.append(
-                "persona leak: an unauthorized persona received content"
-                if metric == "deny_clean"
-                else "entitled persona was wrongly blocked"
-            )
+        result.overall["warehouse_skipped_items"] = len(skipped)
+
+    result.health = checks.summarize_health([d for _, _, m, _, d in scores if m == "payload_health"])
+    guardrail_groups = {name for name, g in taxonomy.GROUPS.items() if g.band == "guardrail"}
+    result.guardrails_passing = sorted(q for q, cat, m, v, _ in scores
+                                       if m == "item_pass" and v >= 1.0 and cat in guardrail_groups)
     return result
+
+
+# ---------------------------------------------------------------- the ratchet
+def load_baseline(path=BASELINE_PATH) -> dict | None:
+    if not path.exists():
+        return None
+    return json.loads(path.read_text())
+
+
+def write_baseline(result: RetrievalEvalResult, path=BASELINE_PATH) -> dict:
+    """Store a run as the reference every later run ratchets against."""
+    baseline = {
+        "run_id": result.run_id,
+        "git_sha": _git_sha(),
+        "corpus_hash": result.corpus_hash,
+        "written_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "overall": {k: v for k, v in result.overall.items() if v is not None},
+        "by_work": {str(n): {"name": s["name"], "rate": s["rate"], "n": s["n"]} for n, s in result.by_work.items() if s["n"]},
+        "by_group": {g: {"rate": s["rate"], "n": s["n"]} for g, s in result.by_group.items() if s["n"]},
+        "guardrails_passing": result.guardrails_passing,
+        # every verified item's verdict, so a run that can verify only a subset
+        # (CI holds no warehouse credentials) is compared over the same items
+        "items": {q: 1 for s in result.by_group.values() for q in s["passing"]}
+                 | {q: 0 for s in result.by_group.values() for q in s["failing"]},
+        "health": result.health,
+    }
+    path.write_text(json.dumps(baseline, indent=2) + "\n")
+    return baseline
+
+
+def ratchet(result: RetrievalEvalResult, baseline: dict | None) -> list[str]:
+    """The gate: every category and group holds its baseline pass rate, and
+    no guardrail item that passed at the baseline fails now. A run verifies
+    only the items its credentials allow (CI has no warehouse), so each
+    comparison is over the items verified in THIS run: the baseline rate is
+    recomputed from the stored per-item verdicts on exactly those ids."""
+    if baseline is None:
+        return ["no baseline stored (eval/baseline.json): run with --write-baseline first"]
+    failures = []
+    verdicts = baseline.get("items") or {}
+
+    def reference(ref: dict, now: dict) -> tuple[float | None, int]:
+        """(baseline rate over the items this run verified, how many of them the baseline knew)."""
+        if not verdicts:
+            return ref.get("rate"), now["n"]  # an older baseline without verdicts: whole-bucket rate
+        known = [q for q in now["passing"] + now["failing"] if q in verdicts]
+        return (round(sum(verdicts[q] for q in known) / len(known), 3), len(known)) if known else (None, 0)
+
+    for number, ref in baseline.get("by_work", {}).items():
+        now = result.by_work.get(int(number))
+        if not now or not now["n"]:
+            continue
+        ref_rate, known = reference(ref, now)
+        now_rate = round(sum(1 for q in now["passing"] if q in verdicts) / known, 3) if verdicts and known else now["rate"]
+        if ref_rate is not None and now_rate < ref_rate:
+            failures.append(f"category {ref['name']}: {now_rate:.3f} < baseline {ref_rate:.3f} over the {known} items verified "
+                            f"(failing: {', '.join(now['failing'][:6])})")
+    for group, ref in baseline.get("by_group", {}).items():
+        now = result.by_group.get(group)
+        if not now or not now["n"]:
+            continue
+        ref_rate, known = reference(ref, now)
+        now_rate = round(sum(1 for q in now["passing"] if q in verdicts) / known, 3) if verdicts and known else now["rate"]
+        if ref_rate is not None and now_rate < ref_rate:
+            failures.append(f"group {group}: {now_rate:.3f} < baseline {ref_rate:.3f} over the {known} items verified "
+                            f"(failing: {', '.join(now['failing'][:6])})")
+    verified_now = {q for s in result.by_group.values() for q in s["passing"] + s["failing"]}
+    passing_now = set(result.guardrails_passing)
+    regressed = [q for q in baseline.get("guardrails_passing", []) if q in verified_now and q not in passing_now]
+    if regressed:
+        failures.append(f"guardrail regression: {', '.join(regressed)}")
+    return failures
 
 
 def _legs_key(plan: dict | None) -> str:
@@ -521,115 +503,3 @@ def _legs_key(plan: dict | None) -> str:
         return "none"
     legs = sorted((leg["kind"], leg.get("query_name") or ",".join(sorted(leg.get("sources") or [])) or "*") for leg in plan.get("legs", []))
     return f"{plan.get('shape')}: " + "; ".join(f"{k}[{t}]" for k, t in legs)
-
-
-def _legs_multiset(legs: list[dict]) -> list[tuple]:
-    """(kind, source-or-query) per leg, order-free. A document leg with no
-    hints matches an expected leg on any source ('*')."""
-    out = []
-    for leg in legs:
-        if leg["kind"] == "member_query":
-            out.append(("member_query", leg.get("query_name")))
-        else:
-            out.append(("doc_probe", ",".join(sorted(leg.get("sources") or [])) or "*"))
-    return sorted(out)
-
-
-def _leg_matches(planned: dict, expected: dict) -> bool:
-    if planned["kind"] != expected["kind"]:
-        return False
-    if expected["kind"] == "member_query":
-        allowed = set(expected.get("query_name_any") or [expected.get("query_name")])
-        return planned.get("query_name") in allowed
-    got = set(planned.get("sources") or [])
-    want = set(expected.get("sources") or []) | set(expected.get("sources_any") or [])
-    return not got or not want or bool(got & want)  # a hint-less leg matches any expected source
-
-
-def _routing_matches(planned: list[dict], expected: list[dict], optional: list[dict] = ()) -> bool:
-    """Order-free: every expected leg is matched by a distinct planned leg
-    and nothing is left over. An expected member leg may name alternatives
-    (`query_name_any`) when more than one catalog query answers the same
-    part of the question."""
-    remaining = list(planned)
-    for exp in expected:
-        match = next((p for p in remaining if _leg_matches(p, exp)), None)
-        if match is None:
-            return False
-        remaining.remove(match)
-    # legs the item allows but does not require (a supporting warehouse row, a document beside the record)
-    for opt in optional:
-        match = next((p for p in remaining if _leg_matches(p, opt)), None)
-        if match is not None:
-            remaining.remove(match)
-    return not remaining
-
-
-def _score_composed(conn, item: dict) -> list[tuple]:
-    """Compound + adversarial items (Phase 3): the planner's ROUTING is scored
-    from the plan alone (no warehouse needed); EXECUTION — complete recall,
-    widened rescue, adversarial status — runs the composed path with the
-    model's plan as the identity's persona + warehouse role, and is skipped
-    (reported) where the warehouse is not reachable."""
-    import os
-
-    from raglab.mcp_server import IDENTITIES
-
-    qid, category = item["id"], item["category"]
-    persona, role = IDENTITIES[item["identity"]]
-    detail = {"source": "none", "identity": item["identity"]}
-    scores: list[tuple] = []
-    module = item.get("module")
-    detail["module"] = module
-    plan = planner.plan_for(conn, item["question"], module=module)
-    plan_dict = plan.to_dict()
-    if "expected_legs" in item:
-        scores.append((qid, category, "routing_accuracy",
-                       float(_routing_matches(plan_dict["legs"], item["expected_legs"], item.get("optional_legs", []))),
-                       {**detail, "planned": _legs_multiset(plan_dict["legs"]), "expected": _legs_multiset(item["expected_legs"]),
-                        "origin": plan.origin, "fallback": plan.fallback_reason}))
-    warehouse_needed = any(l["kind"] == "member_query" for l in plan_dict["legs"]) and role is not None
-    if warehouse_needed and not os.environ.get("SNOWFLAKE_ACCOUNT"):
-        scores.append((qid, category, "complete_recall_skipped", 1.0, {**detail, "reason": "no warehouse credentials"}))
-        return scores
-    payload = planner.compose(conn, item["question"], planner.Caller(persona=persona, warehouse_role=role),
-                              member_id=item.get("member_id"), source="eval", module=module)
-    titles = [c["source"]["title"] for c in payload.get("chunks", [])]
-    doc_types = {c["source"].get("doc_type") for c in payload.get("chunks", [])}
-    if category == "compound":
-        need = item.get("required_evidence", {})
-        anchors_ok = all(any(a in t for t in titles) for a in need.get("doc_anchors", []))
-        sources_ok = all(src in doc_types for src in need.get("doc_sources", []))
-        # rows_min keys may be "a|b": any listed query satisfying the minimum counts
-        rows_ok = all(any(w.get("query_name") in q.split("|") and (w.get("row_count") or 0) >= n for w in payload.get("warehouse_results", []))
-                      for q, n in need.get("rows_min", {}).items())
-        only_plan_ok = ("expect_only_plan" not in item) or all(
-            c["source"].get("plan_code") == item["expect_only_plan"] for c in payload.get("chunks", []) if c["source"].get("doc_type") == "brochure")
-        scores.append((qid, category, "complete_recall", float(payload["status"] == "ok" and anchors_ok and sources_ok and rows_ok and only_plan_ok),
-                       {**detail, "status": payload["status"], "missing": payload.get("missing"), "anchors_ok": anchors_ok,
-                        "sources_ok": sources_ok, "rows_ok": rows_ok, "only_plan_ok": only_plan_ok,
-                        "plans_seen": sorted({c["source"].get("plan_code") for c in payload.get("chunks", []) if c["source"].get("plan_code")})}))
-        scores.append((qid, category, "widened_rescue", float(payload["plan"].get("widened", False)), detail))
-    else:
-        ok = True
-        if "expect_status_any" in item:
-            ok &= payload["status"] in item["expect_status_any"]
-        elif "expect_status" in item:
-            ok &= payload["status"] == item["expect_status"]
-        if "expect_only_plan" in item:  # every brochure chunk is the member's own plan
-            ok &= all(c["source"].get("plan_code") == item["expect_only_plan"]
-                      for c in payload.get("chunks", []) if c["source"].get("doc_type") == "brochure")
-        if "expect_never_source" in item:
-            ok &= item["expect_never_source"] not in doc_types
-        if "expect_sources_present" in item:
-            ok &= all(src in doc_types for src in item["expect_sources_present"])
-        if "expect_never_query" in item:
-            ok &= all(w.get("query_name") != item["expect_never_query"] for w in payload.get("warehouse_results", []))
-            ok &= all(l.get("query_name") != item["expect_never_query"] for l in plan_dict["legs"])
-        if "expect_missing_query" in item:
-            ok &= any(w.get("query_name") == item["expect_missing_query"] and w.get("status") != "ok"
-                      for w in payload.get("warehouse_results", []))
-        scores.append((qid, category, "adversarial_ok", float(ok),
-                       {**detail, "kind": item.get("kind"), "status": payload["status"], "doc_types": sorted(t for t in doc_types if t),
-                        "missing": payload.get("missing")}))
-    return scores

@@ -32,7 +32,7 @@ import psycopg
 
 from raglab import config, rerank
 
-REBUILD_PATH = config.REPO_ROOT / "eval" / "golden_rebuild.jsonl"
+REBUILD_PATH = config.REPO_ROOT / "eval" / "golden.jsonl"
 TIE_EPS = 0.005
 
 
@@ -127,7 +127,7 @@ _REBUILD_RUNNER = r'''
 import json, re
 from raglab import db, planner
 from raglab.ablation import PRINTED_TO_PDF_OFFSET, PAGE_TOLERANCE
-items = [json.loads(l) for l in open("eval/golden_rebuild.jsonl") if l.strip()]
+items = [json.loads(l) for l in open("eval/golden.jsonl") if l.strip()]
 c = db.connect(); out = {}
 def norm(t): return re.sub(r"\s+", " ", t).lower()
 for it in items:

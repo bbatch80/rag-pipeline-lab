@@ -360,19 +360,21 @@ def _rate_table(scores: list[tuple], key) -> dict:
         if metric not in ("item_pass", "item_unverified"):
             continue
         bucket = key(cat, detail)
-        slot = table.setdefault(bucket, {"n": 0, "passed": 0, "unverified": 0, "failing": []})
+        slot = table.setdefault(bucket, {"n": 0, "passed": 0, "unverified": 0, "failing": [], "passing": []})
         if metric == "item_unverified":
             slot["unverified"] += 1
         else:
             slot["n"] += 1
             if value >= 1.0:
                 slot["passed"] += 1
+                slot["passing"].append(qid)
             else:
                 slot["failing"].append(qid)
     for slot in table.values():
         slot["rate"] = round(slot["passed"] / slot["n"], 3) if slot["n"] else None
         slot["ci"] = tuple(round(x, 3) for x in stats.wilson(slot["passed"], slot["n"])) if slot["n"] else None
         slot["failing"].sort()
+        slot["passing"].sort()
     return table
 
 
@@ -441,6 +443,10 @@ def write_baseline(result: RetrievalEvalResult, path=BASELINE_PATH) -> dict:
         "by_work": {str(n): {"name": s["name"], "rate": s["rate"], "n": s["n"]} for n, s in result.by_work.items() if s["n"]},
         "by_group": {g: {"rate": s["rate"], "n": s["n"]} for g, s in result.by_group.items() if s["n"]},
         "guardrails_passing": result.guardrails_passing,
+        # every verified item's verdict, so a run that can verify only a subset
+        # (CI holds no warehouse credentials) is compared over the same items
+        "items": {q: 1 for s in result.by_group.values() for q in s["passing"]}
+                 | {q: 0 for s in result.by_group.values() for q in s["failing"]},
         "health": result.health,
     }
     path.write_text(json.dumps(baseline, indent=2) + "\n")
@@ -449,20 +455,43 @@ def write_baseline(result: RetrievalEvalResult, path=BASELINE_PATH) -> dict:
 
 def ratchet(result: RetrievalEvalResult, baseline: dict | None) -> list[str]:
     """The gate: every category and group holds its baseline pass rate, and
-    no guardrail item that passed at the baseline fails now."""
+    no guardrail item that passed at the baseline fails now. A run verifies
+    only the items its credentials allow (CI has no warehouse), so each
+    comparison is over the items verified in THIS run: the baseline rate is
+    recomputed from the stored per-item verdicts on exactly those ids."""
     if baseline is None:
         return ["no baseline stored (eval/baseline.json): run with --write-baseline first"]
     failures = []
+    verdicts = baseline.get("items") or {}
+
+    def reference(ref: dict, now: dict) -> tuple[float | None, int]:
+        """(baseline rate over the items this run verified, how many of them the baseline knew)."""
+        if not verdicts:
+            return ref.get("rate"), now["n"]  # an older baseline without verdicts: whole-bucket rate
+        known = [q for q in now["passing"] + now["failing"] if q in verdicts]
+        return (round(sum(verdicts[q] for q in known) / len(known), 3), len(known)) if known else (None, 0)
+
     for number, ref in baseline.get("by_work", {}).items():
         now = result.by_work.get(int(number))
-        if now and now["n"] and ref.get("rate") is not None and now["rate"] < ref["rate"]:
-            failures.append(f"category {ref['name']}: {now['rate']:.3f} < baseline {ref['rate']:.3f} (failing: {', '.join(now['failing'][:6])})")
+        if not now or not now["n"]:
+            continue
+        ref_rate, known = reference(ref, now)
+        now_rate = round(sum(1 for q in now["passing"] if q in verdicts) / known, 3) if verdicts and known else now["rate"]
+        if ref_rate is not None and now_rate < ref_rate:
+            failures.append(f"category {ref['name']}: {now_rate:.3f} < baseline {ref_rate:.3f} over the {known} items verified "
+                            f"(failing: {', '.join(now['failing'][:6])})")
     for group, ref in baseline.get("by_group", {}).items():
         now = result.by_group.get(group)
-        if now and now["n"] and ref.get("rate") is not None and now["rate"] < ref["rate"]:
-            failures.append(f"group {group}: {now['rate']:.3f} < baseline {ref['rate']:.3f} (failing: {', '.join(now['failing'][:6])})")
+        if not now or not now["n"]:
+            continue
+        ref_rate, known = reference(ref, now)
+        now_rate = round(sum(1 for q in now["passing"] if q in verdicts) / known, 3) if verdicts and known else now["rate"]
+        if ref_rate is not None and now_rate < ref_rate:
+            failures.append(f"group {group}: {now_rate:.3f} < baseline {ref_rate:.3f} over the {known} items verified "
+                            f"(failing: {', '.join(now['failing'][:6])})")
+    verified_now = {q for s in result.by_group.values() for q in s["passing"] + s["failing"]}
     passing_now = set(result.guardrails_passing)
-    regressed = [q for q in baseline.get("guardrails_passing", []) if q not in passing_now]
+    regressed = [q for q in baseline.get("guardrails_passing", []) if q in verified_now and q not in passing_now]
     if regressed:
         failures.append(f"guardrail regression: {', '.join(regressed)}")
     return failures

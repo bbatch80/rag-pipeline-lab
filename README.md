@@ -273,7 +273,10 @@ any two runs). The CI gate is a ratchet against a stored baseline
 (`eval/baseline.json`, written with `--write-baseline`): a change fails when
 any category's or group's pass rate falls below the baseline or any
 guardrail question that passed at the baseline fails; a fix that raises a
-rate raises the floor. `raglab recall-rls` measures HNSW recall under
+rate raises the floor. The baseline stores every question's verdict, and a
+run is compared over the questions it could verify — CI holds no warehouse
+credentials, so the warehouse-backed questions are reported as unverified
+there and judged against the baseline's verdicts on the rest. `raglab recall-rls` measures HNSW recall under
 row-level security per persona against an exact scan run as the same
 persona. The gate runs in CI on a self-hosted runner beside the fully
 indexed database.
@@ -569,10 +572,10 @@ the unauthorized persona's results (it may abstain, or answer from what it
 is entitled to) and the authorized persona must answer citing the expected
 document, run through the full persona pipeline (RLS, vault translation,
 disclosure). Scope-negative questions assert member scoping: a question
-asked in one member's context returns no other member's records.
-`deny_clean`, `scope_clean`, `allow_answered`, and
-retrieval `hit@5` gate CI; the entitlement metrics are thresholded at 1.0 —
-a single leak fails the build. The gate job runs on a self-hosted runner
+asked in one member's context returns no other member's records. Every
+guardrail question is ratcheted individually: one that passed at the
+baseline may not fail — a single new leak fails the build, whatever the
+group's rate does. The gate job runs on a self-hosted runner
 beside the loaded database (no corpus or keys on hosted runners) on pull
 requests only — a squash merge re-runs CI on the tree the PR gate just
 verified, so push-to-main runs only the fast `test` job; `main` is

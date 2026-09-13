@@ -66,3 +66,41 @@ def test_a_guardrail_item_is_ratcheted_individually(tmp_path):
 def test_no_baseline_is_itself_a_failure():
     result = eval_retrieval._summarize(2, _scores(REFERENCE))
     assert eval_retrieval.ratchet(result, None) == ["no baseline stored (eval/baseline.json): run with --write-baseline first"]
+
+
+def _unverified(verdicts: dict[str, float], skipped: set[str]) -> list[tuple]:
+    """The same run with some items unverified (a check skipped: no warehouse)."""
+    rows = []
+    for qid, group, metric, value, detail in _scores(verdicts):
+        rows.append((qid, group, "item_unverified" if qid in skipped else metric, 1.0 if qid in skipped else value, detail))
+    return rows
+
+
+def test_a_run_that_verifies_a_subset_is_compared_over_that_subset(tmp_path):
+    """CI holds no warehouse credentials: the warehouse-backed items are
+    unverified there. The baseline rate is recomputed over the items the
+    run did verify, so a subset that matches the baseline item for item
+    passes even when the whole-bucket rate looks lower."""
+    baseline = _baseline(tmp_path)
+    assert baseline["items"]["compound-01"] == 1 and baseline["items"]["compound-02"] == 0
+    # compound at the baseline: 1/2. This run verifies only compound-02 (which failed at the baseline too): 0/1
+    subset = eval_retrieval._summarize(2, _unverified(REFERENCE, {"compound-01"}))
+    assert subset.by_group["compound"]["n"] == 1 and subset.by_group["compound"]["unverified"] == 1
+    assert eval_retrieval.ratchet(subset, baseline) == []
+    # ... but the verified item regressing still fails
+    worse = eval_retrieval._summarize(2, _unverified({**REFERENCE, "factual-01": 0.0}, {"compound-01"}))
+    failures = eval_retrieval.ratchet(worse, baseline)
+    assert any(f.startswith("group factual: 0.333 < baseline 0.667 over the 3 items verified") for f in failures)
+
+
+def test_an_unverified_guardrail_is_not_a_regression(tmp_path):
+    baseline = _baseline(tmp_path)
+    skipped = eval_retrieval._summarize(2, _unverified(REFERENCE, {"scope_negative-01"}))
+    assert "scope_negative-01" not in skipped.guardrails_passing
+    assert eval_retrieval.ratchet(skipped, baseline) == []
+
+
+def test_a_new_item_unknown_to_the_baseline_is_ignored_by_the_ratchet(tmp_path):
+    baseline = _baseline(tmp_path)
+    grown = eval_retrieval._summarize(2, _scores({**REFERENCE, "factual-04": 0.0}))
+    assert eval_retrieval.ratchet(grown, baseline) == []

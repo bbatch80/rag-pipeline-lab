@@ -105,7 +105,8 @@ def test_compose_context_runs_as_the_session_identity_never_a_parameter(monkeypa
             raise AssertionError("the shared warehouse session must not be closed by a leg")
 
     monkeypatch.setattr(planner, "compose", fake_compose)
-    monkeypatch.setattr(server, "_snowflake", lambda role: _Conn())
+    from raglab import context_services
+    monkeypatch.setattr(server, "_warehouse", context_services.Warehouse(connect=lambda role: _Conn()))
     out = _fn(compose_context)("Was claim CLM-1363781509 denied, and did the member appeal it?", member_id="M344317862", module="appeals_workbench")
     assert out["status"] == "ok" and seen["module"] == "appeals_workbench"
     assert seen["caller"].persona == "appeals" and seen["caller"].warehouse_role == "APPEALS_ANALYST"

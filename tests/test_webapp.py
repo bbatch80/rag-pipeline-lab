@@ -107,3 +107,191 @@ def test_a_session_whose_user_vanished_is_logged_out(client, db):
     db.execute("DELETE FROM users WHERE username = 'benefits.sam'")
     assert client.get("/me").status_code == 401
     assert client.get("/me").status_code == 401  # the cookie was cleared, not merely refused once
+
+
+# ---------------------------------------------------------------------------
+# PR2: the three context services over HTTP — the same code as CLI and MCP.
+
+from raglab import context_services, planner, snowlane  # noqa: E402
+from test_governance import VISIBILITY, _seed_tiers  # noqa: E402  (tests/ is on sys.path)
+from test_identical_question_control import _exact_scan, _fake_models, _tags  # noqa: E402
+
+TIER_MAP = {role.removeprefix("persona_"): set(tags) for role, tags in VISIBILITY.items()}
+MEMBER_SCOPED = {"care_team", "member_services", "appeals"}
+
+
+class _NoCommit:
+    """run_query commits its disclosure inside; the fixture must not."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, *a, **k):
+        return self._conn.execute(*a, **k)
+
+    def commit(self):
+        pass
+
+    def transaction(self):
+        return self._conn.transaction()
+
+
+class _FakeCursor:
+    """Enough of a Snowflake cursor for run_named_query: the role, the tag,
+    one result row shaped like member_claims_summary / cost_by_condition."""
+
+    def __init__(self, role):
+        self.role = role
+        self.executed = []
+        self.description = None
+
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+        if "CURRENT_ROLE" in sql:
+            self._rows = [(self.role,)]
+            self.description = [("CURRENT_ROLE()",)]
+        elif sql.startswith("ALTER SESSION"):
+            self._rows = []
+        else:
+            self.description = [("MEMBER_ID",), ("LAST_NAME",), ("CLAIM_LINES",), ("TOTAL_COST",)]
+            self._rows = [("M767394984", "Ng", 35, 1234.5)]
+        return self
+
+    def fetchone(self):
+        return self._rows[0]
+
+    def fetchall(self):
+        return self._rows
+
+
+class _FakeWarehouseConn:
+    def __init__(self, role):
+        self.role = role
+        self.cursors = []
+
+    def cursor(self):
+        cur = _FakeCursor(self.role)
+        self.cursors.append(cur)
+        return cur
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def client_with_corpus(db, monkeypatch):
+    """A seeded tier corpus, fake embedding + reranker, exact scan: the real
+    funnel (router, hybrid search, RLS, disclosure) minus the models."""
+    identity.seed(db, password=PASSWORD)
+    _seed_tiers(db, per_tier=1, embed=True)
+    _fake_models(monkeypatch)
+    _exact_scan(db)
+    opened = {}
+    warehouse = context_services.Warehouse(connect=lambda role: opened.setdefault(role, _FakeWarehouseConn(role)))
+    app = webapp.create_app(connect=lambda: _Lease(_NoCommit(db)), warehouse=warehouse)
+    with TestClient(app) as client:
+        client.opened_warehouse = opened
+        yield client
+
+
+def _search(client, db, query="what do the secret facts say"):
+    resp = client.post("/search", json={"query": query})
+    db.execute("RESET ROLE")  # run_query's SET LOCAL ROLE normally ends with its commit; the proxy never commits
+    return resp
+
+
+@pytest.mark.clean_corpus  # the seeded tier documents must be the whole corpus
+def test_same_question_two_users_two_payloads(client_with_corpus, db):
+    """The durable Phase 4 test: identical question over HTTP as a rep and as
+    a care manager → two payload ids and the content each tier is entitled to."""
+    client = client_with_corpus
+    _login(client, "rep.dana")
+    rep = _search(client, db).json()
+    _login(client, "cm.priya")
+    cm = _search(client, db).json()
+    assert rep["payload_id"] != cm["payload_id"]
+    # person records (the rep's call notes, the care manager's clinical notes)
+    # are searched only inside a member context; without one each sees the
+    # tiers of documents about no one
+    assert _tags(rep) == TIER_MAP["member_services"] - MEMBER_SCOPED == {"public", "employee"}
+    assert _tags(cm) == TIER_MAP["care_team"] - MEMBER_SCOPED == {"public"}
+    assert "care_team" not in _tags(rep) and "employee" not in _tags(cm)
+
+
+@pytest.mark.clean_corpus  # the seeded tier documents must be the whole corpus
+def test_identical_question_control_through_the_api(client_with_corpus, db):
+    """Every seeded user, one question: exactly the tier map for the user's
+    document persona (person records need a member context, so minus those)."""
+    client = client_with_corpus
+    for username, (_display, group) in identity.SEED_USERS.items():
+        persona = identity.GROUPS[group][0]
+        _login(client, username)
+        got = _tags(_search(client, db).json())
+        if persona == "admin":
+            assert got == set().union(*TIER_MAP.values()) - MEMBER_SCOPED, username  # owner sees every tier
+        else:
+            assert got == TIER_MAP[persona] - MEMBER_SCOPED, username
+
+
+def test_a_body_naming_an_identity_or_a_module_is_400_not_ignored(client_with_corpus):
+    client = client_with_corpus
+    _login(client, "rep.dana")
+    for extra in ({"persona": "admin"}, {"role": "CLAIMS_EXAMINER"}, {"user_id": 1}, {"module": "appeals_workbench"}):
+        resp = client.post("/query", json={"question": "q", "surface": "ask", **extra})
+        assert resp.status_code == 400, extra
+        assert list(extra)[0] in str(resp.json()["detail"])
+    assert client.post("/search", json={"query": "q", "persona": "admin"}).status_code == 400
+    assert client.post("/member-data", json={"query_name": "x", "surface": "ask", "role": "ACTUARY"}).status_code == 400
+    assert client.post("/query", json={"question": "q", "surface": "ask"}).status_code == 200  # the same body without it
+
+
+def test_query_composes_under_the_surface_s_module_as_the_session_identity(client_with_corpus, monkeypatch):
+    seen = {}
+
+    def fake_compose(conn, question, caller, member_id=None, plan=None, source="interactive", sf_connect=None, module=None):
+        seen.update(question=question, caller=caller, member_id=member_id, source=source, module=module)
+        sf_connect("CARE_MANAGER").close()  # a leg closes what it is handed; the shared session survives
+        return {"status": "ok", "payload_id": "p"}
+
+    monkeypatch.setattr(planner, "compose", fake_compose)
+    client = client_with_corpus
+    _login(client, "cm.priya")
+    resp = client.post("/query", json={"question": "recent claims for this member", "surface": "agent_assist",
+                                       "member_id": "M767394984"})
+    assert resp.status_code == 200, resp.text
+    assert seen["module"] == "care_management" and seen["source"] == "web" and seen["member_id"] == "M767394984"
+    assert seen["caller"].persona == "care_team" and seen["caller"].warehouse_role == "CARE_MANAGER"
+    assert client.opened_warehouse["CARE_MANAGER"].cursors == []  # opened once, never closed by the leg
+    assert client.post("/query", json={"question": "q", "surface": "appeals_workbench"}).status_code == 403
+    assert client.post("/query", json={"question": "q", "surface": "console"}).status_code == 403
+    _login(client, "admin")
+    assert client.post("/query", json={"question": "q", "surface": "console"}).status_code == 400  # composes nothing
+
+
+def test_member_data_runs_the_surface_s_menu_as_the_warehouse_role(client_with_corpus):
+    client = client_with_corpus
+    _login(client, "actuary.jo")
+    resp = client.post("/member-data", json={"query_name": "cost_by_condition", "surface": "analyst_view",
+                                             "params": {"description_like": "%asthma%"}})
+    assert resp.status_code == 200, resp.text
+    out = resp.json()
+    assert out["status"] == "ok" and out["row_count"] == 1
+    assert out["masked_columns"] == sorted(snowlane.MASKED_FOR_ROLE["ACTUARY"] & {"MEMBER_ID", "LAST_NAME", "CLAIM_LINES", "TOTAL_COST"})
+    assert client.opened_warehouse["ACTUARY"].role == "ACTUARY" and "CARE_MANAGER" not in client.opened_warehouse
+    tag = [p for sql, p in client.opened_warehouse["ACTUARY"].cursors[0].executed if sql.startswith("ALTER SESSION")][0]
+    assert tag == ("raglab:cost_by_condition",)
+    # a query that is not on this screen's menu is refused with the menu, before any warehouse call
+    resp = client.post("/member-data", json={"query_name": "member_claims_summary", "surface": "analyst_view"})
+    assert resp.status_code == 400 and "menu" in resp.json()["detail"]
+    assert len(client.opened_warehouse["ACTUARY"].cursors) == 1
+    # the rep's Agent Assist menu carries the member queries; the Analyst View is not hers
+    _login(client, "rep.dana")
+    assert client.post("/member-data", json={"query_name": "cost_by_condition", "surface": "analyst_view"}).status_code == 403
+    assert client.post("/member-data", json={"query_name": "member_claims_summary", "surface": "agent_assist",
+                                             "params": {"member_id": "M767394984"}}).json()["masked_columns"] == []
+
+
+def test_an_identity_without_a_warehouse_role_gets_not_authorized():
+    ident = identity.Identity(0, "benefits.sam", "Sam", "benefits", "employee", None, ("ask",))
+    out = context_services.member_data(ident, "member_claims_summary", {}, warehouse=context_services.Warehouse(connect=None))
+    assert out["status"] == "not_authorized"

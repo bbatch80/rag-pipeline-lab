@@ -1457,6 +1457,54 @@ def payload_cmd(payload_id: str):
     click.echo(json.dumps(payload, indent=2, default=str))
 
 
+@main.command("snapshot")
+def snapshot_cmd():
+    """The database as a deployable snapshot: deploy/snapshot/raglab.dump (pg_dump custom format,
+    no owners) — restored by the deployed db on its first start."""
+    from raglab import backup
+
+    receipt = Receipt("raglab snapshot")
+    try:
+        target = config.REPO_ROOT / "deploy" / "snapshot"
+        target.mkdir(parents=True, exist_ok=True)
+        path = backup.create("snapshot")
+        final = target / "raglab.dump"
+        path.replace(final)
+        receipt.add("file", str(final.relative_to(config.REPO_ROOT)))
+        receipt.add("size", f"{final.stat().st_size / 1e6:.1f} MB")
+        receipt.add("tables", len(backup.inventory(final)))
+        receipt.add("note", "roles come from deploy/db-init/01-roles.sql; identity accounts and the eval store ride in the dump")
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", b"") or b""
+        receipt.fail(f"{type(exc).__name__}: {detail.decode().strip() or exc}")
+    receipt.finish()
+
+
+@main.command("smoke")
+@click.option("--base-url", default="http://127.0.0.1:8000", show_default=True)
+@click.option("--username", default="admin", show_default=True)
+@click.option("--password", default=None, help="Default: RAGLAB_DEMO_PASSWORD.")
+@click.option("--question", "question_id", default="factual-01", show_default=True, help="Golden question id to put through /query.")
+@click.option("--insecure", is_flag=True, help="Skip TLS verification (Caddy's internal CA on localhost).")
+def smoke_cmd(base_url: str, username: str, password: str | None, question_id: str, insecure: bool):
+    """Deploy smoke test: login, /status, one golden question through /query. Non-zero exit on failure."""
+    from raglab import smoke
+
+    receipt = Receipt("raglab smoke")
+    try:
+        out = smoke.run(base_url, username=username, password=password, question_id=question_id, verify=not insecure)
+        receipt.add("site", out["base_url"])
+        receipt.add("login", f"{out['username']} -> {', '.join(out['surfaces'])}")
+        if "health" in out:
+            h = out["health"]
+            receipt.add("status", f"ok · {h['documents']} documents · {h['chunks']} chunks")
+        p = out["payload"]
+        receipt.add("query", f"{question_id}: {p['status']} · {p['chunks']} chunks · {p['total_ms']:.0f} ms · payload {p['id']}")
+    except Exception as exc:  # noqa: BLE001 — the receipt IS the report; exit code carries the verdict
+        receipt.fail(f"{type(exc).__name__}: {exc}")
+    receipt.finish()
+
+
 @main.command("backup")
 @click.option("--tag", default="", help="Suffix for the file name, e.g. pre-pr4.")
 def backup_cmd(tag: str):

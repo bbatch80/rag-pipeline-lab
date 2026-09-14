@@ -654,6 +654,35 @@ the same question in Ask, two payload ids, each page holding exactly its
 role's documents; the rep's Agent Assist page for a member with clinical
 notes contains no clinical text, asserted on the HTML.
 
+## Deployment (Phase 6)
+
+One Compose stack, `deploy/compose.yml`: `db` (the pgvector + BM25 image,
+restored from a snapshot on its first start), `app` (the API and the
+surfaces), `caddy` (the TLS edge — Let's Encrypt for a public hostname,
+an internal CA for `localhost`). The same file runs on the Azure VM and
+on a laptop for the smoke test; only `deploy/.env` differs.
+
+The **app image** (`Dockerfile`) is serve-only: the pipeline's query side
+and the web layer, CPU-only torch from the lock's Linux index fork, no
+parsers or de-identification models, and the reranker weights baked in at
+a pinned revision with `HF_HUB_OFFLINE=1` — a container never downloads
+anything. 2.6 GB. The **snapshot** (`raglab snapshot`) is a `pg_dump` of
+the live database — corpus, embeddings, identity accounts, the evaluation
+store the Console reads — restored by the deployed database on first
+start after the persona roles are created (`deploy/db-init/`). The
+**smoke test** (`raglab smoke --base-url …`) logs in as a seeded account,
+reads `/status`, and puts one golden question through `/query`; anything
+short of a served payload exits non-zero. CI validates the compose file;
+the release workflow (next) builds the image on a tag and deploys behind
+an approval gate.
+
+```sh
+uv run raglab snapshot                                   # deploy/snapshot/raglab.dump
+cp deploy/.env.example deploy/.env                       # fill in keys, password, secret
+docker compose -f deploy/compose.yml --env-file deploy/.env up -d --build
+uv run raglab smoke --base-url https://localhost --insecure
+```
+
 ## Production mapping
 
 The lab runs on the tools the posting names; the same shape maps onto an

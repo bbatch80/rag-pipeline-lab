@@ -4,10 +4,9 @@ version = "0.1.0"
 description = "Governed retrieval pipeline lab: parsing, hybrid retrieval, evaluation, orchestration, and access-controlled context services"
 requires-python = ">=3.12"
 dependencies = [
+    # the serve path: the API, the surfaces, the pipeline's query side
     "anthropic>=1.0.0",
     "click>=8.1",
-    "datasketch>=2.0.0",
-    "en-core-web-sm",
     "fastapi>=0.115",
     "httpx>=0.28.1",
     "itsdangerous>=2.2",
@@ -15,11 +14,9 @@ dependencies = [
     "mcp>=2.1.1",
     "openai>=3.3.1",
     "psycopg[binary]>=3.2",
-    "pypdf>=6.16.2",
     "python-dotenv>=1.0",
     "python-multipart>=0.0.9",
     "snowflake-connector-python>=4.7.2",
-    "unstructured[pdf]>=0.27.1",
     "uvicorn>=0.30",
 ]
 
@@ -28,6 +25,14 @@ raglab = "raglab.cli:main"
 raglab-mcp = "raglab.mcp_server:main"
 
 [dependency-groups]
+# ingest-only tooling (parsers, dedup, letter PDFs, the small spaCy model);
+# a default group locally and in CI's test job, absent from the serve image
+ingest = [
+    "datasketch>=2.0.0",
+    "en-core-web-sm",
+    "pypdf>=6.16.2",
+    "unstructured[pdf]>=0.27.1",
+]
 dev = [
     "fpdf2>=2.8.8",
     "jsonschema>=4.26.0",
@@ -40,6 +45,7 @@ phi = [
 ]
 rerank = [
     "sentence-transformers>=6.0.0",
+    "torch>=2.0",  # declared directly so the CPU index source below applies to it
 ]
 
 [build-system]
@@ -57,6 +63,17 @@ markers = [
     "clean_corpus: this test needs the emptied document tables even inside a readonly module",
 ]
 
+[tool.uv]
+default-groups = ["dev", "ingest"]
+
+# CPU-only torch on Linux (the serve image and the VM): the default PyPI
+# wheels pull the CUDA libraries, several GB the reranker never uses.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
 en-core-web-lg = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" }

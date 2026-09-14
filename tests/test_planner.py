@@ -365,3 +365,25 @@ def test_a_member_scoped_query_always_binds_its_member():
     assert pl.legs[0].slots == ("member_id",) and pl.enforced == ("member_slot:member_appeals",)
     assert pl.legs[1].slots == () and pl.legs[2].slots == ("member_id",)  # no member_id in the catalog; already bound
     assert planner._DOCUMENT_WORDS.search("what did they call about immediately before the call where they disputed a denial?")  # call_note-08
+
+
+def test_a_platform_added_document_leg_is_best_effort():
+    """'Can you tell me if Cesar has any recent calls with us?' (2026-09-14):
+    the model's calls query found the row; the rule-added document leg found
+    nothing and, being required, hid the answer. Added legs are never
+    required, and 'tell me' is not a request about documents."""
+    from raglab import payload as payload_mod
+    from raglab import planner, router
+
+    assert not planner._DOCUMENT_WORDS.search("Can you tell me if Cesar has any recent calls with us?")
+    assert planner._DOCUMENT_WORDS.search("What did we tell them when they called about the denied claim?")
+    assert planner._DOCUMENT_WORDS.search("What did the rep tell the member?")
+    plan = planner.Plan(shape="simple", origin="model", legs=[planner.Leg(name="c", kind="member_query", query_name="member_calls", slots=("member_id",))])
+    out = planner.enforce_document_leg(plan, "What did the letter say about the appeal?")
+    assert out.enforced == ("document_leg",) and out.legs[-1].kind == "doc_probe" and out.legs[-1].required is False
+    route = router.Route(scope="in_scope", years=(2026,))
+    composed = payload_mod.compose("q", out.to_dict(),
+                                   sub_results=[{"leg": "documents", "status": "insufficient_evidence", "confidence": 0.003, "chunk_indexes": []}],
+                                   warehouse_results=[{"leg": "c", "query_name": "member_calls", "status": "ok", "rows": [["C1"]], "columns": ["CALL_ID"], "row_count": 1}],
+                                   chunks=[], subject="M1", unresolved=[], as_of_defaulted=False)
+    assert composed["status"] == "ok" and composed["missing"] == []   # the model's leg answered; the added leg's silence does not sink it

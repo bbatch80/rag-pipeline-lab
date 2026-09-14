@@ -174,7 +174,7 @@ def plan_from_dict(spec: dict, origin: str = "caller", model: str | None = None)
 # enforces it: when the question asks what was written and the plan carries
 # no doc_probe, one is added over the module's whole document menu.
 _DOCUMENT_WORDS = re.compile(
-    r"\b(letter|said|says|say|state[sd]?|wrote|written|describe[sd]?|summari[sz]e|summary|tell|told|argue[sd]?|call(?:ed|s)? about|"
+    r"\b(letter|said|says|say|state[sd]?|wrote|written|describe[sd]?|summari[sz]e|summary|told|tell (?:them|him|her|us|the member)|argue[sd]?|call(?:ed|s)? about|"
     r"rationale|reasoning|explain(?:ed|s)?|why|what (?:does|did|do) .{0,40}\b(?:say|state|require|cover|mean))\b",
     re.IGNORECASE,
 )
@@ -332,7 +332,8 @@ def enforce_document_leg(plan: Plan, question: str) -> Plan:
         return plan
     if not _DOCUMENT_WORDS.search(question or ""):
         return plan
-    plan.legs.append(Leg(name="documents", kind="doc_probe", text=question, sources=()))
+    # best effort: a leg the platform adds never sinks an answer the model's own legs found
+    plan.legs.append(Leg(name="documents", kind="doc_probe", text=question, sources=(), required=False))
     plan.shape = "compound" if len(plan.legs) > 1 else "simple"
     plan.enforced = tuple(plan.enforced) + ("document_leg",)
     return plan

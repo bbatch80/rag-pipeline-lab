@@ -82,7 +82,27 @@ def create_app(connect: Callable = db.connect, warehouse: context_services.Wareh
     """`connect` opens a database connection context; tests hand in the
     rolled-back fixture connection so nothing is committed. `warehouse`
     holds the process's Snowflake sessions (one per role)."""
-    app = FastAPI(title="raglab", docs_url=None, redoc_url=None)
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # RAGLAB_WARM_RERANKER=on (the deployed container): load the reranker
+        # on a thread at startup so the first question does not pay the model
+        # load. Off by default — tests and the CLI never load it here.
+        if os.environ.get("RAGLAB_WARM_RERANKER", "off") == "on":
+            import threading
+
+            def load():
+                from raglab import rerank
+
+                rerank._get_model()
+                print(f"reranker warm: {rerank.model_key()}", flush=True)
+
+            threading.Thread(target=load, name="warm-reranker", daemon=True).start()
+        yield
+        warehouse.close()
+
+    app = FastAPI(title="raglab", docs_url=None, redoc_url=None, lifespan=lifespan)
     warehouse = warehouse or context_services.Warehouse()
     app.add_middleware(
         SessionMiddleware,

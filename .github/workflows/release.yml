@@ -85,10 +85,12 @@ jobs:
         id: smoke
         env:
           RAGLAB_DEMO_PASSWORD: ${{ secrets.RAGLAB_DEMO_PASSWORD }}
-        run: uv run --no-default-groups raglab smoke --base-url "https://${{ vars.SITE_ADDRESS }}"
+        # a fresh deploy needs time: the edge obtains its certificate and the
+        # database restores the snapshot on its first start
+        run: uv run --no-default-groups raglab smoke --base-url "https://${{ vars.SITE_ADDRESS }}" --wait 900
       - name: roll back
         if: failure() && steps.deploy.outcome == 'success'
         run: |
           echo "smoke failed on ${{ needs.build.outputs.version }}: rolling back"
-          ssh target "bash /opt/raglab/deploy/deploy.sh rollback"
+          ssh target "bash /opt/raglab/deploy/deploy.sh rollback" || echo "nothing to roll back to (first deploy)"
           exit 1

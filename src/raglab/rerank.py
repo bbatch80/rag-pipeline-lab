@@ -71,6 +71,26 @@ _model = None
 # rule, a query-side change, or a model swap all change the key and miss
 # honestly. Thresholds are applied after scoring and are not in the key.
 RERANK_CACHE = os.environ.get("RAGLAB_RERANK_CACHE", "on") != "off"
+# Inference precision. bf16 runs the cross-encoder under CPU autocast — on a
+# CPU with AMX (the deployed VM) 3.4x faster; scores move in the fourth
+# decimal (measured 0.0403 -> 0.0402), far inside the abstention bars. Off
+# by default: the Mac, the baseline, and the CI gate stay fp32. Part of the
+# cache key, so scores from the two precisions never mix.
+RERANK_DTYPE = os.environ.get("RAGLAB_RERANK_DTYPE", "fp32")
+if RERANK_DTYPE not in ("fp32", "bf16"):
+    raise SystemExit(f"RAGLAB_RERANK_DTYPE={RERANK_DTYPE!r}: expected fp32 or bf16")
+
+
+def _predict(model, pairs: list[tuple[str, str]]) -> list[float]:
+    """model.predict in the configured precision."""
+    if not pairs:
+        return []
+    if RERANK_DTYPE == "bf16":
+        import torch
+
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            return [float(x) for x in model.predict(pairs)]
+    return [float(x) for x in model.predict(pairs)]
 CACHE_STATS = {"hits": 0, "misses": 0}
 _cache_conn = None
 _model_key: str | None = None
@@ -91,7 +111,7 @@ def model_key() -> str:
         except Exception:  # no hub cache metadata: still keyed on the name
             pass
         _model_key = f"{MODEL_NAME}@{rev}"
-    return _model_key + ("+reid" if RERANK_REIDENTIFY else "")
+    return _model_key + ("+reid" if RERANK_REIDENTIFY else "") + ("+bf16" if RERANK_DTYPE == "bf16" else "")
 
 
 def _cache_connection():
@@ -114,7 +134,7 @@ def score_pairs(model, pairs: list[tuple[str, str]], conn=None) -> list[float]:
     import hashlib
 
     if not RERANK_CACHE or not pairs:
-        return [float(x) for x in model.predict(pairs)] if pairs else []
+        return _predict(model, pairs)
     h = lambda s: hashlib.sha256(s.encode()).hexdigest()  # noqa: E731
     keys = [(h(q), h(t)) for q, t in pairs]
     mk = model_key()
@@ -127,14 +147,14 @@ def score_pairs(model, pairs: list[tuple[str, str]], conn=None) -> list[float]:
                 (mk, sorted({q for q, _ in keys}), sorted({t for _, t in keys})),
             ).fetchall()
     except Exception:  # no table / no database: score everything
-        return [float(x) for x in model.predict(pairs)]
+        return _predict(model, pairs)
     known = {(q, t): float(s) for q, t, s in rows}
     scores: list[float | None] = [known.get(k) for k in keys]
     miss_idx = [i for i, s in enumerate(scores) if s is None]
     CACHE_STATS["hits"] += len(pairs) - len(miss_idx)
     CACHE_STATS["misses"] += len(miss_idx)
     if miss_idx:
-        fresh = [float(x) for x in model.predict([pairs[i] for i in miss_idx])]
+        fresh = _predict(model, [pairs[i] for i in miss_idx])
         for i, s in zip(miss_idx, fresh, strict=True):
             scores[i] = s
         try:

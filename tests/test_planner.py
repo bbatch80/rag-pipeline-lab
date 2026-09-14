@@ -193,7 +193,9 @@ def test_out_of_scope_route_short_circuits_composition(db, monkeypatch):
     """No plan, no legs, status out_of_scope with the boundary text at the
     top (scope_negative-01, 2026-09-12)."""
     from raglab import planner, router
-    monkeypatch.setattr(planner, "read_route", lambda conn, q, client=None: router.Reading(scope="other_carrier", boundary_value="Blue Cross FEP", origin="model"))
+    stored = router.Reading(scope="other_carrier", boundary_value="Blue Cross FEP", origin="model")
+    monkeypatch.setattr(planner, "PLANNER", "model")
+    monkeypatch.setattr(planner, "_read_prepare", lambda conn, q: (("k",), q, stored))  # the model's reading, from the store
     monkeypatch.setattr(planner, "_disclose_and_commit", lambda *a, **k: None)
     built = planner.compose(db, "What does Blue Cross FEP Basic charge for a specialist visit?", planner.Caller(persona="public"), module="ask", source="test")
     assert built["status"] == "out_of_scope" and "Blue Cross FEP" in built["boundary_response"]

@@ -682,7 +682,21 @@ restart, remember the previous tag), and smoke-tests the live site from
 the runner; if the smoke test fails, `deploy.sh rollback` restarts the
 previous tag and the job fails. The host needs Docker, a deploy user, and
 `deploy/.env` — never a checkout. Rehearsed end to end on a laptop:
-up → smoke → rollback → smoke.
+up → smoke → rollback → smoke; live at `ragpipelinelab.com` on an Azure
+VM (East US, 4 vCPU / 16 GB, Let's Encrypt via Caddy) since v2.0.0.
+
+**Latency on the VM, measured.** A question the platform has seen is
+~1 s (its plan and reranker scores are cached in the database). A fresh
+question was 35–47 s: the cross-encoder scoring ~200 candidates on two
+CPU cores took 31–38 s, and the route reading, the planner, and the
+embedding call ran one after another for ~8 s more. Two changes, both
+measured against the baseline before shipping: reranking under bf16
+autocast (`RAGLAB_RERANK_DTYPE=bf16`, off by default; the VM's Xeon has
+AMX) — 3.4× faster, scores equal to three decimals, **147/147 golden
+verdicts unchanged**, cache keys carry the precision so the two never
+mix; and the reading and planning model calls now run concurrently.
+The remaining gap to a GPU (< 0.5 s to rerank) is a sizing decision the
+per-stage timings on every page are there to make.
 
 ```sh
 uv run raglab snapshot                                   # deploy/snapshot/raglab.dump

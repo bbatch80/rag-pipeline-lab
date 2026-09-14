@@ -60,3 +60,32 @@ def test_rerank_cache_memoizes_on_model_query_and_text(db, monkeypatch):
     monkeypatch.setattr(rerank, "RERANK_CACHE", False)
     rerank.score_pairs(Fake(), pairs)
     assert len(calls) == 4, "cache off: plain predict"
+
+
+def test_bf16_precision_is_in_the_cache_key_and_wraps_prediction(monkeypatch):
+    """The precision switch: off by default; on, every prediction runs under
+    CPU bf16 autocast and the cache key carries it so fp32 and bf16 scores
+    never mix."""
+    import raglab.rerank as rr
+
+    monkeypatch.setattr(rr, "RERANK_DTYPE", "fp32")
+    monkeypatch.setattr(rr, "_model_key", "m@rev")
+    assert rr.model_key().endswith("m@rev") or "+bf16" not in rr.model_key()
+    monkeypatch.setattr(rr, "RERANK_DTYPE", "bf16")
+    assert rr.model_key().endswith("+bf16")
+    import torch
+
+    seen = {}
+
+    class _Probe:
+        def predict(self, pairs):
+            import torch
+            seen["autocast"] = torch.is_autocast_enabled("cpu")
+            seen["dtype"] = torch.get_autocast_dtype("cpu") if seen["autocast"] else None
+            return [0.5] * len(pairs)
+
+    assert rr._predict(_Probe(), [("q", "t"), ("q", "u")]) == [0.5, 0.5]
+    assert seen == {"autocast": True, "dtype": torch.bfloat16}
+    monkeypatch.setattr(rr, "RERANK_DTYPE", "fp32")
+    rr._predict(_Probe(), [("q", "t")])
+    assert seen["autocast"] is False

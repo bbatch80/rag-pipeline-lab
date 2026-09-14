@@ -45,6 +45,8 @@ services:
       RAGLAB_DEMO_PASSWORD: ${RAGLAB_DEMO_PASSWORD:?demo login password}
       RAGLAB_SESSION_SECRET: ${RAGLAB_SESSION_SECRET:?session signing secret}
       RAGLAB_RERANKER: bge-base
+      RAGLAB_RERANK_DTYPE: ${RAGLAB_RERANK_DTYPE:-fp32}   # bf16 on a CPU with AMX (the VM)
+      RAGLAB_WARM_RERANKER: "on"
       RAGLAB_PLAN_CACHE: "on"
     expose:
       - "8000"

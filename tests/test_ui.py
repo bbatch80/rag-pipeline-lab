@@ -102,6 +102,20 @@ def test_out_of_scope_shows_the_boundary_sentence_and_no_evidence():
     assert 'class="payloadfoot"' in html  # the payload id is always shown
 
 
+def test_a_real_out_of_scope_payload_renders_without_error():
+    """The shape compose actually returns for out_of_scope (2026-09-14: the
+    Medicare Part B question 500'd the page because the footer assumed a
+    confidence field): no confidence, no plan, no router, no coverage."""
+    payload = {"spec_version": "1.1.0", "query": "How long do I have after I retire to enroll in Medicare Part B?",
+               "status": "out_of_scope", "boundary_response": "Medicare program facts are outside this corpus.",
+               "retrieved_at": "2026-09-14T14:52:40+00:00", "chunks": [], "payload_id": "abc", "persona": "care_team",
+               "member_context": None, "record_context": {}, "unresolved_identifiers": [], "plan": None,
+               "sub_results": [], "warehouse_results": [], "missing": [], "timings": {"total": 12.0}}
+    html = ui.render_payload(payload)
+    assert "banner-scope" in html and "outside this corpus" in html and "payload <code>abc</code>" in html
+    assert ui.answer_for(type("A", (), {"state": type("S", (), {"generator": None})}), payload) is None
+
+
 def test_single_probe_payload_without_a_plan_renders_the_route():
     payload = {**FIXTURE, "plan": None, "sub_results": [], "warehouse_results": []}
     html = ui.render_payload(payload)

@@ -91,7 +91,7 @@ def test_bf16_precision_is_in_the_cache_key_and_wraps_prediction(monkeypatch):
     assert seen["autocast"] is False
 
 
-def test_cover_all_dedupes_plans_without_guaranteeing_seats():
+def test_cover_all_dedupes_plans_without_guaranteeing_seats(monkeypatch):
     """Nothing named → every plan covered, but no plan is owed a seat: score
     order with at most two chunks per plan, and plan-less sources compete
     as they are (run 667: guaranteed lanes took a bulletin's seats)."""
@@ -105,15 +105,10 @@ def test_cover_all_dedupes_plans_without_guaranteeing_seats():
     pool = [cand(1, "71-006", 0.9), cand(2, "71-006", 0.85), cand(3, "71-006", 0.8), cand(4, "71-014", 0.7),
             cand(5, None, 0.75, "bulletin"), cand(6, "71-018", 0.1), cand(7, "71-021", 0.05), cand(8, "71-026", 0.04)]
 
-    class _M:
-        def predict(self, pairs):
-            return [next(c.rerank_score for c in pool if (c.index_text or c.content) == t or True) for _, t in pairs]
-
-    rerank._model = None
     import raglab.rerank as rr
     monkey_scores = {c.chunk_id: c.rerank_score for c in pool}
-    rr._get_model = lambda: type("M", (), {"predict": staticmethod(lambda pairs: [0.0] * len(pairs))})()
-    rr.score_pairs = lambda model, pairs, conn=None: [monkey_scores[int(t.split("#")[1])] if "#" in t else 0.0 for _, t in pairs]
+    monkeypatch.setattr(rr, "_get_model", lambda: type("M", (), {"predict": staticmethod(lambda pairs: [0.0] * len(pairs))})())
+    monkeypatch.setattr(rr, "score_pairs", lambda model, pairs, conn=None: [monkey_scores[int(t.split("#")[1])] if "#" in t else 0.0 for _, t in pairs])
     for c in pool:
         c.index_text = f"chunk#{c.chunk_id}"
     plans = ("71-006", "71-014", "71-018", "71-021", "71-026")

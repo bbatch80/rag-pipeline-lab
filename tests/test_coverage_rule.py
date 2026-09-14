@@ -22,7 +22,8 @@ def test_program_named_without_a_plan_covers_every_plan_of_the_program():
 
 def test_a_named_plan_or_no_program_does_not_trigger_coverage():
     assert router.route("What does the PSHB High Option cover for chiropractic care?").cover_field is None
-    assert router.route("How many chiropractic visits does the plan allow?").cover_field is None  # no program named
+    r = router.route("How many chiropractic visits does the plan allow?")  # nothing named: every plan offered, side by side
+    assert r.cover_field == "plan_code" and r.cover_asked == "every plan" and r.cover_level == "all"
     r = router.route("What is the FEHB deductible?")
     assert r.cover_field == "plan_code" and r.cover_asked == "FEHB" and set(r.cover_keys) == {"71-006", "71-014", "71-018"}
 

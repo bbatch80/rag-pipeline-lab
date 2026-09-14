@@ -173,7 +173,8 @@ def test_modules_are_a_closed_menu_over_the_catalog():
         assert set(spec["named_queries"]) <= set(snowlane.NAMED_QUERIES), name
         assert set(spec["sources"]) <= set(planner.SOURCE_GUIDE), name
     assert planner.MODULES["ask"]["named_queries"] == ()  # Ask never reaches the warehouse
-    assert "member_appeals" not in planner.MODULES["agent_assist"]["named_queries"]  # the rep has no grant on APPEALS
+    assert "member_appeals" in planner.MODULES["agent_assist"]["named_queries"]  # appeal status is ordinary member service (2026-09-14)
+    assert "appeal_case" not in planner.MODULES["agent_assist"]["named_queries"]   # working a case stays on the workbench
 
 
 def test_compose_records_every_stage_in_order(db, monkeypatch):
@@ -268,3 +269,99 @@ def test_every_plan_coverage_applies_only_to_legs_that_reach_brochures():
     assert planner._leg_route(brochure, route, ctx, available).cover_level == "all"
     unhinted = planner.Leg(name="u", kind="doc_probe", text="deductible", sources=())
     assert planner._leg_route(unhinted, route, ctx, available).cover_level == "all"
+
+
+def test_a_list_of_benefits_becomes_one_fact_shaped_leg_each():
+    """The user's four-topic cost question: one leg per named benefit (limit
+    four); 'does the plan cover A, B and C' likewise; single-benefit and
+    already-reshaped plans are untouched."""
+    from raglab import planner
+
+    def plan(*legs, origin="model", enforced=()):
+        pl = planner.Plan(shape="simple" if len(legs) == 1 else "compound", origin=origin, legs=[planner.Leg(**l) for l in legs])
+        pl.enforced = enforced
+        return pl
+
+    doc = {"name": "d", "kind": "doc_probe", "text": "costs for physical therapy, imaging, outpatient surgery, and specialist visits", "sources": ("brochure",)}
+    verbatim = lambda items: None  # noqa: E731 — no row titles: the member's words make the legs
+    q4 = "What are the costs for physical therapy, imaging, outpatient surgery, and specialist visits?"
+    out = planner.split_benefit_list(plan(doc), q4, titles=verbatim)
+    assert out.enforced == ("split_by_benefit",) and len(out.legs) == 4 and out.shape == "compound"
+    assert [l.text for l in out.legs] == ["What do I pay for physical therapy?", "What do I pay for imaging?",
+                                          "What do I pay for outpatient surgery?", "What do I pay for specialist visits?"]
+    assert [l.name for l in out.legs] == ["physical therapy: cost", "imaging: cost", "outpatient surgery: cost", "specialist visits: cost"]
+    # with the brochure's row titles (the reranker scores a row near 1 against its own title, near 0 against a synonym)
+    rows = lambda items: ("Physical, occupational, speech, habilitative and rehabilitative therapy", "Lab, x-ray and other diagnostic tests",  # noqa: E731
+                          "Outpatient hospital or ambulatory surgical center", "Physician office visits")
+    titled = planner.split_benefit_list(plan(doc), q4, titles=rows)
+    assert titled.legs[1].text == "What do I pay for Lab, x-ray and other diagnostic tests?" and titled.legs[1].name == "imaging: cost"
+    named = planner.split_benefit_list(plan(doc), "What are the copays for urgent care and telehealth on the High Option?", titles=verbatim)
+    assert [l.text for l in named.legs] == ["What do I pay for urgent care on the High Option?", "What do I pay for telehealth on the High Option?"]
+    cover = planner.split_benefit_list(plan(doc), "Does the plan cover acupuncture, chiropractic care, and massage therapy?", titles=verbatim)
+    assert [l.text for l in cover.legs][0] == "Does the plan cover acupuncture?" and len(cover.legs) == 3
+    assert planner.split_benefit_list(plan(doc), "What is the copay for a specialist visit?", titles=verbatim).enforced == ()        # one benefit
+    assert planner.split_benefit_list(plan(doc, enforced=("fact_shaped_legs",)), "costs for a, b, and c", titles=verbatim).enforced == ("fact_shaped_legs",)
+    five = "What are the costs for a, b, c, d, and e?"
+    assert planner.split_benefit_list(plan(doc), five, titles=verbatim).enforced == ()                                             # over the limit: untouched
+    wh = {"name": "c", "kind": "member_query", "query_name": "appeal_case", "slots": ("case_id",)}
+    assert len(planner.split_benefit_list(plan(wh, doc), q4, titles=verbatim).legs) == 2  # no room: untouched
+
+
+def test_row_titles_come_from_the_model_and_fall_back_to_the_members_words():
+    from raglab import planner
+
+    class _Resp:
+        def __init__(self, text):
+            self.content = [type("B", (), {"type": "text", "text": text})()]
+
+    class _Client:
+        def __init__(self, text):
+            self.text, self.calls = text, []
+
+        @property
+        def messages(self):
+            return self
+
+        def create(self, **kw):
+            self.calls.append(kw)
+            return _Resp(self.text)
+
+    planner.benefit_row_titles.cache_clear()
+    good = _Client('["Lab, x-ray and other diagnostic tests", "Physician office visits"]')
+    assert planner.benefit_row_titles(("imaging", "specialist visits"), client=good) == ("Lab, x-ray and other diagnostic tests", "Physician office visits")
+    assert good.calls[0]["extra_body"] == {"temperature": 0.0} and good.calls[0]["model"] == planner.PLANNER_MODEL
+    assert planner.benefit_row_titles(("imaging",), client=_Client("[\"one\", \"two\"]")) is None      # wrong count: the member's words
+    assert planner.benefit_row_titles(("imaging",), client=_Client("not json")) is None
+    planner.benefit_row_titles.cache_clear()
+
+
+def test_an_invented_query_name_snaps_to_the_menu_or_loses_only_its_leg():
+    """The user's live probe 2026-09-14: 'member_appeals_history' failed
+    validation and the whole plan fell back to rules."""
+    from raglab import planner
+
+    menu = {"sources": ("brochure",), "named_queries": ("member_profile", "member_appeals", "member_calls")}
+    legs = [planner.Leg(name="a", kind="member_query", query_name="member_appeals_history", slots=("member_id",)),
+            planner.Leg(name="d", kind="doc_probe", text="appeal rights", sources=("brochure",))]
+    pl = planner.repair_query_names(planner.Plan(shape="compound", origin="model", legs=legs), menu)
+    assert pl.legs[0].query_name == "member_appeals" and pl.enforced == ("query_name:member_appeals_history->member_appeals",)
+    lost = [planner.Leg(name="z", kind="member_query", query_name="zebra_report", slots=()), legs[1]]
+    pl = planner.repair_query_names(planner.Plan(shape="compound", origin="model", legs=lost), menu)
+    assert [l.name for l in pl.legs] == ["d"] and pl.shape == "simple" and pl.enforced == ("dropped:zebra_report",)
+    clean = planner.repair_query_names(planner.Plan(shape="simple", origin="model", legs=[legs[1]]), menu)
+    assert clean.enforced == ()
+    assert "member_appeals" in planner.MODULES["agent_assist"]["named_queries"] and "member_appeals" in planner.MODULES["care_management"]["named_queries"]
+
+
+def test_a_member_scoped_query_always_binds_its_member():
+    """named_query-12 (2026-09-14): the model planned member_appeals with no
+    slots; the query ran unbound and reported 'no rows'."""
+    from raglab import planner
+
+    legs = [planner.Leg(name="a", kind="member_query", query_name="member_appeals", slots=()),
+            planner.Leg(name="p", kind="member_query", query_name="provider_lookup", slots=(), params={"npi": "1"}),
+            planner.Leg(name="c", kind="member_query", query_name="member_calls", slots=("member_id",))]
+    pl = planner.fill_member_slot(planner.Plan(shape="compound", origin="model", legs=legs))
+    assert pl.legs[0].slots == ("member_id",) and pl.enforced == ("member_slot:member_appeals",)
+    assert pl.legs[1].slots == () and pl.legs[2].slots == ("member_id",)  # no member_id in the catalog; already bound
+    assert planner._DOCUMENT_WORDS.search("what did they call about immediately before the call where they disputed a denial?")  # call_note-08

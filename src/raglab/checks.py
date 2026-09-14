@@ -253,6 +253,9 @@ def check_expected_rows(item: dict, payload: dict) -> tuple:
     the semantic-layer measure: a bound the catalog does not expose)."""
     results = {}
     for query_name, want in (item.get("expected_rows") or {}).items():
+        # "a|b": either query may carry the row (two legitimate plans for one question)
+        names = query_name.split("|")
+        query_name = next((n for n in names if _rows(payload, n)), names[0])
         rows = _rows(payload, query_name)
         want = dict(want)
         count = want.pop("row_count", None)

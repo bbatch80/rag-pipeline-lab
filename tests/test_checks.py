@@ -191,3 +191,18 @@ def test_payload_health_sees_ties_duplicates_index_pages_and_needless_splits():
     assert h["tie"] is True and h["duplicates"] == 1 and h["index_seats"] == 1 and h["needless_split"] is True
     summary = checks.summarize_health([h, checks.payload_health(_payload([_chunk("a", score=0.9), _chunk("b", score=0.4)]))])
     assert summary["tie_rate"] == 0.5 and summary["n_payloads"] == 2
+
+
+def test_expected_rows_accepts_either_of_two_named_queries():
+    """call_note-06 (2026-09-14): member_denials or member_calls both carry
+    the claim; whichever the plan ran is judged, the other is not demanded."""
+    from raglab import checks
+
+    item = {"expected_rows": {"member_denials|member_calls": {"CLAIM_ID": "CLM-1"}}}
+    calls = {"warehouse_results": [{"query_name": "member_calls", "columns": ["CALL_ID", "CLAIM_ID"], "rows": [["C1", "CLM-1"]]}]}
+    denials = {"warehouse_results": [{"query_name": "member_denials", "columns": ["CLAIM_ID"], "rows": [["CLM-1"]]}]}
+    neither = {"warehouse_results": [{"query_name": "member_calls", "columns": ["CALL_ID", "CLAIM_ID"], "rows": [["C1", "CLM-9"]]}]}
+    assert checks.check_expected_rows(item, calls)[1] == 1.0
+    assert checks.check_expected_rows(item, denials)[1] == 1.0
+    assert checks.check_expected_rows(item, neither)[1] == 0.0
+    assert checks.check_expected_rows(item, {"warehouse_results": []})[1] == 0.0

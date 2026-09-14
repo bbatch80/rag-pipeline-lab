@@ -339,6 +339,28 @@ def enforce_document_leg(plan: Plan, question: str) -> Plan:
     return plan
 
 
+def release_unbound_member_legs(plan: Plan, member_id: str | None) -> Plan:
+    """No member is open (Ask, or a surface before a key is entered): a leg
+    that needs one cannot run, and must not sink the legs that can. The leg
+    stays in the plan, reported as not executed with the reason, but is no
+    longer required. (A member's own question on Ask, 2026-09-14: the
+    brochure note answered it at 0.77 and 'missing: current_enrollment'
+    hid it.)"""
+    if member_id:
+        return plan
+    notes = []
+    for leg in plan.legs:
+        if leg.kind == "doc_probe" or not leg.required:
+            continue
+        declared = snowlane.NAMED_QUERIES.get(leg.query_name, {}).get("params", {})
+        if "member_id" in leg.slots or ("member_id" in declared and "member_id" not in leg.params):
+            leg.required = False
+            notes.append(f"no_member:{leg.query_name}")
+    if notes:
+        plan.enforced = tuple(plan.enforced) + tuple(notes)
+    return plan
+
+
 def fill_member_slot(plan: Plan) -> Plan:
     """A member-scoped query without its member is meaningless: when the
     catalog declares member_id and the leg neither binds the slot nor sets the
@@ -449,7 +471,8 @@ def bind_slots(leg: Leg, ctx: retrieval.Context, member_id: str | None, route: r
         if slot not in values:
             raise PlanError(f"leg {leg.name}: unknown slot {slot!r}")
         if values[slot] is None:
-            raise PlanError(f"leg {leg.name}: {slot} required but not in context")
+            raise PlanError(f"leg {leg.name}: {slot} required but not in context"
+                            + (" — no member is open; open the member on Agent Assist to answer this part" if slot == "member_id" else ""))
         bound[slot] = values[slot]
     return bound
 
@@ -926,6 +949,7 @@ def compose(
     coverage = None
     search_note: dict = {}
     by_identity = 0  # chunks seated by the records or row-identity rules, summed over the document legs
+    plan = release_unbound_member_legs(plan, member_id or _member_id_of(ctx))
     for leg in plan.legs:
         if leg.kind == "doc_probe":
             result, reranked, widened = _run_doc_leg(conn, leg, question, caller, ctx, route, watch, available, trace)

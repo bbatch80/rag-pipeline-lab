@@ -1,13 +1,13 @@
 {
-  "run_id": 717,
-  "git_sha": "aa7e117",
+  "run_id": 735,
+  "git_sha": "97f097f",
   "corpus_hash": "41a4fd0f60ed63d14e46a4356c5c8fbf6e7a1732f703c43853a015d6ed262b86",
-  "written_at": "2026-09-14T19:32:30+00:00",
+  "written_at": "2026-09-14T20:44:17+00:00",
   "overall": {
-    "item_pass": 0.694,
-    "hit@5": 0.8739495798319328,
-    "precision@5": 0.42857142857142855,
-    "source_coverage": 0.8333800186741362
+    "item_pass": 0.69,
+    "hit@5": 0.875,
+    "precision@5": 0.4266666666666667,
+    "source_coverage": 0.8347685185185185
   },
   "by_work": {
     "0": {
@@ -22,8 +22,8 @@
     },
     "2": {
       "name": "Explanation with exceptions",
-      "rate": 0.647,
-      "n": 17
+      "rate": 0.611,
+      "n": 18
     },
     "3": {
       "name": "Summarization of a bounded set",
@@ -95,8 +95,8 @@
       "n": 3
     },
     "factual": {
-      "rate": 0.786,
-      "n": 14
+      "rate": 0.733,
+      "n": 15
     },
     "internal_factual": {
       "rate": 0.818,
@@ -308,6 +308,7 @@
     "factual-10": 0,
     "factual-12": 0,
     "factual-13": 0,
+    "factual-18": 0,
     "internal_factual-10": 0,
     "internal_factual-11": 0,
     "internal_table-02": 0,
@@ -326,11 +327,11 @@
     "yoy-09": 0
   },
   "health": {
-    "tie_rate": 0.293,
-    "median_margin": 0.0231,
+    "tie_rate": 0.291,
+    "median_margin": 0.0218,
     "duplicate_share": 0.101,
     "index_seat_share": 0.011,
     "needless_split_rate": 0.255,
-    "n_payloads": 156
+    "n_payloads": 157
   }
 }

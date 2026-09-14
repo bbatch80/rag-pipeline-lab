@@ -111,8 +111,9 @@ class Reading:
 
 BOUNDARY_TEXT = {
     "other_carrier": "This corpus covers GEHA plans only; '{value}' is a different carrier.",
-    "medicare_program": ("Medicare program facts (premiums, costs) are outside this corpus; it covers "
-                         "GEHA plan benefits, including how they coordinate with Medicare."),
+    "medicare_program": ("Medicare's own rules — its premiums, costs, enrollment periods, and penalties — are outside "
+                         "this corpus; it covers GEHA plan benefits, including how they coordinate with Medicare and "
+                         "what a plan requires of Medicare-eligible members."),
     "out_of_year": "The corpus covers plan years {first}-{last}; {value} is outside it.",
 }
 

@@ -5,13 +5,13 @@
 {% if p.status == "out_of_scope" %}
 <p class="banner banner-scope"><strong>Outside this platform's scope.</strong> {{ p.boundary_response }}</p>
 {% elif p.status == "insufficient_evidence" %}
-<p class="banner banner-insufficient"><strong>Insufficient evidence</strong>{% if p.missing %} — missing: {{ p.missing | join(", ") }}{% endif %}.
-  {% if p.unresolved_identifiers %}Unresolved identifiers: {{ p.unresolved_identifiers | join(", ") }}.{% endif %}</p>
+<p class="banner banner-insufficient"><strong>Insufficient evidence</strong>{% if p.get("missing") %} — missing: {{ p.missing | join(", ") }}{% endif %}.
+  {% if p.get("unresolved_identifiers") %}Unresolved identifiers: {{ p.unresolved_identifiers | join(", ") }}.{% endif %}</p>
 {% elif p.status == "not_permitted" %}
 <p class="banner banner-scope"><strong>Not available to your role.</strong></p>
 {% endif %}
 
-{% if p.coverage and (p.coverage.missing_from_corpus or p.coverage.not_offered) %}
+{% if p.get("coverage") and (p.coverage.get("missing_from_corpus") or p.coverage.get("not_offered")) %}
 <p class="note">Coverage of {{ p.coverage.asked }}:
   {% if p.coverage.missing_from_corpus %}missing from the corpus: {{ p.coverage.missing_from_corpus | join(", ") }}. {% endif %}
   {% if p.coverage.not_offered %}not offered: {{ p.coverage.not_offered | join(", ") }}.{% endif %}</p>
@@ -67,7 +67,7 @@
 {% endif %}
 
 <footer class="payloadfoot">
-  <small>payload <code>{{ p.payload_id }}</code>{% if console %} · <a href="/console/payload/{{ p.payload_id }}">audit</a>{% endif %}
-  · {{ p.persona }} · spec {{ p.spec_version }}{% if p.confidence is not none %} · confidence {{ "%.2f" | format(p.confidence) }}{% endif %}
-  {% if p.timings %} · {{ "%.0f" | format(p.timings.total) }} ms{% if p.timings.rerank %} (rerank {{ "%.0f" | format(p.timings.rerank) }}){% endif %}{% endif %}</small>
+  <small>payload <code>{{ p.get("payload_id", "—") }}</code>{% if console and p.get("payload_id") %} · <a href="/console/payload/{{ p.payload_id }}">audit</a>{% endif %}
+  · {{ p.get("persona", "—") }} · spec {{ p.get("spec_version", "—") }}{% if p.get("confidence") is not none %} · confidence {{ "%.2f" | format(p.confidence) }}{% endif %}
+  {% if p.get("timings") %} · {{ "%.0f" | format(p.timings.get("total", 0)) }} ms{% if p.timings.get("rerank") %} (rerank {{ "%.0f" | format(p.timings.rerank) }}){% endif %}{% endif %}</small>
 </footer>

@@ -1,19 +1,19 @@
 {
-  "run_id": 652,
-  "git_sha": "ff65167",
+  "run_id": 670,
+  "git_sha": "7f2b0c5",
   "corpus_hash": "41a4fd0f60ed63d14e46a4356c5c8fbf6e7a1732f703c43853a015d6ed262b86",
-  "written_at": "2026-09-14T14:51:18+00:00",
+  "written_at": "2026-09-14T16:25:33+00:00",
   "overall": {
-    "item_pass": 0.673,
-    "hit@5": 0.8620689655172413,
-    "precision@5": 0.43448275862068964,
-    "source_coverage": 0.8204501915708812
+    "item_pass": 0.678,
+    "hit@5": 0.8632478632478633,
+    "precision@5": 0.4324786324786325,
+    "source_coverage": 0.8219848053181386
   },
   "by_work": {
     "0": {
       "name": "Guardrails",
-      "rate": 0.96,
-      "n": 25
+      "rate": 0.962,
+      "n": 26
     },
     "1": {
       "name": "Factual lookup",
@@ -22,8 +22,8 @@
     },
     "2": {
       "name": "Explanation with exceptions",
-      "rate": 0.6,
-      "n": 15
+      "rate": 0.625,
+      "n": 16
     },
     "3": {
       "name": "Summarization of a bounded set",
@@ -95,8 +95,8 @@
       "n": 3
     },
     "factual": {
-      "rate": 0.75,
-      "n": 12
+      "rate": 0.769,
+      "n": 13
     },
     "internal_factual": {
       "rate": 0.818,
@@ -116,7 +116,7 @@
     },
     "scope_negative": {
       "rate": 1.0,
-      "n": 5
+      "n": 6
     },
     "table": {
       "rate": 1.0,
@@ -152,6 +152,7 @@
     "scope_negative-03",
     "scope_negative-04",
     "scope_negative-05",
+    "scope_negative-06",
     "unanswerable-01",
     "unanswerable-02",
     "unanswerable-04",
@@ -216,6 +217,7 @@
     "factual-11": 1,
     "factual-14": 1,
     "factual-15": 1,
+    "factual-16": 1,
     "internal_factual-01": 1,
     "internal_factual-02": 1,
     "internal_factual-03": 1,
@@ -245,6 +247,7 @@
     "scope_negative-03": 1,
     "scope_negative-04": 1,
     "scope_negative-05": 1,
+    "scope_negative-06": 1,
     "table-01": 1,
     "table-02": 1,
     "table-03": 1,
@@ -317,11 +320,11 @@
     "yoy-09": 0
   },
   "health": {
-    "tie_rate": 0.299,
-    "median_margin": 0.0272,
-    "duplicate_share": 0.11,
-    "index_seat_share": 0.01,
-    "needless_split_rate": 0.261,
-    "n_payloads": 149
+    "tie_rate": 0.297,
+    "median_margin": 0.0271,
+    "duplicate_share": 0.109,
+    "index_seat_share": 0.009,
+    "needless_split_rate": 0.277,
+    "n_payloads": 151
   }
 }

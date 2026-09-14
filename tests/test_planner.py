@@ -28,8 +28,8 @@ def test_rules_plan_is_one_document_leg_on_the_original_text():
 
 
 @pytest.mark.parametrize("bad, message", [
-    ({"legs": []}, "1..3 legs"),
-    ({"legs": [{"name": f"l{i}", "kind": "doc_probe", "text": "q"} for i in range(4)]}, "1..3 legs"),
+    ({"legs": []}, "1..4 legs"),
+    ({"legs": [{"name": f"l{i}", "kind": "doc_probe", "text": "q"} for i in range(5)]}, "1..4 legs"),
     ({"legs": [{"name": "a", "kind": "doc_probe", "text": "q"}, {"name": "a", "kind": "doc_probe", "text": "q"}]}, "unique"),
     ({"legs": [{"name": "x", "kind": "sql", "text": "q"}]}, "unknown kind"),
     ({"legs": [{"name": "x", "kind": "doc_probe", "text": "q", "sources": ["payroll"]}]}, "not on the menu"),
@@ -222,5 +222,49 @@ def test_a_question_about_what_a_document_said_gets_a_document_leg():
     doc = {"name": "d", "kind": "doc_probe", "text": "x"}
     assert planner.enforce_document_leg(plan(wh, doc), "What did the letter say?").enforced == ()    # already searches
     assert planner.enforce_document_leg(plan(wh, origin="caller"), "What did the letter say?").enforced == ()
-    full = plan(wh, {**wh, "name": "b"}, {**wh, "name": "c"})
+    full = plan(wh, {**wh, "name": "b"}, {**wh, "name": "c"}, {**wh, "name": "d"})
     assert planner.enforce_document_leg(full, "What did the letter say?").enforced == ()              # at the leg limit
+
+
+def test_an_open_ended_benefits_question_becomes_fact_shaped_legs():
+    """Run 667's lesson: a rule that fires only on this shape. 'How does
+    mental-health coverage work?' → cost / coverage / limits legs over the
+    same family; a fact question, a records leg, or a caller plan is untouched."""
+    from raglab import planner
+
+    def plan(*legs, origin="model"):
+        return planner.Plan(shape="simple" if len(legs) == 1 else "compound", origin=origin, legs=[planner.Leg(**l) for l in legs])
+
+    doc = {"name": "d", "kind": "doc_probe", "text": "How does mental health coverage work? What are the copays", "sources": ("brochure",)}
+    out = planner.expand_open_ended_legs(plan(doc), "How does mental-health coverage work?")
+    assert out.enforced == ("fact_shaped_legs",) and len(out.legs) == 3 and out.shape == "compound"
+    assert [l.text for l in out.legs][0] == "What is the copay or coinsurance for mental-health?"
+    assert all(l.kind == "doc_probe" and l.sources == ("brochure",) for l in out.legs) and out.legs[2].required is False
+    for q in ("What does the plan cover for hearing aids?", "Tell me about the dental benefit", "How is chiropractic care covered?"):
+        assert planner.expand_open_ended_legs(plan(doc), q).enforced == ("fact_shaped_legs",), q
+    fact = {"name": "d", "kind": "doc_probe", "text": "specialist copay on the High Option", "sources": ("brochure",)}
+    assert planner.expand_open_ended_legs(plan(fact), "What is the specialist copay on the High Option?").enforced == ()
+    note = {"name": "n", "kind": "doc_probe", "text": "clinical history", "sources": ("clinical_note",)}
+    assert planner.expand_open_ended_legs(plan(note), "How does her clinical history work?").enforced == ()  # records, not benefits
+    assert planner.expand_open_ended_legs(plan(doc, origin="caller"), "How does mental-health coverage work?").enforced == ()
+    wh = {"name": "c", "kind": "member_query", "query_name": "appeal_case", "slots": ("case_id",)}
+    both = planner.expand_open_ended_legs(plan(wh, doc), "How does mental-health coverage work?")
+    assert [l.kind for l in both.legs] == ["member_query", "doc_probe", "doc_probe", "doc_probe"]  # room for three (limit 4)
+
+
+def test_every_plan_coverage_applies_only_to_legs_that_reach_brochures():
+    """Run 669: a bulletin or formulary leg under 'nothing named' coverage
+    searched six plans' brochures beside it and lost its seats."""
+    from raglab import planner, retrieval, router
+
+    route = router.route("Which timely-filing bulletin was in force in June 2025?")
+    assert route.cover_level == "all" and len(route.plan_codes) > 1
+    ctx = retrieval.Context(query="q")
+    available = {"module": "agent_assist", "sources": ("bulletin", "brochure", "kb"), "named_queries": ()}
+    bulletin = planner.Leg(name="b", kind="doc_probe", text="timely filing", sources=("bulletin",))
+    lr = planner._leg_route(bulletin, route, ctx, available)
+    assert lr.plan_codes == () and lr.cover_level is None and any("not applied" in r for r in lr.reasons)
+    brochure = planner.Leg(name="d", kind="doc_probe", text="deductible", sources=("brochure",))
+    assert planner._leg_route(brochure, route, ctx, available).cover_level == "all"
+    unhinted = planner.Leg(name="u", kind="doc_probe", text="deductible", sources=())
+    assert planner._leg_route(unhinted, route, ctx, available).cover_level == "all"

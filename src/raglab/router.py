@@ -238,6 +238,20 @@ def enforce(reading: Reading, hierarchies: dict[str, tuple[str, ...]] | None = N
             cover_field, cover_asked, cover_level, cover_keys = "plan_code", label, "option", keys
             plans = list(keys)
             reasons.append(f"option named, no program -> cover every plan offering it {keys}")
+    if not program and not plans and "plan_code" in hierarchy:
+        # Nothing named at all (2026-09-14, the user's "how does mental-health
+        # coverage work?"): every current plan is a plausible reading. Cover
+        # each plan offered in the routed years — one seat per plan, the note
+        # says so — instead of one pool where five plans' near-identical
+        # sections crowd each other out. A member's enrollment narrows this
+        # to their plan (retrieval.bind_enrollment_plan).
+        offered = _plan_years()
+        keys = tuple(code for code in dict.fromkeys(list(_FEHB_CODES.values()) + list(_PSHB_CODES.values()))
+                     if any(y in offered.get(code, set()) for y in years))
+        if len(keys) > 1:
+            cover_field, cover_asked, cover_level, cover_keys = "plan_code", "every plan", "all", keys
+            plans = list(keys)
+            reasons.append(f"nothing named -> cover every current plan {keys}")
     return Route(
         scope="in_scope",
         years=years,

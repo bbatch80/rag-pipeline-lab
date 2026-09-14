@@ -77,12 +77,12 @@ def test_model_sees_the_translated_question_and_the_menu_never_raw_identifiers(t
     assert "CLM-1363781509" not in user and "M344317862" not in user
     assert "claim_adjudication" in user and "Appeal case files" in user
     assert kw["model"] == planner.PLANNER_MODEL and kw["output_config"]["format"]["type"] == "json_schema"
-    assert "maxItems" not in json.dumps(kw["output_config"])  # the API rejects array bounds; validate() enforces 1..3
+    assert "maxItems" not in json.dumps(kw["output_config"])  # the API rejects array bounds; validate() enforces 1..4
 
 
 @pytest.mark.parametrize("answer, reason", [
     ("not json at all", "JSONDecodeError"),
-    ({"shape": "compound", "legs": [{"name": f"l{i}", "kind": "doc_probe", "text": "q", "sources": [], "query_name": None, "slots": [], "required": True} for i in range(4)]}, "PlanError"),
+    ({"shape": "compound", "legs": [{"name": f"l{i}", "kind": "doc_probe", "text": "q", "sources": [], "query_name": None, "slots": [], "required": True} for i in range(5)]}, "PlanError"),
     ({"shape": "simple", "legs": [{"name": "x", "kind": "member_query", "text": None, "sources": [], "query_name": "drop_tables", "slots": [], "required": True}]}, "PlanError"),
     ({"shape": "simple", "legs": [{"name": "x", "kind": "doc_probe", "text": "appeal [CASE_ID-9] APL-9999999", "sources": ["appeal"], "query_name": None, "slots": [], "required": True}]}, "PlanError"),
     (TimeoutError("planner timed out"), "TimeoutError"),

@@ -355,7 +355,17 @@ a cross-encoder scores a discharge summary 0.004 against "clinical
 history" because no passage *answers* a request for a record. A fact
 asked of the records ("do the notes say what was prescribed?") keeps
 the score-based verdict, so the platform still says insufficient when
-none of them carries the fact. Determinism is measured, not assumed — two runs of the golden set
+none of them carries the fact. A third rule reshapes open-ended benefits
+questions: "how does mental-health coverage work" has no answer-shaped
+sentence for a cross-encoder to score (the benefit rows scored 0.002
+against it, 0.99 against "what is the copay for mental health visits"),
+so the platform expands such a document leg into fact-shaped legs by
+template — the benefit's cost row, its coverage terms, its limits — and
+when no plan is named at all the router covers every current plan
+(deduplicated in the ranking, never guaranteed a seat, and only for legs
+that reach the brochures). A prompt version of the same idea re-planned
+every question and lost nine golden items; the rule touches only the
+shape it names. Determinism is measured, not assumed — two runs of the golden set
 on the same code agree item for item; with sampled plans about one item
 in ten had flipped per re-plan. A golden question's plan is stored,
 keyed by the translated question, the menu, and the model version, and

@@ -34,7 +34,7 @@ from raglab import rerank, retrieval, router, snowlane
 from raglab.pipeline import PERSONAS, _disclose_and_commit, _probe
 from raglab.timing import Stopwatch
 
-MAX_LEGS = 3
+MAX_LEGS = 4  # 2026-09-14: one fact-shaped leg per listed benefit (four topics in the user's probe)
 LEG_KINDS = ("doc_probe", "member_query")
 _ID_TOKEN = retrieval._ID_TOKEN
 
@@ -174,6 +174,63 @@ _DOCUMENT_WORDS = re.compile(
     r"rationale|reasoning|explain(?:ed|s)?|why|what (?:does|did|do) .{0,40}\b(?:say|state|require|cover|mean))\b",
     re.IGNORECASE,
 )
+
+
+# An open-ended benefits question — "how does X coverage work", "what does the
+# plan cover for X", "tell me about the X benefit" — has no answer-shaped
+# sentence for a cross-encoder to score (the mental-health rows scored 0.002
+# against it, 0.99 against "what is the copay for X"). The platform expands
+# such a document leg into fact-shaped legs by template: the benefit's cost
+# row, its coverage terms, its limits. A rule, not a prompt change: it fires
+# only on this shape and leaves every other plan untouched (a prompt version
+# re-planned everything and lost nine golden items, run 667).
+_OPEN_ENDED = re.compile(
+    r"\bhow (?:does|do|is|are) (?:the |my |our |their )?(?P<a>[\w\- /&']+?) (?:coverage |benefits? )?(?:work|covered|handled)\b|"
+    r"\bwhat does (?:the |my |this )?(?:plan |option )?cover for (?P<b>[\w\- /&']+?)\??$|"
+    r"\btell me about (?:the |my )?(?P<c>[\w\- /&']+?) (?:benefits?|coverage)\b|"
+    r"\bhow (?:is|are) (?P<d>[\w\- /&']+?) covered\b",
+    re.IGNORECASE,
+)
+_BENEFIT_DOC_SOURCES = ("brochure", "clinical_policy", "formulary", "kb")
+
+
+def fact_shaped_legs(topic: str, sources: tuple) -> list:
+    topic = topic.strip().rstrip("?").strip()
+    return [
+        Leg(name=f"{topic}: cost", kind="doc_probe", text=f"What is the copay or coinsurance for {topic}?", sources=sources),
+        Leg(name=f"{topic}: coverage", kind="doc_probe", text=f"What {topic} services are covered in-network and out-of-network?", sources=sources),
+        Leg(name=f"{topic}: limits", kind="doc_probe", text=f"Are there visit limits, precertification requirements, or exclusions for {topic}?",
+            sources=sources, required=False),
+    ]
+
+
+def expand_open_ended_legs(plan: Plan, question: str) -> Plan:
+    """Replace an open-ended document leg with fact-shaped legs (see above).
+    Never touches a caller's plan, a warehouse leg, a leg over records, or a
+    plan that already has more than one document leg."""
+    if plan.origin == "caller":
+        return plan
+    doc_legs = [leg for leg in plan.legs if leg.kind == "doc_probe"]
+    if len(doc_legs) != 1:
+        return plan
+    leg = doc_legs[0]
+    if leg.sources and not set(leg.sources) & set(_BENEFIT_DOC_SOURCES):
+        return plan
+    m = _OPEN_ENDED.search(question or "") or _OPEN_ENDED.search(leg.text or "")
+    if not m:
+        return plan
+    topic = next(g for g in m.groups() if g)
+    if len(topic.split()) > 6:
+        return plan
+    others = [l for l in plan.legs if l.kind != "doc_probe"]
+    room = MAX_LEGS - len(others)
+    if room < 2:
+        return plan
+    sources = tuple(s for s in leg.sources if s in _BENEFIT_DOC_SOURCES) or ()
+    plan.legs = others + fact_shaped_legs(topic, sources)[:room]
+    plan.shape = "compound" if len(plan.legs) > 1 else "simple"
+    plan.enforced = tuple(plan.enforced) + ("fact_shaped_legs",)
+    return plan
 
 
 def enforce_document_leg(plan: Plan, question: str) -> Plan:
@@ -718,6 +775,7 @@ def compose(
             plan = pending.finish(conn, question, available) if isinstance(pending, _PendingPlan) else pending
         validate(plan, question, available)
         plan = enforce_document_leg(plan, question)
+        plan = expand_open_ended_legs(plan, question)
         plan.module = module
     _t(trace, "plan", origin=plan.origin, stored=plan.stored, model=plan.model, shape=plan.shape,
        fallback_reason=plan.fallback_reason, legs=[leg.to_dict() for leg in plan.legs])
@@ -798,8 +856,16 @@ def _leg_route(leg: Leg, route: router.Route, ctx: retrieval.Context, available:
     from dataclasses import replace
     as_of = route.as_of or ctx.as_of
     sources = tuple(available["sources"]) if available and available.get("module") else route.sources
-    return replace(route, sources=sources, as_of=as_of,
-                   reasons=route.reasons + ((f"as_of bound from the claim's date of service {as_of}",) if ctx.as_of and not route.as_of else ()))
+    leg_route = replace(route, sources=sources, as_of=as_of,
+                        reasons=route.reasons + ((f"as_of bound from the claim's date of service {as_of}",) if ctx.as_of and not route.as_of else ()))
+    if route.cover_level == "all" and leg.sources and "brochure" not in leg.sources:
+        # "Every plan" coverage exists for brochure questions; a leg the
+        # planner aimed at a bulletin, the formulary, or a policy must not
+        # search six plans' brochures beside it (run 669: three internal-
+        # document items lost their seats to brochure look-alikes).
+        leg_route = replace(leg_route, plan_codes=(), cover_field=None, cover_keys=(), cover_asked=None, cover_level=None,
+                            reasons=leg_route.reasons + (f"leg aimed at {list(leg.sources)}: every-plan coverage not applied",))
+    return leg_route
 
 
 def _leg_text(conn, leg: Leg, ctx: retrieval.Context) -> str:

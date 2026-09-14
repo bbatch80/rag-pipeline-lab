@@ -7,17 +7,17 @@ from raglab.router import Route, route
 
 IN_SCOPE_CASES = [
     # (query, expected_years, expected_plan_codes)
-    ("What is the deductible?", (2026,), ()),
+    ("What is the deductible?", (2026,), ("71-014", "71-018", "71-006", "71-026", "71-021")),  # nothing named -> every current plan
     ("What is the HDHP deductible?", (2026,), ("71-014", "71-026")),  # option without a program: both programs' HDHP
     ("What was the High Option deductible in 2024?", (2024,), ("71-006",)),
-    ("How did the deductible change from 2025 to 2026?", (2025, 2026), ()),
+    ("How did the deductible change from 2025 to 2026?", (2025, 2026), ("71-014", "71-018", "71-006", "71-026", "71-022", "71-021")),
     ("How did High Option coinsurance change for 2026?", (2025, 2026), ("71-006", "71-021")),
     ("Did the HDHP out-of-pocket maximum change for 2026?", (2025, 2026), ("71-014", "71-026")),
     ("What was the deductible in 2021, and how does it compare to 2026?",
-     (2021, 2026), ()),
+     (2021, 2026), ("71-014", "71-018", "71-006", "71-026", "71-021")),
     ("What is the Elevate Plus deductible?", (2026,), ("71-018",)),
     ("What is the postal HDHP deductible?", (2026,), ("71-026",)),
-    ("How does GEHA coordinate benefits with Medicare?", (2026,), ()),
+    ("How does GEHA coordinate benefits with Medicare?", (2026,), ("71-014", "71-018", "71-006", "71-026", "71-021")),
     # 71-006's product name, not a generic phrase
     ("How did the GEHA Benefit Plan deductible change from 2025 to 2026?",
      (2025, 2026), ("71-006", "71-021")),
@@ -107,3 +107,21 @@ def test_the_year_follows_an_as_of_date_when_no_year_is_written():
     assert r.years == (2026,), "an explicit year is the asker's and wins"
     r = route("As of March 1, 2025, what did CP-0003 require?")
     assert r.years == (2025,) and r.as_of == "2025-03-01"
+
+
+def test_nothing_named_covers_every_current_plan_and_a_member_s_plan_still_wins():
+    """2026-09-14: 'How does mental-health coverage work?' named no program and
+    no plan; one pool of five brochures crowded the benefit rows out. Now
+    every plan offered in the routed years is covered, one seat each; a
+    member's enrollment narrows it to their plan."""
+    from raglab import retrieval, router
+
+    r = router.route("How does mental-health coverage work?")
+    assert r.cover_level == "all" and r.cover_asked == "every plan" and len(r.cover_keys) >= 4
+    assert set(r.plan_codes) == set(r.cover_keys) and "71-006" in r.plan_codes and "71-022" not in r.plan_codes  # not offered in 2026
+    assert any("nothing named" in why for why in r.reasons)
+    named = router.route("What is the specialist copay on the High Option?")
+    assert named.cover_level != "all"                                  # a named option keeps its own rule
+    ctx = retrieval.Context(query="q", member_key="k", enrollment={2026: "71-018"})
+    bound = retrieval.bind_enrollment_plan(r, ctx)
+    assert bound.plan_codes == ("71-018",) and bound.cover_level is None and bound.plan_from_enrollment

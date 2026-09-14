@@ -112,7 +112,8 @@ def _probe(conn, query: str, persona: str | None, ctx: retrieval.Context, watch:
                 search_stats.setdefault("candidates", len(candidates))
             with watch.stage("rerank"):
                 reranked = rerank.rerank(search_query, candidates, stratify_years=decision.years,
-                                         stratify_plans=decision.cover_keys if decision.cover_field == "plan_code" else ())
+                                         stratify_plans=decision.cover_keys if decision.cover_field == "plan_code" else (),
+                                         plan_seats=decision.cover_level != "all")
         finally:
             if persona is not None:
                 conn.execute("RESET ROLE")

@@ -1486,14 +1486,16 @@ def snapshot_cmd():
 @click.option("--password", default=None, help="Default: RAGLAB_DEMO_PASSWORD.")
 @click.option("--question", "question_id", default="factual-01", show_default=True, help="Golden question id to put through /query.")
 @click.option("--insecure", is_flag=True, help="Skip TLS verification (Caddy's internal CA on localhost).")
-def smoke_cmd(base_url: str, username: str, password: str | None, question_id: str, insecure: bool):
+@click.option("--wait", default=0.0, show_default=True, type=float,
+              help="Seconds to poll for the site before testing (a fresh deploy: certificate issuance, snapshot restore).")
+def smoke_cmd(base_url: str, username: str, password: str | None, question_id: str, insecure: bool, wait: float):
     """Deploy smoke test: login, /status, one golden question through /query. Non-zero exit on failure."""
     from raglab import smoke
 
     receipt = Receipt("raglab smoke")
     try:
-        out = smoke.run(base_url, username=username, password=password, question_id=question_id, verify=not insecure)
-        receipt.add("site", out["base_url"])
+        out = smoke.run(base_url, username=username, password=password, question_id=question_id, verify=not insecure, wait=wait)
+        receipt.add("site", out["base_url"] + (f"  (up after {out['waited_s']:.0f}s)" if out.get("waited_s") else ""))
         receipt.add("login", f"{out['username']} -> {', '.join(out['surfaces'])}")
         if "health" in out:
             h = out["health"]

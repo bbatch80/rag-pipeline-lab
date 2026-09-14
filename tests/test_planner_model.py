@@ -145,3 +145,68 @@ def test_an_impossible_reading_falls_back_to_the_regex_reader(translated, store)
 def test_reading_and_planning_are_separate_calls(translated, store):
     plan = planner.plan_with_model(None, Q, MENU, client=FakeClient(GOOD))
     assert plan.origin == "model" and "route" not in plan.to_dict()
+
+
+def test_reading_and_plan_are_asked_of_the_model_concurrently_and_finished_in_order(db, monkeypatch):
+    """Both store lookups miss: the two network calls overlap; the reading is
+    finished at once, the plan only after the route is known (a pending plan)."""
+    import threading
+    import time as _time
+
+    from raglab import planner, router
+
+    monkeypatch.setattr(planner, "PLANNER", "model")
+    monkeypatch.setattr(planner, "PLAN_CACHE", False)
+    monkeypatch.setattr(planner, "_read_prepare", lambda conn, q: (("r",), q, None))
+    monkeypatch.setattr(planner, "_plan_prepare", lambda conn, q, a: (("p",), q, None))
+    active, peak, lock = {"n": 0}, {"n": 0}, threading.Lock()
+
+    def slow(result):
+        def call(*a, **k):
+            with lock:
+                active["n"] += 1
+                peak["n"] = max(peak["n"], active["n"])
+            _time.sleep(0.15)
+            with lock:
+                active["n"] -= 1
+            return result
+        return call
+
+    reading_raw = {"scope": "in_scope", "program": None, "options": [], "years": [2026], "change": False, "as_of": None}
+    plan_raw = {"shape": "simple", "legs": [{"name": "brochure", "kind": "doc_probe", "text": "deductible", "sources": ["brochure"]}]}
+    monkeypatch.setattr(planner, "_call_reader", slow(reading_raw))
+    monkeypatch.setattr(planner, "_call_model", slow(plan_raw))
+    monkeypatch.setattr(planner, "_validate_reading", lambda raw: None)
+    monkeypatch.setattr(planner, "_reading_from_dict", lambda raw: router.Reading(scope="in_scope", origin="model"))
+    available = {"sources": ("brochure",), "named_queries": ()}
+    t0 = _time.perf_counter()
+    reading, pending = planner.read_and_plan(db, "What is the deductible?", available, want_plan=True)
+    assert _time.perf_counter() - t0 < 0.28, "the two calls ran one after the other"
+    assert peak["n"] == 2 and reading.scope == "in_scope"
+    assert isinstance(pending, planner._PendingPlan)
+    plan = pending.finish(db, "What is the deductible?", available)
+    assert plan.origin == "model" and tuple(plan.legs[0].sources) == ("brochure",) and plan.fallback_reason is None
+
+
+def test_read_and_plan_asks_for_the_reading_only_when_no_plan_is_wanted(db, monkeypatch):
+    from raglab import planner, router
+
+    monkeypatch.setattr(planner, "PLANNER", "model")
+    monkeypatch.setattr(planner, "PLAN_CACHE", False)
+    monkeypatch.setattr(planner, "_read_prepare", lambda conn, q: (("r",), q, None))
+    calls = []
+    monkeypatch.setattr(planner, "_call_reader", lambda *a, **k: calls.append("read") or {"scope": "in_scope"})
+    monkeypatch.setattr(planner, "_call_model", lambda *a, **k: calls.append("plan") or {})
+    monkeypatch.setattr(planner, "_validate_reading", lambda raw: None)
+    monkeypatch.setattr(planner, "_reading_from_dict", lambda raw: router.Reading(scope="in_scope", origin="model"))
+    reading, pending = planner.read_and_plan(db, "q", {"sources": (), "named_queries": ()}, want_plan=False)
+    assert calls == ["read"] and pending is None
+
+
+def test_a_failed_plan_call_finishes_as_the_rules_plan_with_the_reason(db, monkeypatch):
+    from raglab import planner
+
+    monkeypatch.setattr(planner, "PLAN_CACHE", False)
+    pending = planner._PendingPlan(("p",), "q", TimeoutError("planner timed out"), 1.0)
+    plan = pending.finish(db, "What is the deductible?", {"sources": ("brochure",), "named_queries": ()})
+    assert plan.origin == "rules" and plan.fallback_reason.startswith("TimeoutError")

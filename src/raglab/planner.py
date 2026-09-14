@@ -347,11 +347,9 @@ def translated_for_planning(conn: psycopg.Connection, question: str) -> str:
     return deid.translate_query(conn, question)
 
 
-def plan_with_model(conn: psycopg.Connection, question: str, available: dict, client=None) -> Plan:
-    """Shape + legs from the pinned model in one constrained call — stored
-    plan first (decision 3), the live model on a miss, the rules plan on any
-    failure (timeout, invalid JSON, a plan that fails validation) with the
-    reason recorded. Never raises for model trouble."""
+def _plan_prepare(conn: psycopg.Connection, question: str, available: dict) -> tuple[tuple, str, Plan | None]:
+    """The database half before the model: the translated question, the store
+    key, and the stored plan if there is one."""
     translated = translated_for_planning(conn, question)
     key = (_hash(translated), menu_hash(available), PLANNER_MODEL)
     if PLAN_CACHE:
@@ -359,12 +357,20 @@ def plan_with_model(conn: psycopg.Connection, question: str, available: dict, cl
         if row is not None:
             plan = plan_from_dict(row["plan"], origin=row["origin"], model=PLANNER_MODEL)
             plan.stored = True
-            return plan
-    t0 = time.perf_counter()
+            return key, translated, plan
+    return key, translated, None
+
+
+def _plan_finish(conn: psycopg.Connection, question: str, available: dict, key: tuple, translated: str,
+                 outcome, latency_ms: float) -> Plan:
+    """The database half after the model: `outcome` is the raw plan dict or
+    the exception the call raised. Any failure degrades to rules with the
+    reason recorded; the result is stored either way."""
     reason = None
     try:
-        raw = _call_model(translated, available, client)
-        plan = plan_from_dict(raw, origin="model", model=PLANNER_MODEL)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        plan = plan_from_dict(outcome, origin="model", model=PLANNER_MODEL)
         validate(plan, question, available)
     except Exception as exc:  # noqa: BLE001 — every model failure degrades to rules, and says why
         reason = f"{type(exc).__name__}: {str(exc)[:200]}"
@@ -372,8 +378,30 @@ def plan_with_model(conn: psycopg.Connection, question: str, available: dict, cl
         plan.model = PLANNER_MODEL
     plan.fallback_reason = reason
     if PLAN_CACHE:
-        _store_plan(conn, key, translated, plan, reason, (time.perf_counter() - t0) * 1000)
+        _store_plan(conn, key, translated, plan, reason, latency_ms)
     return plan
+
+
+def _guarded(fn, *args):
+    """Run a model call and return its result or the exception (never raise):
+    the finish step decides what a failure means."""
+    try:
+        return fn(*args)
+    except Exception as exc:  # noqa: BLE001
+        return exc
+
+
+def plan_with_model(conn: psycopg.Connection, question: str, available: dict, client=None) -> Plan:
+    """Shape + legs from the pinned model in one constrained call — stored
+    plan first (decision 3), the live model on a miss, the rules plan on any
+    failure (timeout, invalid JSON, a plan that fails validation) with the
+    reason recorded. Never raises for model trouble."""
+    key, translated, stored = _plan_prepare(conn, question, available)
+    if stored is not None:
+        return stored
+    t0 = time.perf_counter()
+    outcome = _guarded(_call_model, translated, available, client)
+    return _plan_finish(conn, question, available, key, translated, outcome, (time.perf_counter() - t0) * 1000)
 
 
 def _call_model(translated: str, available: dict, client=None) -> dict:
@@ -450,20 +478,23 @@ def _call_reader(translated: str, client=None) -> dict:
     return json.loads(text)
 
 
-def read_with_model(conn: psycopg.Connection, question: str, client=None) -> router.Reading:
-    """The reading of the route from the pinned model in its own constrained
-    call (2026-09-12, two calls: reading and planning are different judgments
-    with different gates). Stored reading first; the regex reader on any
-    failure, with the reason logged and never stored as the model's."""
+def _read_prepare(conn: psycopg.Connection, question: str) -> tuple[tuple, str, router.Reading | None]:
     translated = translated_for_planning(conn, question)
     key = (_hash(translated), READER_MENU_HASH + ":" + _hash(READER_SYSTEM)[:12], PLANNER_MODEL)
     if PLAN_CACHE:
         row = _stored_plan(conn, key)
         if row is not None:
-            return _reading_from_dict(row["plan"])
-    t0 = time.perf_counter()
+            return key, translated, _reading_from_dict(row["plan"])
+    return key, translated, None
+
+
+def _read_finish(conn: psycopg.Connection, question: str, key: tuple, translated: str, outcome, latency_ms: float) -> router.Reading:
+    """`outcome` is the raw reading or the exception the call raised; any
+    failure degrades to the regex reader, logged and never stored as the model's."""
     try:
-        raw = _call_reader(translated, client)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        raw = outcome
         _validate_reading(raw)
         reading = _reading_from_dict(raw)
         stored = Plan(shape="reading", legs=[], origin="model", model=PLANNER_MODEL)
@@ -475,8 +506,71 @@ def read_with_model(conn: psycopg.Connection, question: str, client=None) -> rou
         stored = Plan(shape="reading", legs=[], origin="rules", model=PLANNER_MODEL)
         stored.to_dict = lambda: {"origin": "rules"}
     if PLAN_CACHE:
-        _store_plan(conn, key, translated, stored, reason, (time.perf_counter() - t0) * 1000)
+        _store_plan(conn, key, translated, stored, reason, latency_ms)
     return reading
+
+
+def read_with_model(conn: psycopg.Connection, question: str, client=None) -> router.Reading:
+    """The reading of the route from the pinned model in its own constrained
+    call (2026-09-12, two calls: reading and planning are different judgments
+    with different gates). Stored reading first; the regex reader on any
+    failure, with the reason logged and never stored as the model's."""
+    key, translated, stored = _read_prepare(conn, question)
+    if stored is not None:
+        return stored
+    t0 = time.perf_counter()
+    outcome = _guarded(_call_reader, translated, client)
+    return _read_finish(conn, question, key, translated, outcome, (time.perf_counter() - t0) * 1000)
+
+
+def read_and_plan(conn: psycopg.Connection, question: str, available: dict, want_plan: bool,
+                  client=None) -> tuple[router.Reading, "Plan | None"]:
+    """The reading and the plan together: store lookups first; whatever missed
+    is asked of the model CONCURRENTLY (two independent network calls, ~2-3 s
+    each — sequentially they were the larger part of a fresh question's
+    latency); every database step stays on this thread. `want_plan=False`
+    (the rules planner, or a caller-supplied plan) asks for the reading only.
+    A question the reading then routes out of scope wastes one planner call;
+    its plan is discarded unstored, as before."""
+    if PLANNER != "model":
+        return router.read(question), (plan_rules(question) if want_plan else None)
+    r_key, r_text, reading = _read_prepare(conn, question)
+    p_key, p_text, plan = (None, None, None)
+    if want_plan:
+        p_key, p_text, plan = _plan_prepare(conn, question, available)
+    need_read, need_plan = reading is None, want_plan and plan is None
+    if need_read and need_plan:
+        from concurrent.futures import ThreadPoolExecutor
+
+        t0 = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_read = pool.submit(_guarded, _call_reader, r_text, client)
+            f_plan = pool.submit(_guarded, _call_model, p_text, available, client)
+            read_out, plan_out = f_read.result(), f_plan.result()
+        ms = (time.perf_counter() - t0) * 1000
+        reading = _read_finish(conn, question, r_key, r_text, read_out, ms)
+        plan = _PendingPlan(p_key, p_text, plan_out, ms)  # finished by the caller once the route is known
+    elif need_read:
+        t0 = time.perf_counter()
+        reading = _read_finish(conn, question, r_key, r_text, _guarded(_call_reader, r_text, client),
+                               (time.perf_counter() - t0) * 1000)
+    elif need_plan:
+        t0 = time.perf_counter()
+        plan = _PendingPlan(p_key, p_text, _guarded(_call_model, p_text, available, client), (time.perf_counter() - t0) * 1000)
+    return reading, plan
+
+
+@dataclass
+class _PendingPlan:
+    """A planner outcome not yet validated or stored — the route decides
+    whether it is needed (an out-of-scope question runs no plan)."""
+    key: tuple
+    translated: str
+    outcome: object
+    latency_ms: float
+
+    def finish(self, conn, question: str, available: dict) -> Plan:
+        return _plan_finish(conn, question, available, self.key, self.translated, self.outcome, self.latency_ms)
 
 
 def read_route(conn: psycopg.Connection, question: str, client=None) -> router.Reading:
@@ -530,8 +624,10 @@ def compose(
     available = menu(conn, module)
     caller_plan = plan is not None
     with watch.stage("read"):
-        # The model READS the route (stored reading first); the code enforces it.
-        reading = read_route(conn, question)
+        # The model READS the route (stored reading first); the code enforces
+        # it. The plan's model call, when needed, runs concurrently with the
+        # reading's and is finished below once the route is known.
+        reading, pending = read_and_plan(conn, question, available, want_plan=not caller_plan)
     with watch.stage("resolve"):
         from raglab.pipeline import _hierarchies, coverage_note
         route = router.route(question, hierarchies=_hierarchies(conn), reading=reading)
@@ -574,8 +670,9 @@ def compose(
         return built
     if not caller_plan:
         _t(trace, "translated_for_planner", text=translated_for_planning(conn, question) if PLANNER == "model" else None)
-    plan = plan or (plan_for(conn, question, module=module) if route.scope == "in_scope" else plan_rules(question))
     with watch.stage("plan"):
+        if plan is None:
+            plan = pending.finish(conn, question, available) if isinstance(pending, _PendingPlan) else pending
         validate(plan, question, available)
         plan.module = module
     _t(trace, "plan", origin=plan.origin, stored=plan.stored, model=plan.model, shape=plan.shape,

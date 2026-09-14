@@ -156,3 +156,31 @@ def test_deploy_script_up_and_rollback_switch_the_tag(tmp_path):
     assert run("up", "v2.0.2", "--no-pull").returncode == 0
     assert "pull" not in (tmp_path / "docker.log").read_text()
     assert run("nonsense").returncode == 2
+
+
+def test_smoke_waits_for_a_site_that_comes_up_late(monkeypatch):
+    """A fresh deploy: TLS errors, then 503, then 200 — the wait absorbs it."""
+    monkeypatch.setattr(smoke.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login" and request.method == "GET":
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.ConnectError("tlsv1 alert internal error")
+            if calls["n"] == 2:
+                return httpx.Response(503)
+            return httpx.Response(200, text="<form>")
+        return _site().handler(request)  # the rest of the site as in the passing case
+
+    out = _run(httpx.MockTransport(handler), wait=60)
+    assert calls["n"] >= 3 and out["payload"]["status"] == "ok"
+
+
+def test_smoke_gives_up_after_the_wait(monkeypatch):
+    monkeypatch.setattr(smoke.time, "sleep", lambda s: None)
+    clock = {"t": 0.0}
+    monkeypatch.setattr(smoke.time, "monotonic", lambda: clock.__setitem__("t", clock["t"] + 10) or clock["t"])
+    transport = httpx.MockTransport(lambda request: (_ for _ in ()).throw(httpx.ConnectError("refused")))
+    with pytest.raises(RuntimeError, match="login page not up after 30s: ConnectError"):
+        _run(transport, wait=30)

@@ -1,13 +1,13 @@
 {
-  "run_id": 745,
-  "git_sha": "4298502",
+  "run_id": 768,
+  "git_sha": "938c893",
   "corpus_hash": "41a4fd0f60ed63d14e46a4356c5c8fbf6e7a1732f703c43853a015d6ed262b86",
-  "written_at": "2026-09-14T21:07:13+00:00",
+  "written_at": "2026-09-14T21:43:04+00:00",
   "overall": {
-    "item_pass": 0.696,
-    "hit@5": 0.875,
-    "precision@5": 0.4233333333333334,
-    "source_coverage": 0.8347685185185185
+    "item_pass": 0.722,
+    "hit@5": 0.9083333333333333,
+    "precision@5": 0.43,
+    "source_coverage": 0.8597685185185184
   },
   "by_work": {
     "0": {
@@ -37,7 +37,7 @@
     },
     "5": {
       "name": "Linked discoveries",
-      "rate": 0.4,
+      "rate": 0.533,
       "n": 15
     },
     "6": {
@@ -52,12 +52,12 @@
     },
     "8": {
       "name": "Temporal",
-      "rate": 0.643,
+      "rate": 0.714,
       "n": 14
     },
     "9": {
       "name": "Diagnosis evidence",
-      "rate": 0.333,
+      "rate": 0.417,
       "n": 12
     }
   },
@@ -71,7 +71,7 @@
       "n": 15
     },
     "call_note": {
-      "rate": 0.455,
+      "rate": 0.636,
       "n": 11
     },
     "carrier_letter": {
@@ -87,7 +87,7 @@
       "n": 12
     },
     "compound": {
-      "rate": 0.389,
+      "rate": 0.5,
       "n": 18
     },
     "cross_plan": {
@@ -182,6 +182,8 @@
     "call_note-02": 1,
     "call_note-03": 1,
     "call_note-04": 1,
+    "call_note-06": 1,
+    "call_note-07": 1,
     "call_note-11": 1,
     "carrier_letter-01": 1,
     "carrier_letter-02": 1,
@@ -203,8 +205,10 @@
     "clinical_policy-10": 1,
     "clinical_policy-11": 1,
     "clinical_policy-12": 1,
+    "compound-01": 1,
     "compound-02": 1,
     "compound-05": 1,
+    "compound-07": 1,
     "compound-08": 1,
     "compound-09": 1,
     "compound-15": 1,
@@ -285,18 +289,14 @@
     "appeal-11": 0,
     "appeal-13": 0,
     "call_note-05": 0,
-    "call_note-06": 0,
-    "call_note-07": 0,
     "call_note-08": 0,
     "call_note-09": 0,
     "call_note-10": 0,
     "carrier_letter-06": 0,
     "carrier_letter-07": 0,
-    "compound-01": 0,
     "compound-03": 0,
     "compound-04": 0,
     "compound-06": 0,
-    "compound-07": 0,
     "compound-10": 0,
     "compound-11": 0,
     "compound-12": 0,
@@ -328,8 +328,8 @@
   },
   "health": {
     "tie_rate": 0.291,
-    "median_margin": 0.0218,
-    "duplicate_share": 0.117,
+    "median_margin": 0.0236,
+    "duplicate_share": 0.119,
     "index_seat_share": 0.011,
     "needless_split_rate": 0.368,
     "n_payloads": 157

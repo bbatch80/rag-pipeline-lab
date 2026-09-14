@@ -184,7 +184,8 @@ def test_compose_records_every_stage_in_order(db, monkeypatch):
                  {"name": "adj", "kind": "member_query", "query_name": "claim_adjudication", "slots": ["claim_id"]})
     planner.compose(_NoCommit(db), "what do the secret facts say about claim CLM-1363781509", _caller("employee"), plan=plan, module="agent_assist", trace=events)
     db.execute("RESET ROLE")
-    assert [e["stage"] for e in events] == ["question", "route", "identifiers", "menu", "plan", "doc_leg", "leg_verdict", "warehouse_leg", "composed", "disclosed"]
+    # rows legs run before document legs (2026-09-15): a row can pin the record the document legs read
+    assert [e["stage"] for e in events] == ["question", "route", "identifiers", "menu", "plan", "warehouse_leg", "doc_leg", "leg_verdict", "composed", "disclosed"]
     doc = next(e for e in events if e["stage"] == "doc_leg")
     assert doc["vector_top"] and doc["rerank_top"] and set(doc["sources_searched"]) >= {"brochure", "sop"}
     assert events[-1]["payload_id"] and events[-2]["status"] in ("ok", "insufficient_evidence")

@@ -334,8 +334,12 @@ def _filters(route: Route, member_key: str | None = None,
     # narrows every chunk that carries that key in its record metadata to
     # the matching value; chunks without the key are untouched.
     for field_name, value in (record or {}).items():
-        clauses.append("(c.metadata->'record'->>%s IS NULL OR c.metadata->'record'->>%s = %s)")
-        params += [field_name, field_name, value]
+        if isinstance(value, (list, tuple)):  # several records bound from the rows (every call in the month asked about)
+            clauses.append("(c.metadata->'record'->>%s IS NULL OR c.metadata->'record'->>%s = ANY(%s))")
+            params += [field_name, field_name, list(value)]
+        else:
+            clauses.append("(c.metadata->'record'->>%s IS NULL OR c.metadata->'record'->>%s = %s)")
+            params += [field_name, field_name, value]
     if versioned:
         # Version precedence: only the version in effect on the as-of date
         # (explicit, else the end of the routed year). A hard filter, never

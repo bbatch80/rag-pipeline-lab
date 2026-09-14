@@ -672,15 +672,24 @@ store the Console reads — restored by the deployed database on first
 start after the persona roles are created (`deploy/db-init/`). The
 **smoke test** (`raglab smoke --base-url …`) logs in as a seeded account,
 reads `/status`, and puts one golden question through `/query`; anything
-short of a served payload exits non-zero. CI validates the compose file;
-the release workflow (next) builds the image on a tag and deploys behind
-an approval gate.
+short of a served payload exits non-zero. CI validates the compose file.
+
+**A tag is a release** (`.github/workflows/release.yml`): pushing `v2.x`
+builds both images and publishes them to GHCR, then the `deploy` job waits
+for a required reviewer on the `production` environment, ships the deploy
+files to the host over SSH, runs `deploy/deploy.sh up <tag>` (pull,
+restart, remember the previous tag), and smoke-tests the live site from
+the runner; if the smoke test fails, `deploy.sh rollback` restarts the
+previous tag and the job fails. The host needs Docker, a deploy user, and
+`deploy/.env` — never a checkout. Rehearsed end to end on a laptop:
+up → smoke → rollback → smoke.
 
 ```sh
 uv run raglab snapshot                                   # deploy/snapshot/raglab.dump
 cp deploy/.env.example deploy/.env                       # fill in keys, password, secret
 docker compose -f deploy/compose.yml --env-file deploy/.env up -d --build
 uv run raglab smoke --base-url https://localhost --insecure
+git tag v2.0.0 && git push origin v2.0.0                  # → build → approve → deploy → smoke
 ```
 
 ## Production mapping

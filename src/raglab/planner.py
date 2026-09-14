@@ -286,8 +286,8 @@ def benefit_row_titles(items: tuple[str, ...], client=None) -> tuple[str, ...] |
 
 
 # ---- experiments (2026-09-14): one question per leg; brochure vocabulary ----
-SPLIT_QUESTIONS = os.environ.get("RAGLAB_SPLIT_QUESTIONS", "0") == "1"
-LEG_VOCABULARY = os.environ.get("RAGLAB_LEG_VOCABULARY", "0") == "1"
+SPLIT_QUESTIONS = os.environ.get("RAGLAB_SPLIT_QUESTIONS", "1") == "1"  # on: run 738 gained factual-18 and lost nothing
+LEG_VOCABULARY = os.environ.get("RAGLAB_LEG_VOCABULARY", "0") == "1"  # off: run 739 was +3/-2 with a ratchet failure (median score shift 0.000)
 _QUESTION_SPLIT = re.compile(r"(?<=\?)\s+(?=[A-Z])")
 
 

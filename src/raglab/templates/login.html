@@ -1,8 +1,9 @@
 {% extends "layout.html" %}
 {% block title %}Log in{% endblock %}
 {% block content %}
-<article class="narrow">
+<article class="narrow logincard">
   <h2>Log in</h2>
+  <p class="note">A demo of context retrieval under real entitlements. Sign in as a role to see what that role is allowed to know.</p>
   {% if error %}<p class="banner banner-error">{{ error }}</p>{% endif %}
   <form method="post" action="/ui/login">
     <label>Username

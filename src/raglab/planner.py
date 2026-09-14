@@ -925,6 +925,7 @@ def compose(
     as_of_defaulted = False
     coverage = None
     search_note: dict = {}
+    by_identity = 0  # chunks seated by the records or row-identity rules, summed over the document legs
     for leg in plan.legs:
         if leg.kind == "doc_probe":
             result, reranked, widened = _run_doc_leg(conn, leg, question, caller, ctx, route, watch, available, trace)
@@ -932,6 +933,7 @@ def compose(
             start = len(chunks)
             built = payload_mod.build(leg.text, result.decision, reranked, coverage=coverage_note(conn, result.decision, reranked),
                                       search=result.search_stats, identity_evidence=result.identity_evidence)
+            by_identity += result.identity_evidence
             if result.identity_evidence and "member_records" not in plan.enforced and result.identity_evidence > len(result.row_matches):
                 plan.enforced = tuple(plan.enforced) + ("member_records",)
             for key in result.row_matches:
@@ -968,6 +970,8 @@ def compose(
                                     router={"years": list(route.years), "plan_codes": list(route.plan_codes), "as_of": route.as_of,
                                             "plan_from_enrollment": route.plan_from_enrollment})
         built["payload_id"] = str(uuid.uuid4())
+        if by_identity:
+            built["evidence_by_identity"] = by_identity
         built["persona"] = caller.persona or "admin"
         built["member_context"] = member_id
         built["record_context"] = {**ctx.record, **({"as_of": ctx.as_of} if ctx.as_of else {})}

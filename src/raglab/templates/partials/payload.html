@@ -9,6 +9,9 @@
   {% if p.get("unresolved_identifiers") %}Unresolved identifiers: {{ p.unresolved_identifiers | join(", ") }}.{% endif %}</p>
 {% elif p.status == "not_permitted" %}
 <p class="banner banner-scope"><strong>Not available to your role.</strong></p>
+{% elif p.status == "ok" %}
+<p class="statusline"><span class="status ok">Evidence served{% if p.get("evidence_by_identity") %} · by identity{% endif %}</span>
+  {% if p.get("confidence") is not none %}<span class="conf" title="the reranker's top score against the prose bar of 0.50">confidence <span class="bar"><i style="width:{{ (p.confidence * 100) | round | int }}%"></i><b></b></span><span class="num">{{ "%.2f" | format(p.confidence) }}</span></span>{% endif %}</p>
 {% endif %}
 
 {% if p.get("coverage") and p.coverage.get("level") in ("all", "program") and not (p.coverage.get("missing_from_corpus") or p.coverage.get("not_offered")) %}
@@ -21,16 +24,22 @@
 {% endif %}
 
 {% if p.status != "out_of_scope" %}
+{% if p.chunks or p.warehouse_results %}
+<h2 class="sec">Evidence the pipeline retrieved for this question
+  <small>{% if p.chunks %}{{ p.chunks | length }} chunk{{ "" if p.chunks | length == 1 else "s" }}, ranked by the reranker{% if p.get("evidence_by_identity") %} — {{ p.evidence_by_identity }} seated by identity{% endif %}{% endif %}{% if p.chunks and p.warehouse_results %} · {% endif %}{% if p.warehouse_results %}{{ p.warehouse_results | length }} warehouse result{{ "" if p.warehouse_results | length == 1 else "s" }}{% endif %}. Every answer above is checked against what is shown here.</small>
+</h2>
+{% endif %}
 <section class="evidence">
   {% for c in p.chunks %}
-  <details class="chunk" {% if loop.index <= 3 %}open{% endif %}>
+  <details class="chunk" {% if loop.index == 1 %}open{% endif %}>
     <summary>
+      <span class="rank num">{{ loop.index }}</span>
       <span class="title">{{ c.source.title }}</span>
       {% if c.source.pages %}<span class="chip">p. {{ c.source.pages | join(", ") if c.source.pages is iterable and c.source.pages is not string else c.source.pages }}</span>{% endif %}
       {% if c.source.section %}<span class="chip chip-muted">{{ c.source.section }}</span>{% endif %}
       {% if c.source.record %}<span class="chip chip-record">{{ c.source.record.kind if c.source.record.kind else "record" }}{% if c.source.record.id %} {{ c.source.record.id }}{% endif %}</span>{% endif %}
       <span class="chip chip-acl" title="the entitlement that admitted this chunk">{{ c.acl_basis }}</span>
-      {% if c.scores and c.scores.rerank is not none %}<span class="score">{{ "%.2f" | format(c.scores.rerank) }}</span>{% endif %}
+      {% if c.scores and c.scores.rerank is not none %}<span class="score num">{{ "%.2f" | format(c.scores.rerank) }}</span>{% endif %}
     </summary>
     <pre class="chunktext">{{ c.text }}</pre>
   </details>
@@ -57,12 +66,12 @@
 </section>
 
 <p class="planline">
-  {% if p.plan %}looked in:
+  {% if p.plan %}<span class="k">Plan</span> looked in:
     {% for leg in p.plan.legs %}
       {% set found = leg_found[loop.index0] %}
       <span class="leg {{ 'leg-found' if found else 'leg-empty' }}">{{ leg.name or leg.query_name or (leg.sources | join('+')) }} ({{ "found" if found else "nothing" }})</span>{% if not loop.last %} · {% endif %}
     {% endfor %}
-    {% if p.plan.origin %}<small class="origin">plan by {{ p.plan.origin }}{% if p.plan.fallback_reason %} — {{ p.plan.fallback_reason }}{% endif %}{% if p.plan.enforced %} · platform added: {{ p.plan.enforced | join(", ") | replace("_", " ") }}{% endif %}{% if p.plan.widened %} · widened once{% endif %}</small>{% endif %}
+    {% if p.plan.origin %}<small class="origin">plan by {{ p.plan.origin }}{% if p.plan.fallback_reason %} — {{ p.plan.fallback_reason }}{% endif %}{% if p.plan.enforced %} · platform added: {% for rule in p.plan.enforced %}<span class="chip chip-rule">{{ rule | replace("_", " ") }}</span> {% endfor %}{% endif %}{% if p.plan.widened %} · widened once{% endif %}</small>{% endif %}
   {% elif p.router %}looked in: {{ p.router.years | join(", ") }}{% if p.router.plan_codes %} · plans {{ p.router.plan_codes | join(", ") }}{% endif %}{% if p.router.as_of %} · as of {{ p.router.as_of }}{% endif %}
   {% endif %}
   {% if p.member_context %} · member {{ p.member_context }}{% endif %}

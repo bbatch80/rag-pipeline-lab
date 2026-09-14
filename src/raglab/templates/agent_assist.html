@@ -1,7 +1,7 @@
 {% extends "layout.html" %}
 {% block title %}Agent Assist{% endblock %}
 {% block content %}
-<hgroup><h2>Agent Assist</h2><p>Nothing is loaded until you open a member. Enter the member ID from the call.</p></hgroup>
+<hgroup><h2>Agent Assist</h2><p>Nothing is loaded until you open a member. Enter the member ID, then ask about their plan, calls, claims, or appeals.</p></hgroup>
 <form hx-post="/ui/agent_assist/open" hx-target="#workspace" hx-indicator="#busy" class="keybox">
   <input type="text" name="member_id" placeholder="Member ID, e.g. M767394984" required autofocus autocomplete="off">
   <button type="submit">Open member</button>

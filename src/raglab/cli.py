@@ -803,7 +803,9 @@ def ablation_cmd():
               help="Ask the live planner model fresh for every golden question and report plans that differ from the stored ones (reported, never gated).")
 @click.option("--workers", default=4, show_default=True, type=int,
               help="Questions scored at once (each on its own connection; reranking stays serialized). 1 = sequential.")
-def eval_retrieval_cmd(label: str, gate: bool, write_baseline: bool, sabotage: bool, categories: tuple[str, ...], replan: bool, workers: int):
+@click.option("--item", "items_only", multiple=True, help="Only these golden item ids (iteration aid; partial runs never gate).")
+def eval_retrieval_cmd(label: str, gate: bool, write_baseline: bool, sabotage: bool, categories: tuple[str, ...], replan: bool,
+                       workers: int, items_only: tuple[str, ...]):
     """Tier-1 deterministic eval over the golden set on the composed path (free)."""
     if categories and (gate or write_baseline):
         raise click.UsageError("--gate / --write-baseline need the whole golden set; drop --category")
@@ -817,8 +819,11 @@ def eval_retrieval_cmd(label: str, gate: bool, write_baseline: bool, sabotage: b
     receipt = Receipt("raglab eval-retrieval" + (" --sabotage" if sabotage else ""))
     try:
         with db.connect() as conn:
-            result = eval_retrieval.run(conn, config_label=label, sabotage=sabotage,
-                                        categories=tuple(categories), replan=replan, workers=max(1, workers))
+            if items_only and (gate or write_baseline):
+                raise click.UsageError("--item runs are partial: they never gate or write a baseline")
+            result = eval_retrieval.run(conn, config_label=label + ("-partial:items" if items_only else ""), sabotage=sabotage,
+                                        categories=tuple(categories), replan=replan, workers=max(1, workers),
+                                        items_only=tuple(items_only))
         receipt.add("run id", result.run_id)
         receipt.add("corpus", result.corpus_hash[:12])
         from raglab import rerank as rerank_mod

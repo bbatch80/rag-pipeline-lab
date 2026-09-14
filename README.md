@@ -346,7 +346,16 @@ that goes wrong — a timeout, invalid output, a plan that fails validation
 top of the model's plan: a question about what a document *said* gets a
 document leg if the model planned none (measured: the model answered
 "what did the determination letter tell the member" with the case row
-alone). Determinism is measured, not assumed — two runs of the golden set
+alone). A second rule governs a member's own records: when a member is
+open and the planner aims a leg at a member-scoped source (clinical
+notes, call notes), that member's records are seated first in reranker
+order and, for an open-ended request ("tell me about her clinical
+history", "what was the referral for"), count as evidence by identity —
+a cross-encoder scores a discharge summary 0.004 against "clinical
+history" because no passage *answers* a request for a record. A fact
+asked of the records ("do the notes say what was prescribed?") keeps
+the score-based verdict, so the platform still says insufficient when
+none of them carries the fact. Determinism is measured, not assumed — two runs of the golden set
 on the same code agree item for item; with sampled plans about one item
 in ten had flipped per re-plan. A golden question's plan is stored,
 keyed by the translated question, the menu, and the model version, and

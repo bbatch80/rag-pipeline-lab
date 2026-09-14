@@ -1,23 +1,23 @@
 {
-  "run_id": 636,
-  "git_sha": "5aa59cb",
+  "run_id": 652,
+  "git_sha": "ff65167",
   "corpus_hash": "41a4fd0f60ed63d14e46a4356c5c8fbf6e7a1732f703c43853a015d6ed262b86",
-  "written_at": "2026-09-14T05:34:45+00:00",
+  "written_at": "2026-09-14T14:51:18+00:00",
   "overall": {
-    "item_pass": 0.617,
-    "hit@5": 0.8347826086956521,
-    "precision@5": 0.41565217391304343,
-    "source_coverage": 0.783623188405797
+    "item_pass": 0.673,
+    "hit@5": 0.8620689655172413,
+    "precision@5": 0.43448275862068964,
+    "source_coverage": 0.8204501915708812
   },
   "by_work": {
     "0": {
       "name": "Guardrails",
-      "rate": 0.76,
+      "rate": 0.96,
       "n": 25
     },
     "1": {
       "name": "Factual lookup",
-      "rate": 0.941,
+      "rate": 0.971,
       "n": 34
     },
     "2": {
@@ -27,8 +27,8 @@
     },
     "3": {
       "name": "Summarization of a bounded set",
-      "rate": 0.455,
-      "n": 11
+      "rate": 0.583,
+      "n": 12
     },
     "4": {
       "name": "Comparison",
@@ -37,7 +37,7 @@
     },
     "5": {
       "name": "Linked discoveries",
-      "rate": 0.333,
+      "rate": 0.4,
       "n": 15
     },
     "6": {
@@ -71,7 +71,7 @@
       "n": 15
     },
     "call_note": {
-      "rate": 0.364,
+      "rate": 0.455,
       "n": 11
     },
     "carrier_letter": {
@@ -79,15 +79,15 @@
       "n": 7
     },
     "clinical_note": {
-      "rate": 0.5,
-      "n": 2
+      "rate": 1.0,
+      "n": 3
     },
     "clinical_policy": {
       "rate": 1.0,
       "n": 12
     },
     "compound": {
-      "rate": 0.278,
+      "rate": 0.333,
       "n": 18
     },
     "cross_plan": {
@@ -111,7 +111,7 @@
       "n": 11
     },
     "persona_negative": {
-      "rate": 0.375,
+      "rate": 1.0,
       "n": 8
     },
     "scope_negative": {
@@ -140,7 +140,12 @@
     "adversarial-02",
     "adversarial-03",
     "persona_negative-01",
+    "persona_negative-02",
     "persona_negative-03",
+    "persona_negative-04",
+    "persona_negative-05",
+    "persona_negative-06",
+    "persona_negative-07",
     "persona_negative-08",
     "scope_negative-01",
     "scope_negative-02",
@@ -174,13 +179,16 @@
     "call_note-01": 1,
     "call_note-02": 1,
     "call_note-03": 1,
+    "call_note-04": 1,
     "call_note-11": 1,
     "carrier_letter-01": 1,
     "carrier_letter-02": 1,
     "carrier_letter-03": 1,
     "carrier_letter-04": 1,
     "carrier_letter-05": 1,
+    "clinical_note-01": 1,
     "clinical_note-02": 1,
+    "clinical_note-03": 1,
     "clinical_policy-01": 1,
     "clinical_policy-02": 1,
     "clinical_policy-03": 1,
@@ -195,6 +203,7 @@
     "clinical_policy-12": 1,
     "compound-02": 1,
     "compound-05": 1,
+    "compound-08": 1,
     "compound-09": 1,
     "compound-15": 1,
     "compound-16": 1,
@@ -224,7 +233,12 @@
     "named_query-06": 1,
     "named_query-11": 1,
     "persona_negative-01": 1,
+    "persona_negative-02": 1,
     "persona_negative-03": 1,
+    "persona_negative-04": 1,
+    "persona_negative-05": 1,
+    "persona_negative-06": 1,
+    "persona_negative-07": 1,
     "persona_negative-08": 1,
     "scope_negative-01": 1,
     "scope_negative-02": 1,
@@ -259,7 +273,6 @@
     "appeal-10": 0,
     "appeal-11": 0,
     "appeal-13": 0,
-    "call_note-04": 0,
     "call_note-05": 0,
     "call_note-06": 0,
     "call_note-07": 0,
@@ -268,13 +281,11 @@
     "call_note-10": 0,
     "carrier_letter-06": 0,
     "carrier_letter-07": 0,
-    "clinical_note-01": 0,
     "compound-01": 0,
     "compound-03": 0,
     "compound-04": 0,
     "compound-06": 0,
     "compound-07": 0,
-    "compound-08": 0,
     "compound-10": 0,
     "compound-11": 0,
     "compound-12": 0,
@@ -298,11 +309,6 @@
     "named_query-08": 0,
     "named_query-09": 0,
     "named_query-10": 0,
-    "persona_negative-02": 0,
-    "persona_negative-04": 0,
-    "persona_negative-05": 0,
-    "persona_negative-06": 0,
-    "persona_negative-07": 0,
     "unanswerable-03": 0,
     "version_negative-04": 0,
     "version_negative-08": 0,
@@ -311,11 +317,11 @@
     "yoy-09": 0
   },
   "health": {
-    "tie_rate": 0.294,
-    "median_margin": 0.0284,
-    "duplicate_share": 0.113,
+    "tie_rate": 0.299,
+    "median_margin": 0.0272,
+    "duplicate_share": 0.11,
     "index_seat_share": 0.01,
     "needless_split_rate": 0.261,
-    "n_payloads": 148
+    "n_payloads": 149
   }
 }

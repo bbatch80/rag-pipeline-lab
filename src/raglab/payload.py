@@ -27,6 +27,7 @@ def build(
     max_chunks: int = 8,
     coverage: dict | None = None,
     search: dict | None = None,
+    identity_evidence: int = 0,
 ) -> dict:
     retrieved_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     if route.scope != "in_scope":
@@ -40,11 +41,16 @@ def build(
         }
 
     insufficient, best = abstention_verdict(reranked)
+    if identity_evidence:
+        # The records rule: the open member's own records answer a question
+        # about them by identity; a relevance score is not the verdict.
+        insufficient = False
     return {
         "spec_version": SPEC_VERSION,
         "query": query,
         **({"coverage": coverage} if coverage else {}),
         **({"search": search} if search else {}),
+        **({"evidence_by_identity": identity_evidence} if identity_evidence else {}),
         "status": "insufficient_evidence" if insufficient else "ok",
         "confidence": round(best or 0.0, 4),
         "retrieved_at": retrieved_at,

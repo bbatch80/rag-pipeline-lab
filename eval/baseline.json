@@ -1,13 +1,13 @@
 {
-  "run_id": 670,
-  "git_sha": "7f2b0c5",
+  "run_id": 689,
+  "git_sha": "12d4fdd",
   "corpus_hash": "41a4fd0f60ed63d14e46a4356c5c8fbf6e7a1732f703c43853a015d6ed262b86",
-  "written_at": "2026-09-14T16:25:33+00:00",
+  "written_at": "2026-09-14T17:11:47+00:00",
   "overall": {
-    "item_pass": 0.678,
-    "hit@5": 0.8632478632478633,
-    "precision@5": 0.4324786324786325,
-    "source_coverage": 0.8219848053181386
+    "item_pass": 0.682,
+    "hit@5": 0.864406779661017,
+    "precision@5": 0.43050847457627117,
+    "source_coverage": 0.8319679849340866
   },
   "by_work": {
     "0": {
@@ -18,12 +18,12 @@
     "1": {
       "name": "Factual lookup",
       "rate": 0.971,
-      "n": 34
+      "n": 35
     },
     "2": {
       "name": "Explanation with exceptions",
-      "rate": 0.625,
-      "n": 16
+      "rate": 0.647,
+      "n": 17
     },
     "3": {
       "name": "Summarization of a bounded set",
@@ -95,8 +95,8 @@
       "n": 3
     },
     "factual": {
-      "rate": 0.769,
-      "n": 13
+      "rate": 0.786,
+      "n": 14
     },
     "internal_factual": {
       "rate": 0.818,
@@ -107,8 +107,8 @@
       "n": 4
     },
     "named_query": {
-      "rate": 0.455,
-      "n": 11
+      "rate": 0.5,
+      "n": 12
     },
     "persona_negative": {
       "rate": 1.0,
@@ -218,6 +218,7 @@
     "factual-14": 1,
     "factual-15": 1,
     "factual-16": 1,
+    "factual-17": 1,
     "internal_factual-01": 1,
     "internal_factual-02": 1,
     "internal_factual-03": 1,
@@ -234,6 +235,7 @@
     "named_query-03": 1,
     "named_query-06": 1,
     "named_query-11": 1,
+    "named_query-12": 1,
     "persona_negative-01": 1,
     "persona_negative-02": 1,
     "persona_negative-03": 1,
@@ -320,11 +322,11 @@
     "yoy-09": 0
   },
   "health": {
-    "tie_rate": 0.297,
-    "median_margin": 0.0271,
-    "duplicate_share": 0.109,
-    "index_seat_share": 0.009,
-    "needless_split_rate": 0.277,
-    "n_payloads": 151
+    "tie_rate": 0.298,
+    "median_margin": 0.0231,
+    "duplicate_share": 0.105,
+    "index_seat_share": 0.012,
+    "needless_split_rate": 0.255,
+    "n_payloads": 153
   }
 }

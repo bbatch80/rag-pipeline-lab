@@ -11,7 +11,7 @@
 <p class="banner banner-scope"><strong>Not available to your role.</strong></p>
 {% elif p.status == "ok" %}
 <p class="statusline"><span class="status ok">Evidence served{% if p.get("evidence_by_identity") %} · by identity{% endif %}</span>
-  {% if p.get("confidence") is not none %}<span class="conf" title="the reranker's top score against the prose bar of 0.50">confidence <span class="bar"><i style="width:{{ (p.confidence * 100) | round | int }}%"></i><b></b></span><span class="num">{{ "%.2f" | format(p.confidence) }}</span></span>{% endif %}</p>
+  {% if p.get("confidence") is not none and p.chunks %}<span class="conf" title="the reranker's top score against the prose bar of 0.50">confidence <span class="bar"><i style="width:{{ (p.confidence * 100) | round | int }}%"></i><b></b></span><span class="num">{{ "%.2f" | format(p.confidence) }}</span></span>{% endif %}</p>
 {% endif %}
 
 {% if p.get("coverage") and p.coverage.get("level") in ("all", "program") and not (p.coverage.get("missing_from_corpus") or p.coverage.get("not_offered")) %}

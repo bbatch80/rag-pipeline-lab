@@ -42,6 +42,7 @@ h2 { font-size: 1.05rem; margin: 2.2rem 0 .8rem; }
 .card .value { font-size: 1.55rem; font-weight: 650; margin: .15rem 0;
   font-variant-numeric: tabular-nums; }
 .card .rule { font-size: .72rem; color: var(--muted); }
+.card .why { display: block; margin-top: .45rem; font-size: .7rem; line-height: 1.35; color: var(--muted); border-top: 1px dashed var(--line); padding-top: .35rem; }
 .card.pass { border-left: 4px solid var(--good); }
 .card.fail { border-left: 4px solid var(--bad); background: var(--bad-soft); }
 .card.info { border-left: 4px solid var(--indigo); }
@@ -432,7 +433,8 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
     if latency.get("total"):
         p50, p95 = latency["total"]
         cards.append(_card("latency p95 (ms)", int(p95),
-                           f"budget ≤ {BUDGET_P95_MS} ms · p50 {p50:.0f} · not gated", None))
+                           f"budget ≤ {BUDGET_P95_MS} ms · p50 {p50:.0f} · not gated"
+                           "<span class='why'>Why: the reranker scores every candidate on CPU — no GPU in this stack — and the candidate pool is kept full for recall. A repeat question takes about 1 s from the caches.</span>", None))
     if deid:
         cards.append(_card("de-id recall", float(deid.get("overall_recall", 0)),
                            "measured vs manifest", None))

@@ -735,7 +735,9 @@ def compose(
             plan.widened = plan.widened or widened
             start = len(chunks)
             built = payload_mod.build(leg.text, result.decision, reranked, coverage=coverage_note(conn, result.decision, reranked),
-                                      search=result.search_stats)
+                                      search=result.search_stats, identity_evidence=result.identity_evidence)
+            if result.identity_evidence and "member_records" not in plan.enforced:
+                plan.enforced = tuple(plan.enforced) + ("member_records",)
             coverage = coverage or built.get("coverage")
             for k in ("readings", "candidates", "trimmed"):  # summed over the document legs
                 if k in result.search_stats:
@@ -812,6 +814,52 @@ def _leg_text(conn, leg: Leg, ctx: retrieval.Context) -> str:
     return text
 
 
+# An open-ended request for a member's records — the records are the answer.
+# A fact question over the records ("do the notes say what was prescribed?")
+# keeps the score-based verdict: the records are seated, but the platform
+# says insufficient when none of them carries the fact (unanswerable-05).
+_RECORDS_REQUEST = re.compile(
+    r"\b(history|summar(?:y|i[sz]e)|describe|overview|background|tell me about|what do we know|"
+    r"everything|all (?:of )?(?:the |their |his |her )?(?:calls|notes|records|visits)|"
+    r"recent (?:calls|notes|visits)|any (?:calls|notes|records)|what (?:calls|notes|records) (?:are|do|does)|"
+    r"what (?:was|were|is|are) (?:done|said|written|noted|discussed)|"
+    r"what (?:did|do|does) (?:they|she|he|the member|the rep|the nurse|the doctor|it) (?:call|ask|say|dispute|write|tell|report)|"
+    r"what (?:was|were|is|are) (?:it|this|that|(?:the|their|his|her) (?:\w+ ){0,3}\w+) (?:about|for|regarding))\b",
+    re.IGNORECASE,
+)
+# "...say WHAT the doctor prescribed": a specific fact asked of the records —
+# the records are seated, but the verdict stays with the scores.
+_NESTED_FACT = re.compile(r"\b(?:say|says|said|mention|mentions|state|states|note|notes|indicate|show)s? (?:what|whether|if|which|how much|how many|when|where|who)\b",
+                          re.IGNORECASE)
+
+
+def apply_records_rule(reranked: list, candidates: list, hinted: set, member_key: str | None, top_n: int,
+                       open_ended: bool = True) -> tuple[list, int]:
+    """The records rule (2026-09-14): when a member is open and the planner
+    aimed this leg at a member-scoped source, the member's own records in
+    that source ARE the evidence — seated first in reranker order and never
+    abstained on for scoring low against a question they were not written
+    to answer ("tell me about this member's clinical history": her discharge
+    summary scored 0.004 and lost to policy boilerplate). Other sources fill
+    the remaining seats under their normal bar. Returns (seated, how many
+    were seated by identity)."""
+    if not member_key or not hinted:
+        return reranked, 0
+    pool = candidates or reranked
+    records = sorted((c for c in pool if c.doc_type in hinted), key=lambda c: c.rerank_score or 0.0, reverse=True)
+    if not records:
+        return reranked, 0
+    seated = records[:top_n]
+    ids = {c.chunk_id for c in seated}
+    for c in reranked:
+        if len(seated) >= top_n:
+            break
+        if c.chunk_id not in ids:
+            seated.append(c)
+            ids.add(c.chunk_id)
+    return seated, (len(records[:top_n]) if open_ended else 0)
+
+
 def _run_doc_leg(conn, leg: Leg, question: str, caller: Caller, ctx: retrieval.Context, route: router.Route, watch: Stopwatch,
                  available: dict | None = None, trace: list | None = None):
     """One document leg over the module's document menu (or every visible
@@ -820,6 +868,13 @@ def _run_doc_leg(conn, leg: Leg, question: str, caller: Caller, ctx: retrieval.C
     leg_route = _leg_route(leg, route, ctx, available)
     text = _leg_text(conn, leg, ctx)
     probe = _probe(conn, text, caller.persona, ctx, watch, decision=leg_route)
+    if ctx.member_key and leg.sources:
+        member_scoped = set(retrieval._source_flags(conn)[0])
+        hinted = set(leg.sources) & member_scoped
+        asked = f"{question or ''} {text or ''}"
+        open_ended = bool(_RECORDS_REQUEST.search(asked)) and not _NESTED_FACT.search(asked)
+        probe.reranked, probe.identity_evidence = apply_records_rule(probe.reranked, probe.candidates, hinted, ctx.member_key,
+                                                                     rerank.TOP_N_OUT, open_ended=open_ended)
     if trace is not None:
         pool = probe.candidates or []
         def line(c):

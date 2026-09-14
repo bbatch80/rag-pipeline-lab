@@ -258,6 +258,7 @@ def run(
     config_label: str = "baseline",
     sabotage: bool = False,
     workers: int = 1,
+    items_only: tuple[str, ...] = (),
     categories: tuple[str, ...] = (),
     replan: bool = False,
 ) -> RetrievalEvalResult:
@@ -282,7 +283,8 @@ def run(
     replans: list[tuple] = []
     registry = sources.load(conn)
 
-    items = [item for item in ablation.load_golden() if not categories or item["category"] in categories]
+    items = [item for item in ablation.load_golden()
+             if (not categories or item["category"] in categories) and (not items_only or item["id"] in items_only)]
     if sabotage or replan or workers <= 1:
         for item in items:
             qid, category = item["id"], item["category"]

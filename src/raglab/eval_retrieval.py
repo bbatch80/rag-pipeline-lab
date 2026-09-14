@@ -112,6 +112,17 @@ def caller_for(item: dict) -> planner.Caller:
     return planner.Caller(persona=doc_persona, warehouse_role=role)
 
 
+def _only_the_warehouse_is_missing(payload: dict) -> bool:
+    """insufficient_evidence caused solely by warehouse legs that could not
+    run for want of a warehouse, while every document leg found evidence."""
+    if payload.get("status") != "insufficient_evidence" or not checks._warehouse_unavailable(payload):
+        return False
+    not_run = {w.get("leg") for w in payload.get("warehouse_results") or [] if w.get("status") == "not_executed"}
+    missing = set(payload.get("missing") or [])
+    doc_legs = payload.get("sub_results") or []
+    return bool(missing) and missing <= not_run and bool(doc_legs) and all(s.get("status") == "ok" for s in doc_legs)
+
+
 def _member_on_screen(item: dict) -> str | None:
     """The member the screen has open — unless the item types the id into
     the question on purpose (`typed_member_id`), which tests that path."""
@@ -165,6 +176,13 @@ def score_item(conn, item: dict) -> list[tuple]:
     if "persona_allow" in item or "persona_deny" in item:
         if item.get("persona_allow"):
             allowed = _compose(conn, item, item["question"], persona=item["persona_allow"])
+            if _only_the_warehouse_is_missing(allowed):
+                # CI holds no warehouse: a required warehouse leg could not run,
+                # so the status reads insufficient although the document legs
+                # found the evidence. The wall is about the documents — judge
+                # them, and record that the warehouse half was skipped.
+                add(WAREHOUSE_SKIPPED, 1.0, {"check": "check_allow", "reason": "warehouse unavailable: required warehouse leg not executed"})
+                allowed = {**allowed, "status": "ok"}
             add(*checks.check_allow_titles(item, allowed))
             for metric, value, detail in checks.source_metrics(item, allowed):
                 add(metric, value, detail)

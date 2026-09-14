@@ -1,10 +1,13 @@
-{# After a key is committed: one header row confirming what is open (the
-   record the platform found for the key), then a question box carrying
-   the key as page state. Every evidence panel is a question. #}
+{# After a key is committed: a one-line confirmation of what is open and a
+   question box carrying the key as page state. Every evidence panel is a
+   question; the record itself renders with the first answer. #}
 {% if error %}
 <p class="banner banner-error">{{ error }}</p>
 {% else %}
-{% with result=header, title=header.title, extra_class="headerrow", label=label %}{% include "partials/rows.html" %}{% endwith %}
+{# The key was validated and found; nothing about the record is shown until a
+   question is asked — the context renders with the answer (user ruling
+   2026-09-14). #}
+<p class="note">{{ opened }}{% if label %} {{ label }}{% endif %}</p>
 <form hx-post="{{ ask_url }}" hx-target="#result" hx-indicator="#asking" class="askbox">
   {% if member_id %}<input type="hidden" name="member_id" value="{{ member_id }}">{% endif %}
   {% if case_id %}<input type="hidden" name="case_id" value="{{ case_id }}">{% endif %}

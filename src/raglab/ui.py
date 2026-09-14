@@ -97,12 +97,13 @@ def render_payload(payload: dict, *, console_links: bool = False) -> str:
         payload=payload, leg_found=leg_outcomes(payload), console=console_links)
 
 
-def render_workspace(*, header: dict | None, error: str | None = None, ask_url: str = "", member_id: str = "",
+def render_workspace(*, opened: str = "", error: str | None = None, ask_url: str = "", member_id: str = "",
                      case_id: str = "", prefill: str = "", placeholder: str = "", label: str | None = None) -> str:
-    """The header row after a key is committed, and the question box carrying
-    the key (member or case) as page state — pure."""
+    """After a key is committed: a one-line confirmation and the question box
+    carrying the key (member or case) as page state — pure. No record is
+    rendered until a question is asked."""
     return env.get_template("partials/workspace.html").render(
-        header=header, error=error, ask_url=ask_url, member_id=member_id, case_id=case_id, prefill=prefill,
+        opened=opened, error=error, ask_url=ask_url, member_id=member_id, case_id=case_id, prefill=prefill,
         placeholder=placeholder, label=label)
 
 
@@ -206,11 +207,11 @@ def mount(app: FastAPI) -> None:
     def agent_assist_open(member_id: str = Form(...), ident: identity.Identity = Depends(require_surface("agent_assist"))):
         header, error = open_record(ident, "agent_assist", "member_profile", "member_id", member_id)
         if error:
-            return HTMLResponse(render_workspace(header=None, error=error))
+            return HTMLResponse(render_workspace(error=error))
         return HTMLResponse(render_workspace(
-            header={**header, "title": f"Member {header['canonical']}"},
+            opened=f"Member {header['canonical']} is open. Ask a question; the context renders with the answer.",
             ask_url="/ui/agent_assist/ask", member_id=header["canonical"],
-            placeholder="e.g. What did she call about last time? Is a referral needed for a specialist?"))
+            placeholder="e.g. What is this member's name? What did she call about last time?"))
 
     @app.post("/ui/agent_assist/ask", response_class=HTMLResponse)
     def agent_assist_ask(question: str = Form(...), member_id: str = Form(...),
@@ -227,12 +228,12 @@ def mount(app: FastAPI) -> None:
     def workbench_open(case_id: str = Form(...), ident: identity.Identity = Depends(require_surface("appeals_workbench"))):
         header, error = open_record(ident, "appeals_workbench", "appeal_case", "case_id", case_id)
         if error:
-            return HTMLResponse(render_workspace(header=None, error=error))
+            return HTMLResponse(render_workspace(error=error))
         # the open case is the context: the pipeline binds its member, claim,
         # policy, and date of service to every leg (2026-09-14: the box no
         # longer needs the case id typed — "Describe this appeal" just works)
         return HTMLResponse(render_workspace(
-            header={**header, "title": f"Case {header['canonical']}"},
+            opened=f"Case {header['canonical']} is open. Ask a question; the context renders with the answer.",
             ask_url="/ui/appeals_workbench/ask", case_id=header["canonical"],
             placeholder="e.g. Describe this appeal. Why was the denial upheld?",
             label=EVIDENCE_LABEL))

@@ -123,3 +123,19 @@ def test_rerank_cache_connection_is_per_thread_and_prediction_is_serialized(monk
     for t in workers:
         t.join()
     assert peak["n"] == 1  # one prediction at a time
+
+
+def test_allow_wall_is_judged_on_the_documents_when_only_the_warehouse_is_missing():
+    """CI has no warehouse: a two-leg plan whose case row could not run reads
+    insufficient although the letter was found. The allow check judges the
+    documents and records the warehouse half as skipped (PR #57's CI gate)."""
+    from raglab import eval_retrieval as er
+
+    ci_shaped = {"status": "insufficient_evidence", "missing": ["appeal_case"],
+                 "warehouse_results": [{"leg": "appeal_case", "status": "not_executed", "reason": "warehouse unavailable: KeyError"}],
+                 "sub_results": [{"leg": "documents", "status": "ok", "chunk_indexes": [0, 1]}]}
+    assert er._only_the_warehouse_is_missing(ci_shaped)
+    assert not er._only_the_warehouse_is_missing({**ci_shaped, "sub_results": [{"leg": "documents", "status": "insufficient_evidence"}]})
+    assert not er._only_the_warehouse_is_missing({**ci_shaped, "missing": ["appeal_case", "documents"]})
+    assert not er._only_the_warehouse_is_missing({**ci_shaped, "warehouse_results": [{"leg": "appeal_case", "status": "not_executed", "reason": "case_id required but not in context"}]})
+    assert not er._only_the_warehouse_is_missing({**ci_shaped, "status": "ok"})

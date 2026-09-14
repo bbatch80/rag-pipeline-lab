@@ -281,9 +281,9 @@ def test_agent_assist_loads_nothing_until_a_valid_known_member_is_typed(surfaces
     nobody = rep.post("/ui/agent_assist/open", data={"member_id": UNKNOWN_MEMBER}).text
     assert f"No member id {UNKNOWN_MEMBER} on record" in nobody and "headerrow" not in nobody
     opened = rep.post("/ui/agent_assist/open", data={"member_id": " m999900004 "}).text  # surface form → canonical
-    assert "headerrow" in opened and f"Member {FAKE_MEMBER}" in opened and "71-006" in opened
-    assert "Test" in opened and "Member" in opened and "1970-01-01" in opened  # who is open: name, DOB, current plan
-    assert f'name="member_id" value="{FAKE_MEMBER}"' in opened and 'hx-post="/ui/agent_assist/ask"' in opened
+    assert f"Member {FAKE_MEMBER} is open" in opened and 'hx-post="/ui/agent_assist/ask"' in opened
+    assert "headerrow" not in opened and "1970-01-01" not in opened and "71-006" not in opened  # nothing rendered until a question is asked
+    assert f'name="member_id" value="{FAKE_MEMBER}"' in opened
     assert 'value=""' in opened  # the question box starts empty: no canned question
 
 
@@ -311,7 +311,7 @@ def test_workbench_opens_a_case_and_starts_the_question_with_it(surfaces):
     assert "not a valid case id" in analyst.post("/ui/appeals_workbench/open", data={"case_id": "APL-000000"}).text
     assert "on record" in analyst.post("/ui/appeals_workbench/open", data={"case_id": identifiers.case_id(8)}).text
     opened = analyst.post("/ui/appeals_workbench/open", data={"case_id": KNOWN_CASE}).text
-    assert f"Case {KNOWN_CASE}" in opened and "not medically necessary" in opened and "CP-0003" in opened
+    assert f"Case {KNOWN_CASE} is open" in opened and "not medically necessary" not in opened  # validated and found; nothing rendered yet
     assert f'name="case_id" value="{KNOWN_CASE}"' in opened   # the open case is the context, as page state
     assert 'value=""' in opened and "Case APL" not in opened.split("askbox")[1][:200]  # no prefix: ask naturally
     assert "Evidence, never a determination" in opened

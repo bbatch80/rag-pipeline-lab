@@ -645,8 +645,8 @@ fixture payload with no database in the tests).
 | Surface | Who | What the page sends | What it renders |
 |---|---|---|---|
 | **Ask** | every role | one question | the payload, in the fixed order below |
-| **Agent Assist** | rep, care manager | a typed member ID, then questions | the member's enrollment row, then payloads composed under the job's module — `agent_assist` for the rep (call notes, benefits documents), `care_management` for the care manager (clinical notes, policies) — same screen, context per job |
-| **Appeals Workbench** | appeals analyst | a typed case ID, then questions | the case row; the case's member becomes the member context and the question box starts with the case id (visible, editable); "evidence, never a determination" |
+| **Agent Assist** | rep, care manager | a typed member ID, then questions | nothing until a question is asked, then payloads composed under the job's module — `agent_assist` for the rep (call notes, benefits documents), `care_management` for the care manager (clinical notes, policies) — same screen, context per job |
+| **Appeals Workbench** | appeals analyst | a typed case ID, then questions | nothing until a question is asked; the open case is the pipeline's context (its member, claim, policy, and date of service bind to every leg); "evidence, never a determination" |
 | **Analyst View** | actuary | a named query and its parameters | rows with masked columns labeled; nothing operational |
 | **Console** | admin | — | health, the disclosure log searchable by user / persona / document / payload id, one payload reproduced as delivered with its Snowflake `QUERY_TAG` pairing, the evaluation dashboard |
 

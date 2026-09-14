@@ -387,3 +387,21 @@ def test_a_platform_added_document_leg_is_best_effort():
                                    warehouse_results=[{"leg": "c", "query_name": "member_calls", "status": "ok", "rows": [["C1"]], "columns": ["CALL_ID"], "row_count": 1}],
                                    chunks=[], subject="M1", unresolved=[], as_of_defaulted=False)
     assert composed["status"] == "ok" and composed["missing"] == []   # the model's leg answered; the added leg's silence does not sink it
+
+
+def test_a_member_leg_with_no_member_open_is_released_not_failed():
+    """A member's own question on Ask (2026-09-14): 'will my old plan cover
+    January 7 … does my deductible reset?' The brochure note answered at
+    0.77; the planner's enrollment leg could not bind (no member on Ask),
+    was required, and hid the answer behind 'missing: current_enrollment'."""
+    from raglab import planner
+
+    legs = [planner.Leg(name="current_enrollment", kind="member_query", query_name="member_enrollment", slots=("member_id",)),
+            planner.Leg(name="docs", kind="doc_probe", text="when does a new plan take effect", sources=("brochure",))]
+    pl = planner.release_unbound_member_legs(planner.Plan(shape="compound", origin="model", legs=legs), member_id=None)
+    assert pl.legs[0].required is False and pl.legs[1].required is True and pl.enforced == ("no_member:member_enrollment",)
+    legs2 = [planner.Leg(name="current_enrollment", kind="member_query", query_name="member_enrollment", slots=("member_id",))]
+    with_member = planner.release_unbound_member_legs(planner.Plan(shape="simple", origin="model", legs=legs2), member_id="M1")
+    assert with_member.legs[0].required is True and with_member.enforced == ()   # a member is open: the leg runs as planned
+    provider = [planner.Leg(name="p", kind="member_query", query_name="provider_lookup", slots=(), params={"npi": "1"})]
+    assert planner.release_unbound_member_legs(planner.Plan(shape="simple", origin="model", legs=provider), None).enforced == ()  # not member-scoped

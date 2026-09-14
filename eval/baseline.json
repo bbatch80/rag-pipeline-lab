@@ -1,29 +1,29 @@
 {
-  "run_id": 652,
-  "git_sha": "ff65167",
+  "run_id": 689,
+  "git_sha": "12d4fdd",
   "corpus_hash": "41a4fd0f60ed63d14e46a4356c5c8fbf6e7a1732f703c43853a015d6ed262b86",
-  "written_at": "2026-09-14T14:51:18+00:00",
+  "written_at": "2026-09-14T17:11:47+00:00",
   "overall": {
-    "item_pass": 0.673,
-    "hit@5": 0.8620689655172413,
-    "precision@5": 0.43448275862068964,
-    "source_coverage": 0.8204501915708812
+    "item_pass": 0.682,
+    "hit@5": 0.864406779661017,
+    "precision@5": 0.43050847457627117,
+    "source_coverage": 0.8319679849340866
   },
   "by_work": {
     "0": {
       "name": "Guardrails",
-      "rate": 0.96,
-      "n": 25
+      "rate": 0.962,
+      "n": 26
     },
     "1": {
       "name": "Factual lookup",
       "rate": 0.971,
-      "n": 34
+      "n": 35
     },
     "2": {
       "name": "Explanation with exceptions",
-      "rate": 0.6,
-      "n": 15
+      "rate": 0.647,
+      "n": 17
     },
     "3": {
       "name": "Summarization of a bounded set",
@@ -95,8 +95,8 @@
       "n": 3
     },
     "factual": {
-      "rate": 0.75,
-      "n": 12
+      "rate": 0.786,
+      "n": 14
     },
     "internal_factual": {
       "rate": 0.818,
@@ -107,8 +107,8 @@
       "n": 4
     },
     "named_query": {
-      "rate": 0.455,
-      "n": 11
+      "rate": 0.5,
+      "n": 12
     },
     "persona_negative": {
       "rate": 1.0,
@@ -116,7 +116,7 @@
     },
     "scope_negative": {
       "rate": 1.0,
-      "n": 5
+      "n": 6
     },
     "table": {
       "rate": 1.0,
@@ -152,6 +152,7 @@
     "scope_negative-03",
     "scope_negative-04",
     "scope_negative-05",
+    "scope_negative-06",
     "unanswerable-01",
     "unanswerable-02",
     "unanswerable-04",
@@ -216,6 +217,8 @@
     "factual-11": 1,
     "factual-14": 1,
     "factual-15": 1,
+    "factual-16": 1,
+    "factual-17": 1,
     "internal_factual-01": 1,
     "internal_factual-02": 1,
     "internal_factual-03": 1,
@@ -232,6 +235,7 @@
     "named_query-03": 1,
     "named_query-06": 1,
     "named_query-11": 1,
+    "named_query-12": 1,
     "persona_negative-01": 1,
     "persona_negative-02": 1,
     "persona_negative-03": 1,
@@ -245,6 +249,7 @@
     "scope_negative-03": 1,
     "scope_negative-04": 1,
     "scope_negative-05": 1,
+    "scope_negative-06": 1,
     "table-01": 1,
     "table-02": 1,
     "table-03": 1,
@@ -317,11 +322,11 @@
     "yoy-09": 0
   },
   "health": {
-    "tie_rate": 0.299,
-    "median_margin": 0.0272,
-    "duplicate_share": 0.11,
-    "index_seat_share": 0.01,
-    "needless_split_rate": 0.261,
-    "n_payloads": 149
+    "tie_rate": 0.298,
+    "median_margin": 0.0231,
+    "duplicate_share": 0.105,
+    "index_seat_share": 0.012,
+    "needless_split_rate": 0.255,
+    "n_payloads": 153
   }
 }

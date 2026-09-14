@@ -290,7 +290,7 @@ def rerank_text(c: Candidate) -> str:
 
 
 def rerank(
-    query: str, candidates: list[Candidate], top_n: int = TOP_N_OUT,
+    query: str, candidates: list[Candidate], top_n: int = TOP_N_OUT, plan_seats: bool = True,
     stratify_years: tuple[int, ...] = (),
     stratify_plans: tuple[str, ...] = (),
 ) -> list[Candidate]:
@@ -334,6 +334,23 @@ def rerank(
     for candidate, score in zip(candidates, scores, strict=True):
         candidate.rerank_score = score
     ordered = sorted(candidates, key=lambda c: c.rerank_score, reverse=True)
+
+    if len(stratify_plans) >= 2 and len(stratify_years) < 2 and not plan_seats:
+        # Every current plan covered because NOTHING was named (router
+        # cover_level "all"): no plan is owed a seat — score order, with at
+        # most two chunks per plan so five plans' near-identical sections
+        # do not crowd the rest out. Sources with no plan compete as they
+        # are (run 667: guaranteed lanes took a bulletin's seats).
+        picked, per_plan = [], {}
+        for c in ordered:
+            if c.plan_code in stratify_plans:
+                if per_plan.get(c.plan_code, 0) >= 2:
+                    continue
+                per_plan[c.plan_code] = per_plan.get(c.plan_code, 0) + 1
+            picked.append(c)
+            if len(picked) >= top_n:
+                break
+        return picked
 
     if len(stratify_plans) >= 2 and len(stratify_years) < 2:
         # The coverage rule: every covered plan's best chunk near the top, by

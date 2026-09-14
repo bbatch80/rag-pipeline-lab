@@ -212,12 +212,12 @@ def bind_enrollment_plan(route: Route, ctx: Context) -> Route:
     codes = tuple(sorted({ctx.enrollment[y] for y in route.years if y in ctx.enrollment}))
     if not codes:
         return route
-    if route.cover_level == "option" and set(codes) <= set(route.cover_keys):
+    if route.cover_level in ("option", "all") and set(codes) <= set(route.cover_keys):
         # An option named without a program covers both programs' plans for a
         # public asker; for a member the enrollment says which program.
         return replace(route, plan_codes=codes, plan_from_enrollment=True,
                        cover_field=None, cover_keys=(), cover_asked=None, cover_level=None,
-                       reasons=route.reasons + (f"option covered both programs -> the member's enrolled plan {codes} (from enrollment)",))
+                       reasons=route.reasons + (f"{route.cover_level} coverage -> the member's enrolled plan {codes} (from enrollment)",))
     if route.plan_codes:
         return route
     return replace(route, plan_codes=codes, plan_from_enrollment=True,

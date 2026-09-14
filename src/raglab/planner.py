@@ -20,6 +20,8 @@ fast path), `caller` (a plan supplied by the caller, e.g. a golden item),
 from __future__ import annotations
 
 import hashlib
+import difflib
+import functools
 import json
 import os
 import re
@@ -34,7 +36,7 @@ from raglab import rerank, retrieval, router, snowlane
 from raglab.pipeline import PERSONAS, _disclose_and_commit, _probe
 from raglab.timing import Stopwatch
 
-MAX_LEGS = 3
+MAX_LEGS = 4  # 2026-09-14: one fact-shaped leg per listed benefit (four topics in the user's probe)
 LEG_KINDS = ("doc_probe", "member_query")
 _ID_TOKEN = retrieval._ID_TOKEN
 
@@ -96,11 +98,11 @@ MEMBER_QUERIES = ("member_profile", "member_calls", "member_recent_claims", "mem
                   "claim_adjudication", "member_denials", "provider_lookup", "provider_network_status", "providers_by_specialty")
 MODULES = {
     "ask": {"sources": BENEFITS_DOCS, "named_queries": ()},
-    "agent_assist": {"sources": ("call_note",) + BENEFITS_DOCS, "named_queries": MEMBER_QUERIES},
+    "agent_assist": {"sources": ("call_note",) + BENEFITS_DOCS, "named_queries": ("member_appeals",) + MEMBER_QUERIES},
     "appeals_workbench": {"sources": ("appeal", "call_note", "clinical_note") + BENEFITS_DOCS,
                           "named_queries": ("appeal_case", "member_appeals") + MEMBER_QUERIES},
     "care_management": {"sources": ("clinical_note", "clinical_policy", "brochure", "formulary"),
-                        "named_queries": ("member_profile", "member_claims_summary", "member_recent_claims", "member_enrollment")},
+                        "named_queries": ("member_profile", "member_claims_summary", "member_recent_claims", "member_enrollment", "member_appeals")},
     "analyst_view": {"sources": ("brochure", "rates", "clinical_policy", "carrier_letter", "formulary"),
                      "named_queries": ("cost_by_condition", "providers_by_specialty", "provider_network_status")},
 }
@@ -160,7 +162,9 @@ def plan_from_dict(spec: dict, origin: str = "caller", model: str | None = None)
                 slots=tuple(l.get("slots") or ()), params={k: v for k, v in (l.get("params") or {}).items() if v is not None},
                 required=bool(l.get("required", True)))
             for i, l in enumerate(spec.get("legs", []))]
-    return Plan(shape=spec.get("shape") or ("compound" if len(legs) > 1 else "simple"), legs=legs, origin=origin, model=model)
+    plan = Plan(shape=spec.get("shape") or ("compound" if len(legs) > 1 else "simple"), legs=legs, origin=origin, model=model)
+    plan.enforced = tuple(spec.get("enforced") or ())
+    return plan
 
 
 # A question about what a document SAID needs a document leg. The prompt
@@ -170,10 +174,152 @@ def plan_from_dict(spec: dict, origin: str = "caller", model: str | None = None)
 # enforces it: when the question asks what was written and the plan carries
 # no doc_probe, one is added over the module's whole document menu.
 _DOCUMENT_WORDS = re.compile(
-    r"\b(letter|said|says|say|state[sd]?|wrote|written|describe[sd]?|summari[sz]e|summary|tell|told|argue[sd]?|"
+    r"\b(letter|said|says|say|state[sd]?|wrote|written|describe[sd]?|summari[sz]e|summary|tell|told|argue[sd]?|call(?:ed|s)? about|"
     r"rationale|reasoning|explain(?:ed|s)?|why|what (?:does|did|do) .{0,40}\b(?:say|state|require|cover|mean))\b",
     re.IGNORECASE,
 )
+
+
+# An open-ended benefits question — "how does X coverage work", "what does the
+# plan cover for X", "tell me about the X benefit" — has no answer-shaped
+# sentence for a cross-encoder to score (the mental-health rows scored 0.002
+# against it, 0.99 against "what is the copay for X"). The platform expands
+# such a document leg into fact-shaped legs by template: the benefit's cost
+# row, its coverage terms, its limits. A rule, not a prompt change: it fires
+# only on this shape and leaves every other plan untouched (a prompt version
+# re-planned everything and lost nine golden items, run 667).
+_OPEN_ENDED = re.compile(
+    r"\bhow (?:does|do|is|are) (?:the |my |our |their )?(?P<a>[\w\- /&']+?) (?:coverage |benefits? )?(?:work|covered|handled)\b|"
+    r"\bwhat does (?:the |my |this )?(?:plan |option )?cover for (?P<b>[\w\- /&']+?)\??$|"
+    r"\btell me about (?:the |my )?(?P<c>[\w\- /&']+?) (?:benefits?|coverage)\b|"
+    r"\bhow (?:is|are) (?P<d>[\w\- /&']+?) covered\b",
+    re.IGNORECASE,
+)
+_BENEFIT_DOC_SOURCES = ("brochure", "clinical_policy", "formulary", "kb")
+
+
+def fact_shaped_legs(topic: str, sources: tuple) -> list:
+    topic = topic.strip().rstrip("?").strip()
+    return [
+        Leg(name=f"{topic}: cost", kind="doc_probe", text=f"What is the copay or coinsurance for {topic}?", sources=sources),
+        Leg(name=f"{topic}: coverage", kind="doc_probe", text=f"What {topic} services are covered in-network and out-of-network?", sources=sources),
+        Leg(name=f"{topic}: limits", kind="doc_probe", text=f"Are there visit limits, precertification requirements, or exclusions for {topic}?",
+            sources=sources, required=False),
+    ]
+
+
+def expand_open_ended_legs(plan: Plan, question: str) -> Plan:
+    """Replace an open-ended document leg with fact-shaped legs (see above).
+    Never touches a caller's plan, a warehouse leg, a leg over records, or a
+    plan that already has more than one document leg."""
+    if plan.origin == "caller":
+        return plan
+    doc_legs = [leg for leg in plan.legs if leg.kind == "doc_probe"]
+    if len(doc_legs) != 1:
+        return plan
+    leg = doc_legs[0]
+    if leg.sources and not set(leg.sources) & set(_BENEFIT_DOC_SOURCES):
+        return plan
+    m = _OPEN_ENDED.search(question or "") or _OPEN_ENDED.search(leg.text or "")
+    if not m:
+        return plan
+    topic = next(g for g in m.groups() if g)
+    if len(topic.split()) > 6:
+        return plan
+    others = [l for l in plan.legs if l.kind != "doc_probe"]
+    room = MAX_LEGS - len(others)
+    if room < 2:
+        return plan
+    sources = tuple(s for s in leg.sources if s in _BENEFIT_DOC_SOURCES) or ()
+    plan.legs = others + fact_shaped_legs(topic, sources)[:room]
+    plan.shape = "compound" if len(plan.legs) > 1 else "simple"
+    plan.enforced = tuple(plan.enforced) + ("fact_shaped_legs",)
+    return plan
+
+
+# A question that names SEVERAL benefits at once ("the costs for physical
+# therapy, imaging, outpatient surgery, and specialist visits") asks one
+# leg to find a chunk answering all of them — none does; the best partial
+# match (a specialist-copay article) took the seats and the rest got
+# nothing. Split it: one fact-shaped leg per named benefit, up to four.
+_BENEFIT_LIST = re.compile(
+    r"\b(?P<ask>costs?|copays?|coinsurance|coverage|benefits?|prices?|cost[- ]sharing)\s+(?:for|of|on)\s+(?P<list>[^?.]+?)(?:\s+(?:on|under|in|with)\s+(?:the\s+)?(?P<plan>[\w\- ]*?(?:option|plan|hdhp|elevate(?: plus)?)))?\s*\??$",
+    re.IGNORECASE,
+)
+_COVER_LIST = re.compile(r"\b(?:does|do) (?:the |my )?(?:plan|option|coverage)? ?cover\s+(?P<list>[^?.]+?)\s*\??$", re.IGNORECASE)
+
+
+def _split_list(text: str) -> list[str]:
+    parts = [p.strip(" ,;") for p in re.split(r",|\band\b|\bor\b|;|/", text) if p and p.strip(" ,;")]
+    parts = [p for p in parts if 1 <= len(p.split()) <= 4]
+    return parts if 2 <= len(parts) <= MAX_LEGS else []
+
+
+_TITLES_SYSTEM = ("You know how FEHB and PSHB plan brochures title the rows of their Section 5 benefits tables "
+                  "(for example 'Lab, x-ray and other diagnostic tests', 'Physical, occupational, speech, habilitative and rehabilitative therapy', "
+                  "'Outpatient hospital or ambulatory surgical center'). For each benefit a member names, answer with the brochure row title "
+                  "it falls under, in the same order, as a JSON array of strings and nothing else.")
+
+
+@functools.lru_cache(maxsize=256)
+def benefit_row_titles(items: tuple[str, ...], client=None) -> tuple[str, ...] | None:
+    """The brochure's own row title for each named benefit, from the planner
+    model at temperature 0; None when the call fails or answers badly (the
+    leg then carries the member's words). The reranker scores a row against
+    its own title near 1 and against a synonym near 0 (2026-09-14)."""
+    try:
+        import anthropic
+
+        client = client or anthropic.Anthropic(timeout=PLANNER_TIMEOUT_S, max_retries=1)
+        response = client.messages.create(
+            model=PLANNER_MODEL, extra_body={"temperature": PLANNER_TEMPERATURE}, max_tokens=300, system=_TITLES_SYSTEM,
+            messages=[{"role": "user", "content": json.dumps(list(items))}])
+        text = next(b.text for b in response.content if b.type == "text")
+        titles = json.loads(text[text.index("["):text.rindex("]") + 1])
+    except Exception:  # noqa: BLE001 — the member's words still make a leg
+        return None
+    if not (isinstance(titles, list) and len(titles) == len(items) and all(isinstance(t, str) and 0 < len(t) <= 120 for t in titles)):
+        return None
+    return tuple(t.strip() for t in titles)
+
+
+def split_benefit_list(plan: Plan, question: str, titles=None) -> Plan:
+    """One fact-shaped document leg per named benefit. Only for a plan with
+    exactly one document leg (over a benefits family or unhinted) that no
+    other rule has already reshaped; never a caller's plan."""
+    if plan.origin == "caller" or "fact_shaped_legs" in plan.enforced:
+        return plan
+    doc_legs = [leg for leg in plan.legs if leg.kind == "doc_probe"]
+    if len(doc_legs) != 1:
+        return plan
+    leg = doc_legs[0]
+    if leg.sources and not set(leg.sources) & set(_BENEFIT_DOC_SOURCES):
+        return plan
+    text = question or leg.text or ""
+    m = _BENEFIT_LIST.search(text)
+    items, plan_words, ask = [], "", "cost"
+    if m:
+        items, plan_words, ask = _split_list(m.group("list")), (m.group("plan") or "").strip(), m.group("ask").lower()
+    else:
+        m = _COVER_LIST.search(text)
+        if m:
+            items, ask = _split_list(m.group("list")), "cover"
+    if not items:
+        return plan
+    others = [l for l in plan.legs if l.kind != "doc_probe"]
+    if len(others) + len(items) > MAX_LEGS:
+        return plan
+    suffix = f" on the {plan_words}" if plan_words else ""
+    sources = tuple(s for s in leg.sources if s in _BENEFIT_DOC_SOURCES) or ()
+    rows = (titles if titles is not None else benefit_row_titles)(tuple(items)) or tuple(items)
+    if ask == "cover":
+        legs = [Leg(name=f"{it}: coverage", kind="doc_probe", text=f"Does the plan cover {row}{suffix}?", sources=sources) for it, row in zip(items, rows)]
+    else:
+        legs = [Leg(name=f"{it}: cost", kind="doc_probe", text=f"What do I pay for {row}{suffix}?", sources=sources) for it, row in zip(items, rows)]
+    plan.legs = others + legs
+    plan.shape = "compound" if len(plan.legs) > 1 else "simple"
+    plan.enforced = tuple(plan.enforced) + ("split_by_benefit",)
+    return plan
 
 
 def enforce_document_leg(plan: Plan, question: str) -> Plan:
@@ -189,6 +335,50 @@ def enforce_document_leg(plan: Plan, question: str) -> Plan:
     plan.legs.append(Leg(name="documents", kind="doc_probe", text=question, sources=()))
     plan.shape = "compound" if len(plan.legs) > 1 else "simple"
     plan.enforced = tuple(plan.enforced) + ("document_leg",)
+    return plan
+
+
+def fill_member_slot(plan: Plan) -> Plan:
+    """A member-scoped query without its member is meaningless: when the
+    catalog declares member_id and the leg neither binds the slot nor sets the
+    parameter, bind the slot from context (the user's live probe 2026-09-14:
+    member_appeals ran with no member and answered 'no rows')."""
+    notes = []
+    for leg in plan.legs:
+        if leg.kind == "doc_probe":
+            continue
+        declared = snowlane.NAMED_QUERIES.get(leg.query_name, {}).get("params", {})
+        if "member_id" in declared and "member_id" not in leg.slots and "member_id" not in leg.params:
+            leg.slots = tuple(leg.slots) + ("member_id",)
+            notes.append(f"member_slot:{leg.query_name}")
+    if notes:
+        plan.enforced = tuple(plan.enforced) + tuple(notes)
+    return plan
+
+
+def repair_query_names(plan: Plan, available: dict) -> Plan:
+    """The model sometimes invents a query name for a real menu entry
+    ('member_appeals_history' for member_appeals). Snap it to the closest name
+    on the menu and say so; a name nothing resembles loses only its own leg.
+    Before this, one invented name discarded the whole plan for a rules plan
+    (the user's live probe 2026-09-14)."""
+    menu = list(available.get("named_queries", ()))
+    kept, notes = [], []
+    for leg in plan.legs:
+        if leg.kind == "doc_probe" or leg.query_name in menu:
+            kept.append(leg)
+            continue
+        close = difflib.get_close_matches(leg.query_name or "", menu, n=1, cutoff=0.6)
+        if close:
+            notes.append(f"query_name:{leg.query_name}->{close[0]}")
+            leg.query_name = close[0]
+            kept.append(leg)
+        else:
+            notes.append(f"dropped:{leg.query_name}")
+    if notes:
+        plan.legs = kept
+        plan.shape = "compound" if len(plan.legs) > 1 else "simple"
+        plan.enforced = tuple(plan.enforced) + tuple(notes)
     return plan
 
 
@@ -412,7 +602,9 @@ def _plan_finish(conn: psycopg.Connection, question: str, available: dict, key: 
         if isinstance(outcome, BaseException):
             raise outcome
         plan = plan_from_dict(outcome, origin="model", model=PLANNER_MODEL)
+        plan = repair_query_names(plan, available)
         validate(plan, question, available)
+        plan = split_benefit_list(plan, question)  # the titled legs are stored with the plan: CI and the VM reuse them without a model call
     except Exception as exc:  # noqa: BLE001 — every model failure degrades to rules, and says why
         reason = f"{type(exc).__name__}: {str(exc)[:200]}"
         plan = plan_rules(question)
@@ -717,7 +909,10 @@ def compose(
         if plan is None:
             plan = pending.finish(conn, question, available) if isinstance(pending, _PendingPlan) else pending
         validate(plan, question, available)
+        plan = fill_member_slot(plan)
         plan = enforce_document_leg(plan, question)
+        plan = expand_open_ended_legs(plan, question)
+        plan = split_benefit_list(plan, question)
         plan.module = module
     _t(trace, "plan", origin=plan.origin, stored=plan.stored, model=plan.model, shape=plan.shape,
        fallback_reason=plan.fallback_reason, legs=[leg.to_dict() for leg in plan.legs])
@@ -798,8 +993,16 @@ def _leg_route(leg: Leg, route: router.Route, ctx: retrieval.Context, available:
     from dataclasses import replace
     as_of = route.as_of or ctx.as_of
     sources = tuple(available["sources"]) if available and available.get("module") else route.sources
-    return replace(route, sources=sources, as_of=as_of,
-                   reasons=route.reasons + ((f"as_of bound from the claim's date of service {as_of}",) if ctx.as_of and not route.as_of else ()))
+    leg_route = replace(route, sources=sources, as_of=as_of,
+                        reasons=route.reasons + ((f"as_of bound from the claim's date of service {as_of}",) if ctx.as_of and not route.as_of else ()))
+    if route.cover_level == "all" and leg.sources and "brochure" not in leg.sources:
+        # "Every plan" coverage exists for brochure questions; a leg the
+        # planner aimed at a bulletin, the formulary, or a policy must not
+        # search six plans' brochures beside it (run 669: three internal-
+        # document items lost their seats to brochure look-alikes).
+        leg_route = replace(leg_route, plan_codes=(), cover_field=None, cover_keys=(), cover_asked=None, cover_level=None,
+                            reasons=leg_route.reasons + (f"leg aimed at {list(leg.sources)}: every-plan coverage not applied",))
+    return leg_route
 
 
 def _leg_text(conn, leg: Leg, ctx: retrieval.Context) -> str:

@@ -11,6 +11,9 @@
 <p class="banner banner-scope"><strong>Not available to your role.</strong></p>
 {% endif %}
 
+{% if p.get("coverage") and p.coverage.get("level") in ("all", "program") and not (p.coverage.get("missing_from_corpus") or p.coverage.get("not_offered")) %}
+<p class="note">No plan named — shown for {{ p.coverage.asked }}: {{ p.coverage.with_evidence | join(", ") }}{% if p.coverage["keys"] | length > p.coverage.with_evidence | length %} (nothing found for {{ (p.coverage["keys"] | reject("in", p.coverage.with_evidence) | list) | join(", ") }}){% endif %}.</p>
+{% endif %}
 {% if p.get("coverage") and (p.coverage.get("missing_from_corpus") or p.coverage.get("not_offered")) %}
 <p class="note">Coverage of {{ p.coverage.asked }}:
   {% if p.coverage.missing_from_corpus %}missing from the corpus: {{ p.coverage.missing_from_corpus | join(", ") }}. {% endif %}

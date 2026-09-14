@@ -56,10 +56,12 @@ class Leg:
     slots: tuple[str, ...] = ()    # member_query: which context values bind (member_id, claim_id, case_id, ...)
     params: dict = field(default_factory=dict)  # member_query: validated free-text catalog params only
     required: bool = True
+    ranking_text: str | None = None  # doc_probe: the text the reranker scores when it differs from the leg's own wording
 
     def to_dict(self) -> dict:
         return {"name": self.name, "kind": self.kind, "text": self.text, "sources": list(self.sources),
-                "query_name": self.query_name, "slots": list(self.slots), "params": dict(self.params), "required": self.required}
+                "query_name": self.query_name, "slots": list(self.slots), "params": dict(self.params), "required": self.required,
+                **({"ranking_text": self.ranking_text} if self.ranking_text else {})}
 
 
 @dataclass
@@ -160,7 +162,7 @@ def plan_from_dict(spec: dict, origin: str = "caller", model: str | None = None)
     legs = [Leg(name=l.get("name") or f"leg{i + 1}", kind=l["kind"], text=l.get("text"),
                 sources=tuple(l.get("sources") or ()), query_name=l.get("query_name"),
                 slots=tuple(l.get("slots") or ()), params={k: v for k, v in (l.get("params") or {}).items() if v is not None},
-                required=bool(l.get("required", True)))
+                required=bool(l.get("required", True)), ranking_text=l.get("ranking_text") or None)
             for i, l in enumerate(spec.get("legs", []))]
     plan = Plan(shape=spec.get("shape") or ("compound" if len(legs) > 1 else "simple"), legs=legs, origin=origin, model=model)
     plan.enforced = tuple(spec.get("enforced") or ())
@@ -281,6 +283,86 @@ def benefit_row_titles(items: tuple[str, ...], client=None) -> tuple[str, ...] |
     if not (isinstance(titles, list) and len(titles) == len(items) and all(isinstance(t, str) and 0 < len(t) <= 120 for t in titles)):
         return None
     return tuple(t.strip() for t in titles)
+
+
+# ---- experiments (2026-09-14): one question per leg; brochure vocabulary ----
+SPLIT_QUESTIONS = os.environ.get("RAGLAB_SPLIT_QUESTIONS", "0") == "1"
+LEG_VOCABULARY = os.environ.get("RAGLAB_LEG_VOCABULARY", "0") == "1"
+_QUESTION_SPLIT = re.compile(r"(?<=\?)\s+(?=[A-Z])")
+
+
+def split_multi_question_leg(plan: Plan) -> Plan:
+    """A document leg carrying two questions scores the right passage at a
+    fraction of what either question alone scores (the transition question:
+    0.12 combined, 0.41 and 0.77 apart). One question per leg; the first
+    keeps the leg's required flag, the rest are best-effort."""
+    if plan.origin == "caller" or "split_by_question" in plan.enforced:
+        return plan
+    new_legs, changed = [], False
+    for leg in plan.legs:
+        parts = [q.strip() for q in _QUESTION_SPLIT.split(leg.text or "") if q.strip()] if leg.kind == "doc_probe" else []
+        parts = [q for q in parts if q.endswith("?")]
+        room = MAX_LEGS - (len(plan.legs) - 1)
+        if len(parts) < 2 or len(parts) > room:
+            new_legs.append(leg)
+            continue
+        changed = True
+        for i, q in enumerate(parts):
+            new_legs.append(Leg(name=f"{leg.name} ({i + 1})", kind="doc_probe", text=q, sources=leg.sources,
+                                required=leg.required if i == 0 else False))
+    if not changed:
+        return plan
+    plan.legs = new_legs
+    plan.shape = "compound" if len(plan.legs) > 1 else "simple"
+    plan.enforced = tuple(plan.enforced) + ("split_by_question",)
+    return plan
+
+
+_VOCAB_SYSTEM = ("You restate questions in the vocabulary that FEHB and PSHB plan brochures use: their section titles, benefit "
+                 "row names and defined terms (for example 'calendar year deductible', 'catastrophic protection out-of-pocket maximum', "
+                 "'in-network', 'preferred provider', 'prior authorization', 'Open Season', 'effective date'). Keep the meaning, "
+                 "keep any plan, option, program or year words exactly, keep it one sentence, and add nothing the question did not ask. "
+                 "Answer with a JSON array of strings in the same order and nothing else.")
+
+
+@functools.lru_cache(maxsize=512)
+def brochure_phrasing(texts: tuple[str, ...], client=None) -> tuple[str, ...] | None:
+    """Each leg text restated in brochure vocabulary by the planner model at
+    temperature 0; None on any failure (the leg then ranks on its own words)."""
+    try:
+        import anthropic
+
+        client = client or anthropic.Anthropic(timeout=PLANNER_TIMEOUT_S, max_retries=1)
+        response = client.messages.create(
+            model=PLANNER_MODEL, extra_body={"temperature": PLANNER_TEMPERATURE}, max_tokens=600, system=_VOCAB_SYSTEM,
+            messages=[{"role": "user", "content": json.dumps(list(texts))}])
+        text = next(b.text for b in response.content if b.type == "text")
+        out = json.loads(text[text.index("["):text.rindex("]") + 1])
+    except Exception:  # noqa: BLE001
+        return None
+    if not (isinstance(out, list) and len(out) == len(texts) and all(isinstance(t, str) and 0 < len(t) <= 300 for t in out)):
+        return None
+    return tuple(t.strip() for t in out)
+
+
+def phrase_legs_in_brochure_vocabulary(plan: Plan, phrasing=None) -> Plan:
+    """Give every model-written document leg over the benefits documents a
+    ranking text in the brochure's own vocabulary; the leg's wording is kept
+    for display. Recorded on the plan line as 'vocabulary'."""
+    if plan.origin == "caller" or "vocabulary" in plan.enforced:
+        return plan
+    legs = [l for l in plan.legs if l.kind == "doc_probe" and l.text and not l.ranking_text
+            and (not l.sources or set(l.sources) & set(_BENEFIT_DOC_SOURCES))]
+    if not legs:
+        return plan
+    phrased = (phrasing or brochure_phrasing)(tuple(l.text for l in legs))
+    if not phrased:
+        return plan
+    for leg, text in zip(legs, phrased):
+        if text and text.strip().lower() != leg.text.strip().lower():
+            leg.ranking_text = text
+    plan.enforced = tuple(plan.enforced) + ("vocabulary",)
+    return plan
 
 
 def split_benefit_list(plan: Plan, question: str, titles=None) -> Plan:
@@ -629,6 +711,10 @@ def _plan_finish(conn: psycopg.Connection, question: str, available: dict, key: 
         plan = repair_query_names(plan, available)
         validate(plan, question, available)
         plan = split_benefit_list(plan, question)  # the titled legs are stored with the plan: CI and the VM reuse them without a model call
+        if SPLIT_QUESTIONS:
+            plan = split_multi_question_leg(plan)
+        if LEG_VOCABULARY:
+            plan = phrase_legs_in_brochure_vocabulary(plan)
     except Exception as exc:  # noqa: BLE001 — every model failure degrades to rules, and says why
         reason = f"{type(exc).__name__}: {str(exc)[:200]}"
         plan = plan_rules(question)
@@ -937,6 +1023,10 @@ def compose(
         plan = enforce_document_leg(plan, question)
         plan = expand_open_ended_legs(plan, question)
         plan = split_benefit_list(plan, question)
+        if SPLIT_QUESTIONS:
+            plan = split_multi_question_leg(plan)      # stored plans predate the rule: applied here too, idempotent
+        if LEG_VOCABULARY:
+            plan = phrase_legs_in_brochure_vocabulary(plan)
         plan.module = module
     _t(trace, "plan", origin=plan.origin, stored=plan.stored, model=plan.model, shape=plan.shape,
        fallback_reason=plan.fallback_reason, legs=[leg.to_dict() for leg in plan.legs])
@@ -1041,7 +1131,7 @@ def _leg_text(conn, leg: Leg, ctx: retrieval.Context) -> str:
     """The leg's ranking text — with the applied policy's title appended when
     the question named a case or claim (record context, never the model) and
     this leg may reach policies: the Phase 1 thin-question mechanism."""
-    text = leg.text or ""
+    text = leg.ranking_text or leg.text or ""
     if ctx.record.get("policy_id") and "clinical_policy" in leg.sources:  # an EXPLICIT policy leg only
         title = retrieval.policy_title(conn, ctx.record["policy_id"])
         if title and title.lower() not in text.lower():

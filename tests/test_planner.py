@@ -405,3 +405,39 @@ def test_a_member_leg_with_no_member_open_is_released_not_failed():
     assert with_member.legs[0].required is True and with_member.enforced == ()   # a member is open: the leg runs as planned
     provider = [planner.Leg(name="p", kind="member_query", query_name="provider_lookup", slots=(), params={"npi": "1"})]
     assert planner.release_unbound_member_legs(planner.Plan(shape="simple", origin="model", legs=provider), None).enforced == ()  # not member-scoped
+
+def test_one_question_per_document_leg():
+    """The transition question: one leg holding two questions scored the
+    Open Season note 0.12; either question alone 0.41-0.77. Split at the
+    question boundary; the first keeps required, the rest are best-effort."""
+    from raglab import planner
+
+    leg = planner.Leg(name="rules", kind="doc_probe", sources=("brochure",),
+                      text="When a member switches plans at year-end, does the old plan cover services before the new plan takes effect? Does the deductible reset when switching plans?")
+    out = planner.split_multi_question_leg(planner.Plan(shape="simple", origin="model", legs=[leg]))
+    assert [l.text for l in out.legs] == ["When a member switches plans at year-end, does the old plan cover services before the new plan takes effect?",
+                                          "Does the deductible reset when switching plans?"]
+    assert [l.required for l in out.legs] == [True, False] and out.enforced == ("split_by_question",) and out.shape == "compound"
+    assert planner.split_multi_question_leg(out) is out                                                    # idempotent
+    single = planner.Plan(shape="simple", origin="model", legs=[planner.Leg(name="d", kind="doc_probe", text="What is the deductible? ", sources=())])
+    assert planner.split_multi_question_leg(single).enforced == ()                                        # one question: untouched
+    many = planner.Plan(shape="simple", origin="model", legs=[planner.Leg(name="d", kind="doc_probe", text="A? B? C? D? E?", sources=())])
+    assert planner.split_multi_question_leg(many).enforced == ()                                          # over the leg limit: untouched
+
+
+def test_brochure_vocabulary_sets_the_ranking_text_and_keeps_the_wording():
+    from raglab import planner
+
+    legs = [planner.Leg(name="a", kind="doc_probe", text="Does the deductible reset when switching plans?", sources=("brochure",)),
+            planner.Leg(name="c", kind="doc_probe", text="what did the rep say", sources=("call_note",)),
+            planner.Leg(name="m", kind="member_query", query_name="member_calls", slots=("member_id",))]
+    phrasing = lambda texts: tuple("Is the calendar year deductible met again from January 1?" for _ in texts)  # noqa: E731
+    out = planner.phrase_legs_in_brochure_vocabulary(planner.Plan(shape="compound", origin="model", legs=legs), phrasing=phrasing)
+    assert out.legs[0].ranking_text == "Is the calendar year deductible met again from January 1?" and out.legs[0].text.startswith("Does the deductible")
+    assert out.legs[1].ranking_text is None and out.legs[2].ranking_text is None    # records legs and warehouse legs are left alone
+    assert out.enforced == ("vocabulary",)
+    stored = planner.plan_from_dict(out.to_dict(), origin="model", model="m")
+    assert stored.legs[0].ranking_text == out.legs[0].ranking_text                    # travels with the stored plan
+    fresh = planner.Leg(name="a", kind="doc_probe", text="Does the deductible reset when switching plans?", sources=("brochure",))
+    untouched = planner.phrase_legs_in_brochure_vocabulary(planner.Plan(shape="simple", origin="model", legs=[fresh]), phrasing=lambda t: None)
+    assert untouched.enforced == () and untouched.legs[0].ranking_text is None        # the call failed: the member's words rank

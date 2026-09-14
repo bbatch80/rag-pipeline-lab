@@ -1,0 +1,14 @@
+.venv
+.git
+.github
+data
+plans
+CODEX WORK
+tests
+dags
+.airflow
+.env
+**/__pycache__
+**/*.pyc
+.pytest_cache
+deploy/snapshot

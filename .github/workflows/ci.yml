@@ -26,10 +26,13 @@ jobs:
       - run: uv sync
       - run: uv run raglab init-db
       - run: uv run pytest -v
+      # The deploy stack must at least parse: every variable it requires is
+      # supplied a placeholder here, as deploy/.env does on a host.
+      - run: cp deploy/.env.example deploy/.env && docker compose -f deploy/compose.yml --env-file deploy/.env config -q
 
   # Retrieval eval gate. Runs on the self-hosted runner beside the real,
   # fully indexed database (hosted runners start empty and hold no keys).
-  # A regression below any threshold in eval_retrieval.THRESHOLDS fails
+  # A category, group, or guardrail falling below eval/baseline.json fails
   # the job, and branch protection makes that block the merge.
   gate:
     # Same-repo pull requests only. Never a fork's PR: a fork can edit this

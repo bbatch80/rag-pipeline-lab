@@ -1,0 +1,11 @@
+# One site. With a public hostname Caddy obtains and renews a Let's Encrypt
+# certificate on its own; with "localhost" it issues one from its internal CA.
+{$SITE_ADDRESS} {
+	encode gzip
+	reverse_proxy app:8000
+	header {
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Content-Type-Options nosniff
+		-Server
+	}
+}

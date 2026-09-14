@@ -16,11 +16,11 @@ from raglab import taxonomy
 OUT_PATH = config.REPO_ROOT / "data" / "eval" / "dashboard.html"
 
 _STYLE = """
-:root { --bg:#FAFAF7; --surface:#FFF; --ink:#1F2A33; --muted:#5C6B76;
+:root { --navy:#00172f; --gold:#ffbc2e; --bg:#FAFAF7; --surface:#FFF; --ink:#1F2A33; --muted:#5C6B76;
   --line:#DDE2E0; --teal:#17707E; --indigo:#4956A8; --amber:#A66B1F;
   --good:#3E7C4F; --bad:#B4453A; --good-soft:#E6F0E8; --bad-soft:#F7E4E1;
   --chip:#EFF2F0; }
-@media (prefers-color-scheme: dark) { :root { --bg:#131A20; --surface:#1B242C;
+@media (prefers-color-scheme: dark) { :root { --navy:#8fb0c6; --gold:#ffc94d; --bg:#131A20; --surface:#1B242C;
   --ink:#E5E9EA; --muted:#93A1AB; --line:#2C3842; --teal:#4FB3C1;
   --indigo:#98A5E8; --amber:#D9A05B; --good:#7CBF8C; --bad:#E08A7E;
   --good-soft:#1E3326; --bad-soft:#3A211D; --chip:#242F38; } }
@@ -267,10 +267,67 @@ def _capability_html(conn: psycopg.Connection) -> str:
     )
 
 
+
+def _release_tags() -> list[tuple[str, str]]:
+    """(tag, 'YYYY-MM-DD HH:MM') for every v2.* tag, oldest first; [] where git is absent (the VM)."""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "tag", "-l", "v2.*", "--sort=creatordate", "--format=%(refname:short) %(creatordate:iso-strict)"],
+                             capture_output=True, text=True, timeout=5, cwd=str(config.REPO_ROOT)).stdout
+    except Exception:  # noqa: BLE001
+        return []
+    from datetime import datetime, timezone
+    tags = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            when = datetime.fromisoformat(parts[1]).astimezone(timezone.utc)  # the store is UTC; git reports local time
+            tags.append((parts[0], when.strftime("%Y-%m-%d %H:%M")))
+    return tags
+
+
+def _progress_svg(conn: psycopg.Connection) -> str:
+    """Golden pass rate by release since the v2 cutover: one evenly spaced
+    point per v2.* tag, at the full local run each release shipped with
+    (the last one before its tag). Item pass = every expectation the item
+    declares holds; the golden set grows, so a new failing item lowers the
+    rate before its fix raises it — the denominator sits under every point."""
+    rows = conn.execute(
+        "SELECT r.id, r.config_label, to_char(r.started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI'), count(*), sum(s.value)::int "
+        "FROM eval_runs r JOIN eval_scores s ON s.run_id = r.id AND s.metric = 'item_pass' "
+        "WHERE r.kind = 'retrieval' AND r.config_label NOT LIKE 'exp-%%' AND r.config_label NOT LIKE 'bakeoff%%' "
+        "AND r.config_label NOT LIKE 'ci%%' AND r.config_label NOT LIKE '%%SABOTAGE%%' AND r.started_at >= '2026-09-13 19:00' "
+        "GROUP BY r.id, r.config_label, r.started_at HAVING count(*) >= 140 ORDER BY r.id").fetchall()
+    releases = []
+    for tag, when in _release_tags():
+        before = [r for r in rows if r[2] <= when]
+        if before:
+            releases.append((tag, when, before[-1]))
+    if len(releases) < 2:
+        return "<p class='note'>Not enough releases since the cutover for a progress line yet.</p>"
+    w, h, pad_l, pad_r, pad_t, pad_b = 900, 250, 46, 24, 30, 52
+    lo, hi = 0.5, 0.8
+    xs = [pad_l + i * (w - pad_l - pad_r) / (len(releases) - 1) for i in range(len(releases))]
+    def y(v): return h - pad_b - (max(lo, min(hi, v)) - lo) / (hi - lo) * (h - pad_t - pad_b)
+    grid = "".join(f'<line x1="{pad_l}" x2="{w - pad_r}" y1="{y(g):.1f}" y2="{y(g):.1f}" stroke="var(--line)" stroke-width="1"/>'
+                   f'<text x="{pad_l - 8}" y="{y(g) + 4:.1f}" text-anchor="end" font-size="11" fill="var(--muted)">{g:.2f}</text>'
+                   for g in (0.5, 0.6, 0.7, 0.8))
+    rates = [r[4] / r[3] for _, _, r in releases]
+    line = f'<polyline fill="none" stroke="var(--navy)" stroke-width="2.5" points="{" ".join(f"{x:.1f},{y(v):.1f}" for x, v in zip(xs, rates))}"/>'
+    marks = ""
+    for i, ((tag, when, r), x, v) in enumerate(zip(releases, xs, rates)):
+        marks += (f'<circle cx="{x:.1f}" cy="{y(v):.1f}" r="5" fill="var(--gold)" stroke="var(--navy)" stroke-width="1.5">'
+                  f'<title>{tag} · run {r[0]} ({r[1]}) · {r[4]}/{r[3]} = {v:.3f} · tagged {when} UTC</title></circle>'
+                  f'<text x="{x:.1f}" y="{y(v) - 11:.1f}" text-anchor="middle" font-size="10.5" fill="var(--ink)">{v:.2f}</text>'
+                  f'<text x="{x:.1f}" y="{h - 30}" text-anchor="middle" font-size="10.5" fill="var(--ink)">{tag[1:]}</text>'
+                  f'<text x="{x:.1f}" y="{h - 16}" text-anchor="middle" font-size="9.5" fill="var(--muted)">{r[4]}/{r[3]}</text>')
+    return f'<svg viewBox="0 0 {w} {h}" width="100%" role="img" aria-label="golden pass rate by release">{grid}{line}{marks}</svg>'
+
+
 def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
     latest_run = conn.execute(
         "SELECT id, config_label, git_sha, to_char(started_at, 'YYYY-MM-DD HH24:MI') "
-        "FROM eval_runs WHERE kind = 'retrieval' AND config_label NOT LIKE '%%SABOTAGE%%' "
+        "FROM eval_runs WHERE kind = 'retrieval' AND config_label NOT LIKE '%%SABOTAGE%%' AND config_label NOT LIKE 'ci%%' "
         "ORDER BY id DESC LIMIT 1"
     ).fetchone()
 
@@ -426,6 +483,8 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
     capability = _capability_html(conn)
     stamp = (f"latest retrieval run {latest_run[0]} · {latest_run[3]} · "
              f"<span class='mono'>{latest_run[2]}</span>" if latest_run else "no runs yet")
+    progress = _progress_svg(conn)
+    golden_size = len(ablation.load_golden())
     html = f"""<meta charset="utf-8"><title>raglab — evaluation dashboard</title>
 <style>{_STYLE}</style><div class="wrap">
 <h1>raglab — evaluation dashboard</h1>
@@ -435,6 +494,14 @@ set. {stamp}</p>
 
 <h2>Health — current values vs CI gates</h2>
 <div class="cards">{''.join(cards)}</div>
+
+<h2>Progress by release — golden pass rate since the v2 cutover</h2>
+<div class="chart-box">
+  <div class="legend"><span class="k" style="background:var(--navy)"></span>items passing ÷ golden set, at the full run each release shipped with
+  &nbsp;·&nbsp; hover a point for the run</div>
+  {progress}
+</div>
+<p class="note">Pass = every expectation the item declares holds in the composed payload. The golden set grows as live questions become items (147 at the cutover, {golden_size} now), so a new failing item lowers the rate before its fix raises it; the denominator is on every point.</p>
 {capability}
 
 <h2>Retrieval quality over time</h2>

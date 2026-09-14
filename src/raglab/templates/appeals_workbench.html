@@ -1,7 +1,7 @@
 {% extends "layout.html" %}
 {% block title %}Appeals Workbench{% endblock %}
 {% block content %}
-<hgroup><h2>Appeals Workbench</h2><p>Nothing is loaded until you open a case. Enter the appeal case ID.</p></hgroup>
+<hgroup><h2>Appeals Workbench</h2><p>Nothing is loaded until you open a case. Enter the appeal case ID, then ask about the claim, the record, or the decision.</p></hgroup>
 <form hx-post="/ui/appeals_workbench/open" hx-target="#workspace" hx-indicator="#busy" class="keybox">
   <input type="text" name="case_id" placeholder="Case ID, e.g. APL-102025" required autofocus autocomplete="off">
   <button type="submit">Open case</button>

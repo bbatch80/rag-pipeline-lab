@@ -209,7 +209,7 @@ def mount(app: FastAPI) -> None:
         if error:
             return HTMLResponse(render_workspace(error=error))
         return HTMLResponse(render_workspace(
-            opened=f"Member {header['canonical']} is open. Ask a question; the context renders with the answer.",
+            opened=f"Member {header['canonical']} is open. Ask about their plan, calls, claims, or appeals.",
             ask_url="/ui/agent_assist/ask", member_id=header["canonical"],
             placeholder="e.g. What is this member's name? What did she call about last time?"))
 
@@ -233,7 +233,7 @@ def mount(app: FastAPI) -> None:
         # policy, and date of service to every leg (2026-09-14: the box no
         # longer needs the case id typed — "Describe this appeal" just works)
         return HTMLResponse(render_workspace(
-            opened=f"Case {header['canonical']} is open. Ask a question; the context renders with the answer.",
+            opened=f"Case {header['canonical']} is open. Ask about the claim, the record, or the decision.",
             ask_url="/ui/appeals_workbench/ask", case_id=header["canonical"],
             placeholder="e.g. Describe this appeal. Why was the denial upheld?",
             label=EVIDENCE_LABEL))

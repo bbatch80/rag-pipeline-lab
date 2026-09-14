@@ -1,14 +1,14 @@
 {% extends "layout.html" %}
 {% block title %}Surfaces{% endblock %}
 {% block content %}
-<hgroup><h2>{{ me.display_name }}</h2><p>{{ group_descriptions[me.group] }} — the surfaces your role opens.</p></hgroup>
-<div class="grid tiles">
+<div class="portal-head"><h2>{{ me.display_name }}</h2><p>{{ group_descriptions[me.group] }} — the surfaces your role opens. Nothing is loaded until you ask.</p></div>
+<div class="doors tiles">
   {% for surface in me.surfaces %}
-  <a href="/{{ surface }}" class="tile"><article>
+  <a href="/{{ surface }}" class="tile door">
+    <span class="eyebrow">{% if me.modules[surface] == "*" %}composes over the whole menu{% elif me.modules[surface] %}composes under {{ me.modules[surface] | replace("_", " ") }}{% else %}reads only{% endif %}</span>
     <h3>{{ surface_titles[surface] }}</h3>
     <p>{{ surface_blurbs[surface] }}</p>
-    {% if me.modules[surface] == "*" %}<small>composes over the whole menu</small>{% elif me.modules[surface] %}<small>composes under <code>{{ me.modules[surface] }}</code></small>{% else %}<small>reads only</small>{% endif %}
-  </article></a>
+  </a>
   {% endfor %}
 </div>
 {% endblock %}

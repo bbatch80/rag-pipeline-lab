@@ -1,12 +1,12 @@
 {
-  "run_id": 735,
-  "git_sha": "97f097f",
+  "run_id": 745,
+  "git_sha": "4298502",
   "corpus_hash": "41a4fd0f60ed63d14e46a4356c5c8fbf6e7a1732f703c43853a015d6ed262b86",
-  "written_at": "2026-09-14T20:44:17+00:00",
+  "written_at": "2026-09-14T21:07:13+00:00",
   "overall": {
-    "item_pass": 0.69,
+    "item_pass": 0.696,
     "hit@5": 0.875,
-    "precision@5": 0.4266666666666667,
+    "precision@5": 0.4233333333333334,
     "source_coverage": 0.8347685185185185
   },
   "by_work": {
@@ -22,7 +22,7 @@
     },
     "2": {
       "name": "Explanation with exceptions",
-      "rate": 0.611,
+      "rate": 0.667,
       "n": 18
     },
     "3": {
@@ -95,7 +95,7 @@
       "n": 3
     },
     "factual": {
-      "rate": 0.733,
+      "rate": 0.8,
       "n": 15
     },
     "internal_factual": {
@@ -221,6 +221,7 @@
     "factual-15": 1,
     "factual-16": 1,
     "factual-17": 1,
+    "factual-18": 1,
     "internal_factual-01": 1,
     "internal_factual-02": 1,
     "internal_factual-03": 1,
@@ -308,7 +309,6 @@
     "factual-10": 0,
     "factual-12": 0,
     "factual-13": 0,
-    "factual-18": 0,
     "internal_factual-10": 0,
     "internal_factual-11": 0,
     "internal_table-02": 0,
@@ -329,9 +329,9 @@
   "health": {
     "tie_rate": 0.291,
     "median_margin": 0.0218,
-    "duplicate_share": 0.101,
+    "duplicate_share": 0.117,
     "index_seat_share": 0.011,
-    "needless_split_rate": 0.255,
+    "needless_split_rate": 0.368,
     "n_payloads": 157
   }
 }

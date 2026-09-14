@@ -931,8 +931,11 @@ def compose(
             start = len(chunks)
             built = payload_mod.build(leg.text, result.decision, reranked, coverage=coverage_note(conn, result.decision, reranked),
                                       search=result.search_stats, identity_evidence=result.identity_evidence)
-            if result.identity_evidence and "member_records" not in plan.enforced:
+            if result.identity_evidence and "member_records" not in plan.enforced and result.identity_evidence > len(result.row_matches):
                 plan.enforced = tuple(plan.enforced) + ("member_records",)
+            for key in result.row_matches:
+                if f"row:{key}" not in plan.enforced:
+                    plan.enforced = tuple(plan.enforced) + (f"row:{key}",)
             coverage = coverage or built.get("coverage")
             for k in ("readings", "candidates", "trimmed"):  # summed over the document legs
                 if k in result.search_stats:
@@ -1036,6 +1039,98 @@ _NESTED_FACT = re.compile(r"\b(?:say|says|said|mention|mentions|state|states|not
                           re.IGNORECASE)
 
 
+# ---- the row-identity rule (2026-09-14) ----------------------------------
+# A lookup table answers "which tier is metformin?" by HAVING the metformin
+# row; a cross-encoder scores the ten-row chunk that holds it at 0.18-0.68
+# depending on phrasing (the other nine rows dilute it) and an unlisted drug
+# at 0.001-0.2. So the row is the evidence: a chunk whose table has a row
+# keyed by a term the question used is seated by identity, the score left
+# honest. A chunk is a table when it carries a Markdown separator row; the
+# keys are the first cells of the data rows (header and separator excluded).
+_TABLE_ROW = re.compile(r"^\s*\|\s*([^|\n]*?)\s*\|", re.MULTILINE)
+_TABLE_SEPARATOR = re.compile(r"^\s*\|\s*:?-{2,}", re.MULTILINE)
+_ROW_STOP = {"high", "standard", "option", "options", "plan", "plans", "hdhp", "elevate", "plus", "fehb", "pshb", "tier", "drug",
+             "yes", "no", "none", "nothing", "n/a", "all", "the", "and", "for", "with", "what", "which", "does", "is", "are", "of",
+             "note", "notes", "benefit", "benefits", "service", "services", "you", "pay", "we", "cover", "covered", "in", "out", "network"}
+_KEY_MAX_WORDS = 6  # a lookup row is keyed by a name; a brochure table whose first cells are sentences is prose laid out as a table
+
+
+def _norm_cell(text: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9 ]+", " ", text.lower()).split())
+
+
+def table_keys(content: str) -> list[str]:
+    """First cells of a chunk's Markdown table data rows, normalized; [] when
+    the chunk has no table. The header row (the line before a separator) is
+    not a key, nor is a cell that is a number, a plan word, or empty."""
+    if not content or not _TABLE_SEPARATOR.search(content):
+        return []
+    lines = content.split("\n")
+    header_idx = {i - 1 for i, line in enumerate(lines) if _TABLE_SEPARATOR.match(line)}
+    cells, keys = [], []
+    for i, line in enumerate(lines):
+        if i in header_idx or _TABLE_SEPARATOR.match(line):
+            continue
+        m = _TABLE_ROW.match(line)
+        if not m:
+            continue
+        cell = _norm_cell(m.group(1))
+        if not cell or cell.replace(" ", "").isdigit() or len(cell) < 3 or all(w in _ROW_STOP for w in cell.split()):
+            continue
+        cells.append(cell)
+        if len(cell.split()) <= _KEY_MAX_WORDS:
+            keys.append(cell)
+    # a lookup table: at least two rows, and the rows are keyed by names, not sentences
+    if len(keys) < 2 or len(keys) < 0.7 * len(cells):
+        return []
+    return keys
+
+
+def question_phrases(question: str, max_words: int = 4) -> set[str]:
+    """Every 1..4-word phrase of the question, normalized like a cell; plan
+    and program words alone are never a phrase (a row keyed 'High Option'
+    does not answer 'what is the High Option copay')."""
+    words = [w for w in _norm_cell(question).split() if w]
+    phrases = set()
+    for n in range(1, max_words + 1):
+        for i in range(len(words) - n + 1):
+            phrase = " ".join(words[i:i + n])
+            if n == 1 and (phrase in _ROW_STOP or len(phrase) < 4):
+                continue
+            if all(w in _ROW_STOP for w in words[i:i + n]):
+                continue
+            phrases.add(phrase)
+    return phrases
+
+
+def row_matches(question: str, content: str) -> list[str]:
+    """The table row keys in `content` that the question names exactly."""
+    phrases = question_phrases(question)
+    return [k for k in table_keys(content) if k in phrases]
+
+
+def apply_row_identity(reranked: list, candidates: list, question: str, top_n: int) -> tuple[list, int, tuple[str, ...]]:
+    """Chunks whose table carries a row keyed by a term of the question are
+    seated first, in reranker order; the rest of the seats follow the
+    reranker. Returns (seated, how many by identity, the matched keys)."""
+    pool = candidates or reranked
+    hits = [(c, row_matches(question, c.content or "")) for c in pool]
+    hits = [(c, m) for c, m in hits if m]
+    if not hits:
+        return reranked, 0, ()
+    hits.sort(key=lambda cm: cm[0].rerank_score or 0.0, reverse=True)
+    seated = [c for c, _ in hits[:top_n]]
+    ids = {c.chunk_id for c in seated}
+    for c in reranked:
+        if len(seated) >= top_n:
+            break
+        if c.chunk_id not in ids:
+            seated.append(c)
+            ids.add(c.chunk_id)
+    keys = tuple(dict.fromkeys(k for _, m in hits[:top_n] for k in m))
+    return seated, len(hits[:top_n]), keys
+
+
 def apply_records_rule(reranked: list, candidates: list, hinted: set, member_key: str | None, top_n: int,
                        open_ended: bool = True) -> tuple[list, int]:
     """The records rule (2026-09-14): when a member is open and the planner
@@ -1078,6 +1173,8 @@ def _run_doc_leg(conn, leg: Leg, question: str, caller: Caller, ctx: retrieval.C
         open_ended = bool(_RECORDS_REQUEST.search(asked)) and not _NESTED_FACT.search(asked)
         probe.reranked, probe.identity_evidence = apply_records_rule(probe.reranked, probe.candidates, hinted, ctx.member_key,
                                                                      rerank.TOP_N_OUT, open_ended=open_ended)
+    probe.reranked, by_row, probe.row_matches = apply_row_identity(probe.reranked, probe.candidates, question or text or "", rerank.TOP_N_OUT)
+    probe.identity_evidence += by_row
     if trace is not None:
         pool = probe.candidates or []
         def line(c):

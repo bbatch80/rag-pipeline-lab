@@ -1,10 +1,10 @@
 {
-  "run_id": 707,
-  "git_sha": "f9aaa2c",
+  "run_id": 717,
+  "git_sha": "aa7e117",
   "corpus_hash": "41a4fd0f60ed63d14e46a4356c5c8fbf6e7a1732f703c43853a015d6ed262b86",
-  "written_at": "2026-09-14T17:45:54+00:00",
+  "written_at": "2026-09-14T19:32:30+00:00",
   "overall": {
-    "item_pass": 0.692,
+    "item_pass": 0.694,
     "hit@5": 0.8739495798319328,
     "precision@5": 0.42857142857142855,
     "source_coverage": 0.8333800186741362
@@ -17,8 +17,8 @@
     },
     "1": {
       "name": "Factual lookup",
-      "rate": 0.972,
-      "n": 36
+      "rate": 0.973,
+      "n": 37
     },
     "2": {
       "name": "Explanation with exceptions",
@@ -107,8 +107,8 @@
       "n": 5
     },
     "named_query": {
-      "rate": 0.5,
-      "n": 12
+      "rate": 0.538,
+      "n": 13
     },
     "persona_negative": {
       "rate": 1.0,
@@ -239,6 +239,7 @@
     "named_query-06": 1,
     "named_query-11": 1,
     "named_query-12": 1,
+    "named_query-13": 1,
     "persona_negative-01": 1,
     "persona_negative-02": 1,
     "persona_negative-03": 1,
@@ -330,6 +331,6 @@
     "duplicate_share": 0.101,
     "index_seat_share": 0.011,
     "needless_split_rate": 0.255,
-    "n_payloads": 155
+    "n_payloads": 156
   }
 }

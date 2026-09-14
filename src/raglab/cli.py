@@ -801,7 +801,9 @@ def ablation_cmd():
               help="Only these golden groups (iteration aid; partial runs never gate).")
 @click.option("--replan", is_flag=True,
               help="Ask the live planner model fresh for every golden question and report plans that differ from the stored ones (reported, never gated).")
-def eval_retrieval_cmd(label: str, gate: bool, write_baseline: bool, sabotage: bool, categories: tuple[str, ...], replan: bool):
+@click.option("--workers", default=4, show_default=True, type=int,
+              help="Questions scored at once (each on its own connection; reranking stays serialized). 1 = sequential.")
+def eval_retrieval_cmd(label: str, gate: bool, write_baseline: bool, sabotage: bool, categories: tuple[str, ...], replan: bool, workers: int):
     """Tier-1 deterministic eval over the golden set on the composed path (free)."""
     if categories and (gate or write_baseline):
         raise click.UsageError("--gate / --write-baseline need the whole golden set; drop --category")
@@ -816,7 +818,7 @@ def eval_retrieval_cmd(label: str, gate: bool, write_baseline: bool, sabotage: b
     try:
         with db.connect() as conn:
             result = eval_retrieval.run(conn, config_label=label, sabotage=sabotage,
-                                        categories=tuple(categories), replan=replan)
+                                        categories=tuple(categories), replan=replan, workers=max(1, workers))
         receipt.add("run id", result.run_id)
         receipt.add("corpus", result.corpus_hash[:12])
         from raglab import rerank as rerank_mod
@@ -1334,8 +1336,9 @@ def query_cmd(prompt: str, persona: str | None, member_id: str | None, no_plan: 
 @click.option("--persona", default=None, help="public | employee | care_team | member_services | appeals | actuary (omit = admin)")
 @click.option("--module", default=None, help="ask | agent_assist | appeals_workbench | care_management | analyst_view (omit = unscoped)")
 @click.option("--member-id", default=None, help="The member the screen has open.")
+@click.option("--case-id", default=None, help="The appeal case the surface has open (the Workbench's context).")
 @click.option("--generate", is_flag=True, help="Also hand the composed payload to both answer models and print their answers.")
-def trace_cmd(question: str, persona: str | None, module: str | None, member_id: str | None, generate: bool):
+def trace_cmd(question: str, persona: str | None, module: str | None, member_id: str | None, case_id: str | None, generate: bool):
     """Every stage of the planned pipeline for ONE question, in order: what
     was found in the question, the route, the menu, the plan, each document
     leg's two searches and rerank, each warehouse leg's rows, the composed
@@ -1351,7 +1354,7 @@ def trace_cmd(question: str, persona: str | None, module: str | None, member_id:
     events: list = []
     with db.connect() as conn:
         built = planner.compose(conn, question, planner.Caller(persona=doc_persona, warehouse_role=role),
-                                member_id=member_id, source="trace", module=module, trace=events)
+                                member_id=member_id, case_id=case_id, source="trace", module=module, trace=events)
     step = 0
     for ev in events:
         step += 1

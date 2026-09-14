@@ -6,7 +6,8 @@
 {% else %}
 {% with result=header, title=header.title, extra_class="headerrow", label=label %}{% include "partials/rows.html" %}{% endwith %}
 <form hx-post="{{ ask_url }}" hx-target="#result" hx-indicator="#asking" class="askbox">
-  <input type="hidden" name="member_id" value="{{ member_id }}">
+  {% if member_id %}<input type="hidden" name="member_id" value="{{ member_id }}">{% endif %}
+  {% if case_id %}<input type="hidden" name="case_id" value="{{ case_id }}">{% endif %}
   <input type="text" name="question" value="{{ prefill }}" placeholder="{{ placeholder }}" required autofocus>
   <button type="submit">Ask</button>
 </form>

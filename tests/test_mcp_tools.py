@@ -91,7 +91,7 @@ def test_compose_context_runs_as_the_session_identity_never_a_parameter(monkeypa
     monkeypatch.setattr(server, "PERSONA", "appeals")
     seen = {}
 
-    def fake_compose(conn, question, caller, member_id=None, plan=None, source="interactive", sf_connect=None, module=None):
+    def fake_compose(conn, question, caller, member_id=None, plan=None, source="interactive", sf_connect=None, module=None, case_id=None):
         seen.update(question=question, caller=caller, member_id=member_id, plan=plan, source=source, module=module)
         session = sf_connect("APPEALS_ANALYST")
         session.close()  # a leg closes what it is handed

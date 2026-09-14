@@ -59,7 +59,8 @@ _warehouse = context_services.Warehouse()
 
 
 @mcp.tool()
-def compose_context(question: str, member_id: str | None = None, module: str | None = None) -> dict:
+def compose_context(question: str, member_id: str | None = None, module: str | None = None,
+                    case_id: str | None = None) -> dict:
     """Answer-ready context for ONE question that may span sources: the
     platform decides the legs (document probes over the governed corpus,
     named warehouse queries from the catalog — at most three, one pass),
@@ -72,7 +73,9 @@ def compose_context(question: str, member_id: str | None = None, module: str | N
     `module` scopes the plan to a job-shaped menu — ask | agent_assist |
     appeals_workbench | care_management | analyst_view — the way a surface
     does; omit it only for exploration (the unscoped menu).
-    `member_id` is the member context (the member the user has open).
+    `member_id` is the member context (the member the user has open);
+    `case_id` the appeal case the user has open — it binds the case's
+    member, claim, policy, and date of service to every leg.
     Identifiers in the question are resolved by the platform — never
     guessed; a well-formed ID that matches nobody is reported in
     `unresolved_identifiers`.
@@ -85,8 +88,8 @@ def compose_context(question: str, member_id: str | None = None, module: str | N
     warehouse rows; cite source title + pages for every document fact;
     report `masked_columns` as 'not visible to your role'."""
     with db.connect() as conn:
-        return context_services.compose(conn, _identity(conn), question, member_id=member_id, module=module,
-                                        source="mcp", warehouse=_warehouse)
+        return context_services.compose(conn, _identity(conn), question, member_id=member_id, case_id=case_id,
+                                        module=module, source="mcp", warehouse=_warehouse)
 
 
 @mcp.tool()

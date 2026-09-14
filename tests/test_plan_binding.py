@@ -85,7 +85,7 @@ def test_composer_binds_the_enrolled_plan_for_warehouse_slots(db, monkeypatch):
     from test_identical_question_control import _NoCommit, _exact_scan, _fake_models
     _seed_tiers(db, per_tier=1, embed=True); _fake_models(monkeypatch); _exact_scan(db)
     monkeypatch.setattr(planner.retrieval, "resolve_context",
-                        lambda conn, member_id, q: retrieval.Context(query=q, member_key="k", record={"member_id": member_id}, enrollment={2026: "71-018"}))
+                        lambda conn, member_id, q, case_id=None: retrieval.Context(query=q, member_key="k", record={"member_id": member_id}, enrollment={2026: "71-018"}))
     seen = {}
 
     class _SF:

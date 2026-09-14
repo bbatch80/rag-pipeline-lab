@@ -9,6 +9,8 @@ the payload and nothing else — no generated answer (user ruling
 
 from __future__ import annotations
 
+import os
+import time
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
@@ -48,6 +50,47 @@ def leg_outcomes(payload: dict) -> list[bool]:
     return [bool(found.get(leg.get("name"))) for leg in legs]
 
 
+def answer_for(app: FastAPI, payload: dict) -> dict | None:
+    """The model's answer from the payload it was given — shown FIRST on the
+    surfaces (user ruling 2026-09-14), the evidence beneath it. Only when
+    the platform served evidence: an insufficient or out-of-scope payload
+    shows its banner and nothing generated. RAGLAB_ANSWERS=off disables."""
+    if os.environ.get("RAGLAB_ANSWERS", "on") != "on":
+        return None
+    if payload.get("status") != "ok" or not (payload.get("chunks") or payload.get("warehouse_results")):
+        return None
+    generator = app.state.generator()
+    started = time.perf_counter()
+    try:
+        text = generator.generate(payload)
+    except Exception as exc:  # noqa: BLE001 — the evidence still renders; the answer says why it could not
+        return {"text": None, "error": f"{type(exc).__name__}: {str(exc)[:160]}", "model": generator.name, "ms": 0}
+    return {"text": text, "error": None, "model": generator.name, "ms": round((time.perf_counter() - started) * 1000)}
+
+
+def _md_lite(text: str) -> str:
+    """Escape the model's text, then allow exactly two things: paragraphs
+    and **bold**. Nothing the model writes reaches the page as markup."""
+    import html as _html
+    import re as _re
+
+    out = []
+    for para in _re.split(r"\n\s*\n", text.strip()):
+        safe = _html.escape(para)
+        safe = _re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", safe)
+        out.append("<p>" + safe.replace("\n", "<br>") + "</p>")
+    return "".join(out)
+
+
+env.filters["md_lite"] = _md_lite
+
+
+def render_answer(answer: dict | None) -> str:
+    if answer is None:
+        return ""
+    return env.get_template("partials/answer.html").render(answer=answer)
+
+
 def render_payload(payload: dict, *, console_links: bool = False) -> str:
     """The render contract over one payload — pure: no database, no request."""
     return env.get_template("partials/payload.html").render(
@@ -55,10 +98,11 @@ def render_payload(payload: dict, *, console_links: bool = False) -> str:
 
 
 def render_workspace(*, header: dict | None, error: str | None = None, ask_url: str = "", member_id: str = "",
-                     prefill: str = "", placeholder: str = "", label: str | None = None) -> str:
-    """The header row after a key is committed, and the question box — pure."""
+                     case_id: str = "", prefill: str = "", placeholder: str = "", label: str | None = None) -> str:
+    """The header row after a key is committed, and the question box carrying
+    the key (member or case) as page state — pure."""
     return env.get_template("partials/workspace.html").render(
-        header=header, error=error, ask_url=ask_url, member_id=member_id, prefill=prefill,
+        header=header, error=error, ask_url=ask_url, member_id=member_id, case_id=case_id, prefill=prefill,
         placeholder=placeholder, label=label)
 
 
@@ -99,6 +143,11 @@ def mount(app: FastAPI) -> None:
             return _me(current_identity(request))
         except HTTPException:
             return None
+
+    if not hasattr(app.state, "generator"):
+        from raglab.generators import ClaudeGenerator
+
+        app.state.generator = ClaudeGenerator  # tests inject a stand-in
 
     @app.get("/", response_class=HTMLResponse)
     def portal(request: Request):
@@ -155,11 +204,11 @@ def mount(app: FastAPI) -> None:
 
     @app.post("/ui/agent_assist/open", response_class=HTMLResponse)
     def agent_assist_open(member_id: str = Form(...), ident: identity.Identity = Depends(require_surface("agent_assist"))):
-        header, error = open_record(ident, "agent_assist", "member_enrollment", "member_id", member_id)
+        header, error = open_record(ident, "agent_assist", "member_profile", "member_id", member_id)
         if error:
             return HTMLResponse(render_workspace(header=None, error=error))
         return HTMLResponse(render_workspace(
-            header={**header, "title": f"Member {header['canonical']} — enrollment"},
+            header={**header, "title": f"Member {header['canonical']}"},
             ask_url="/ui/agent_assist/ask", member_id=header["canonical"],
             placeholder="e.g. What did she call about last time? Is a referral needed for a specialist?"))
 
@@ -167,7 +216,7 @@ def mount(app: FastAPI) -> None:
     def agent_assist_ask(question: str = Form(...), member_id: str = Form(...),
                          ident: identity.Identity = Depends(require_surface("agent_assist"))):
         payload = app.state.compose_for(ident, question.strip(), "agent_assist", member_id)
-        return HTMLResponse(render_payload(payload, console_links="console" in ident.surfaces))
+        return HTMLResponse(render_answer(answer_for(app, payload)) + render_payload(payload, console_links="console" in ident.surfaces))
 
     # ---- Appeals Workbench: a case on the screen, then questions ----
     @app.get("/appeals_workbench", response_class=HTMLResponse)
@@ -179,20 +228,20 @@ def mount(app: FastAPI) -> None:
         header, error = open_record(ident, "appeals_workbench", "appeal_case", "case_id", case_id)
         if error:
             return HTMLResponse(render_workspace(header=None, error=error))
-        # the case's member is the member context (the platform's own row, not typed);
-        # the case id itself binds from the question text, so the box starts with it
-        row = dict(zip(header["columns"], header["rows"][0]))
+        # the open case is the context: the pipeline binds its member, claim,
+        # policy, and date of service to every leg (2026-09-14: the box no
+        # longer needs the case id typed — "Describe this appeal" just works)
         return HTMLResponse(render_workspace(
             header={**header, "title": f"Case {header['canonical']}"},
-            ask_url="/ui/appeals_workbench/ask", member_id=row.get("MEMBER_ID") or "",
-            prefill=f"Case {header['canonical']}: ", placeholder="e.g. Case APL-…: why was the denial upheld?",
+            ask_url="/ui/appeals_workbench/ask", case_id=header["canonical"],
+            placeholder="e.g. Describe this appeal. Why was the denial upheld?",
             label=EVIDENCE_LABEL))
 
     @app.post("/ui/appeals_workbench/ask", response_class=HTMLResponse)
-    def workbench_ask(question: str = Form(...), member_id: str = Form(""),
+    def workbench_ask(question: str = Form(...), case_id: str = Form(...),
                       ident: identity.Identity = Depends(require_surface("appeals_workbench"))):
-        payload = app.state.compose_for(ident, question.strip(), "appeals_workbench", member_id or None)
-        return HTMLResponse(render_payload(payload, console_links="console" in ident.surfaces))
+        payload = app.state.compose_for(ident, question.strip(), "appeals_workbench", None, case_id)
+        return HTMLResponse(render_answer(answer_for(app, payload)) + render_payload(payload, console_links="console" in ident.surfaces))
 
     # ---- Analyst View: the module's named queries, no free text ----
     @app.get("/analyst_view", response_class=HTMLResponse)
@@ -254,4 +303,4 @@ def mount(app: FastAPI) -> None:
     @app.post("/ui/ask", response_class=HTMLResponse)
     def ask_fragment(question: str = Form(...), ident: identity.Identity = Depends(require_surface("ask"))):
         payload = app.state.compose_for(ident, question.strip(), "ask", None)
-        return HTMLResponse(render_payload(payload, console_links="console" in ident.surfaces))
+        return HTMLResponse(render_answer(answer_for(app, payload)) + render_payload(payload, console_links="console" in ident.surfaces))

@@ -70,10 +70,11 @@ class Plan:
     fallback_reason: str | None = None
     module: str | None = None
     stored: bool = False  # reused from the plans table (no model call this time)
+    enforced: tuple[str, ...] = ()  # rules the platform applied on top of the model's plan (e.g. document_leg)
 
     def to_dict(self) -> dict:
         return {"shape": self.shape, "origin": self.origin, "model": self.model, "module": self.module, "widened": self.widened,
-                "fallback_reason": self.fallback_reason, "legs": [leg.to_dict() for leg in self.legs]}
+                "fallback_reason": self.fallback_reason, "enforced": list(self.enforced), "legs": [leg.to_dict() for leg in self.legs]}
 
 
 @dataclass
@@ -91,7 +92,7 @@ class Caller:
 # unscoped menu — the MCP experiment and the eval's shape metric, never a
 # production surface.
 BENEFITS_DOCS = ("brochure", "rates", "sop", "bulletin", "formulary", "kb", "clinical_policy", "carrier_letter")
-MEMBER_QUERIES = ("member_calls", "member_recent_claims", "member_claims_summary", "member_enrollment",
+MEMBER_QUERIES = ("member_profile", "member_calls", "member_recent_claims", "member_claims_summary", "member_enrollment",
                   "claim_adjudication", "member_denials", "provider_lookup", "provider_network_status", "providers_by_specialty")
 MODULES = {
     "ask": {"sources": BENEFITS_DOCS, "named_queries": ()},
@@ -99,7 +100,7 @@ MODULES = {
     "appeals_workbench": {"sources": ("appeal", "call_note", "clinical_note") + BENEFITS_DOCS,
                           "named_queries": ("appeal_case", "member_appeals") + MEMBER_QUERIES},
     "care_management": {"sources": ("clinical_note", "clinical_policy", "brochure", "formulary"),
-                        "named_queries": ("member_claims_summary", "member_recent_claims", "member_enrollment")},
+                        "named_queries": ("member_profile", "member_claims_summary", "member_recent_claims", "member_enrollment")},
     "analyst_view": {"sources": ("brochure", "rates", "clinical_policy", "carrier_letter", "formulary"),
                      "named_queries": ("cost_by_condition", "providers_by_specialty", "provider_network_status")},
 }
@@ -160,6 +161,35 @@ def plan_from_dict(spec: dict, origin: str = "caller", model: str | None = None)
                 required=bool(l.get("required", True)))
             for i, l in enumerate(spec.get("legs", []))]
     return Plan(shape=spec.get("shape") or ("compound" if len(legs) > 1 else "simple"), legs=legs, origin=origin, model=model)
+
+
+# A question about what a document SAID needs a document leg. The prompt
+# says so; at temperature 0 the model still answers "what did the letter
+# tell the member" with the warehouse row alone (appeal-03,
+# persona_negative-03, the user's Workbench probe 2026-09-14). The platform
+# enforces it: when the question asks what was written and the plan carries
+# no doc_probe, one is added over the module's whole document menu.
+_DOCUMENT_WORDS = re.compile(
+    r"\b(letter|said|says|say|state[sd]?|wrote|written|describe[sd]?|summari[sz]e|summary|tell|told|argue[sd]?|"
+    r"rationale|reasoning|explain(?:ed|s)?|why|what (?:does|did|do) .{0,40}\b(?:say|state|require|cover|mean))\b",
+    re.IGNORECASE,
+)
+
+
+def enforce_document_leg(plan: Plan, question: str) -> Plan:
+    """Add a document leg to a plan that has none when the question asks what
+    a document said. Never touches a caller's plan, a plan already at the
+    leg limit, or a plan that already searches documents."""
+    if plan.origin == "caller" or len(plan.legs) >= MAX_LEGS:
+        return plan
+    if any(leg.kind == "doc_probe" for leg in plan.legs):
+        return plan
+    if not _DOCUMENT_WORDS.search(question or ""):
+        return plan
+    plan.legs.append(Leg(name="documents", kind="doc_probe", text=question, sources=()))
+    plan.shape = "compound" if len(plan.legs) > 1 else "simple"
+    plan.enforced = tuple(plan.enforced) + ("document_leg",)
+    return plan
 
 
 def validate(plan: Plan, question: str, available: dict) -> None:
@@ -242,6 +272,17 @@ def _member_id_of(ctx: retrieval.Context) -> str | None:
 PLANNER = os.environ.get("RAGLAB_PLANNER", "model")          # model | rules
 PLAN_CACHE = os.environ.get("RAGLAB_PLAN_CACHE", "on") != "off"
 PLANNER_MODEL = os.environ.get("RAGLAB_PLANNER_MODEL", "claude-haiku-4-5-20251001")  # pinned: the key of every stored plan
+# Deterministic planning (2026-09-14): both model calls sample at temperature
+# 0, so the same question gets the same plan and a menu change re-plans only
+# where the new option matters. Measured before: fresh plans at the default
+# temperature flipped about one golden item in ten. The sampling setting is
+# part of the store key, so plans made the old way are never reused.
+PLANNER_TEMPERATURE = 0.0
+
+
+def plan_key_model() -> str:
+    """The model component of a store key: the pinned model plus its sampling."""
+    return f"{PLANNER_MODEL}@t{PLANNER_TEMPERATURE:g}"
 PLANNER_TIMEOUT_S = float(os.environ.get("RAGLAB_PLANNER_TIMEOUT", "8"))
 
 # The catalog's free-text parameters (never identifiers, never names): the
@@ -351,7 +392,7 @@ def _plan_prepare(conn: psycopg.Connection, question: str, available: dict) -> t
     """The database half before the model: the translated question, the store
     key, and the stored plan if there is one."""
     translated = translated_for_planning(conn, question)
-    key = (_hash(translated), menu_hash(available), PLANNER_MODEL)
+    key = (_hash(translated), menu_hash(available), plan_key_model())
     if PLAN_CACHE:
         row = _stored_plan(conn, key)
         if row is not None:
@@ -410,6 +451,7 @@ def _call_model(translated: str, available: dict, client=None) -> dict:
     client = client or anthropic.Anthropic(timeout=PLANNER_TIMEOUT_S, max_retries=1)
     response = client.messages.create(
         model=PLANNER_MODEL,
+        extra_body={"temperature": PLANNER_TEMPERATURE},  # SDK 1.0 dropped the parameter; the endpoint still honors it
         max_tokens=600,
         system=SYSTEM,
         messages=[{"role": "user", "content": f"Menu:\n{_menu_text(available)}\n\nQuestion: {translated}"}],
@@ -470,7 +512,7 @@ def _call_reader(translated: str, client=None) -> dict:
 
     client = client or anthropic.Anthropic(timeout=PLANNER_TIMEOUT_S, max_retries=1)
     response = client.messages.create(
-        model=PLANNER_MODEL, max_tokens=200, system=READER_SYSTEM,
+        model=PLANNER_MODEL, extra_body={"temperature": PLANNER_TEMPERATURE}, max_tokens=200, system=READER_SYSTEM,
         messages=[{"role": "user", "content": f"Question: {translated}"}],
         output_config={"format": {"type": "json_schema", "schema": ROUTE_SCHEMA}},
     )
@@ -480,7 +522,7 @@ def _call_reader(translated: str, client=None) -> dict:
 
 def _read_prepare(conn: psycopg.Connection, question: str) -> tuple[tuple, str, router.Reading | None]:
     translated = translated_for_planning(conn, question)
-    key = (_hash(translated), READER_MENU_HASH + ":" + _hash(READER_SYSTEM)[:12], PLANNER_MODEL)
+    key = (_hash(translated), READER_MENU_HASH + ":" + _hash(READER_SYSTEM)[:12], plan_key_model())
     if PLAN_CACHE:
         row = _stored_plan(conn, key)
         if row is not None:
@@ -594,7 +636,7 @@ def replan(conn: psycopg.Connection, question: str, client=None, module: str | N
     without touching the store — the non-gating drift report (decision 3)."""
     available = menu(conn, module)
     translated = translated_for_planning(conn, question)
-    stored = _stored_plan(conn, (_hash(translated), menu_hash(available), PLANNER_MODEL))
+    stored = _stored_plan(conn, (_hash(translated), menu_hash(available), plan_key_model()))
     try:
         fresh = plan_from_dict(_call_model(translated, available, client), origin="model", model=PLANNER_MODEL)
         validate(fresh, question, available)
@@ -613,6 +655,7 @@ def compose(
     sf_connect=None,
     module: str | None = None,
     trace: list | None = None,
+    case_id: str | None = None,
 ) -> dict:
     """Plan -> execute every leg as the caller -> compose one payload ->
     disclose once. `plan=None` takes the rules fast path (P3-PR2 inserts the
@@ -631,7 +674,7 @@ def compose(
     with watch.stage("resolve"):
         from raglab.pipeline import _hierarchies, coverage_note
         route = router.route(question, hierarchies=_hierarchies(conn), reading=reading)
-        ctx = retrieval.resolve_context(conn, member_id, question) if route.scope == "in_scope" \
+        ctx = retrieval.resolve_context(conn, member_id, question, case_id=case_id) if route.scope == "in_scope" \
             else retrieval.Context(query=question)
         if member_id:
             ctx.record.setdefault("member_id", member_id)
@@ -641,7 +684,7 @@ def compose(
         # network for this member' was refused for want of a plan code.
         route = retrieval.bind_enrollment_plan(route, ctx)
     _t(trace, "question", text=question, persona=caller.persona or "admin", warehouse_role=caller.warehouse_role,
-       member_id=member_id, module=module)
+       member_id=member_id, case_id=case_id, module=module)
     _t(trace, "route", scope=route.scope, years=list(route.years), plan_codes=list(route.plan_codes), as_of=route.as_of,
        reasons=list(route.reasons), reading={"origin": reading.origin, "program": reading.program, "options": list(reading.options),
                                              "years": list(reading.years), "change": reading.change, "as_of": reading.as_of,
@@ -674,6 +717,7 @@ def compose(
         if plan is None:
             plan = pending.finish(conn, question, available) if isinstance(pending, _PendingPlan) else pending
         validate(plan, question, available)
+        plan = enforce_document_leg(plan, question)
         plan.module = module
     _t(trace, "plan", origin=plan.origin, stored=plan.stored, model=plan.model, shape=plan.shape,
        fallback_reason=plan.fallback_reason, legs=[leg.to_dict() for leg in plan.legs])

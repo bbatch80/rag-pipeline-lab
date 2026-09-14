@@ -80,12 +80,16 @@ STRIP_IDS = os.environ.get("RAGLAB_STRIP_IDS", "off") == "on"  # measured 2026-0
 _RECORD_FIELD = {"claim_id": "claim_id", "case_id": "case_id", "policy_id": "policy_id", "bulletin_id": "bulletin_id"}
 
 
-def resolve_context(conn: psycopg.Connection, member_id: str | None, query_text: str = "") -> Context:
-    """The structured member ID the surface supplied, plus every identifier
-    the caller typed — member ID, MRN, claim ID, appeal case ID (each
-    belongs to one member) — validated by shape and check digit, looked up
-    in the record tables, and removed from the ranking query. The question
-    is the RAW question: translation replaces identifiers with pseudonyms."""
+def resolve_context(conn: psycopg.Connection, member_id: str | None, query_text: str = "",
+                    case_id: str | None = None) -> Context:
+    """The structured keys the surface supplied — the member it has open,
+    the appeal case it has open — plus every identifier the caller typed
+    (member ID, MRN, claim ID, case ID; each belongs to one member),
+    validated by shape and check digit, looked up in the record tables, and
+    removed from the ranking query. A surface-supplied case binds exactly
+    like a typed one: its member, claim, policy, and date of service. The
+    question is the RAW question: translation replaces identifiers with
+    pseudonyms."""
     from raglab import identifiers
 
     ctx = Context(query=query_text or "")
@@ -95,6 +99,11 @@ def resolve_context(conn: psycopg.Connection, member_id: str | None, query_text:
         if canon is None:
             raise ValueError(f"not a valid member ID: {member_id!r}")
         candidates.append(("member_id", canon, None))
+    if case_id:
+        canon = identifiers.canonicalize("case_id", case_id)
+        if canon is None:
+            raise ValueError(f"not a valid case ID: {case_id!r}")
+        candidates.append(("case_id", canon, None))
     for m in _ID_TOKEN.finditer(query_text or ""):
         if re.fullmatch(r"(?i)CP-\d{4}", m.group(0)):  # a policy id: a record key, no member behind it
             ctx.record.setdefault("policy_id", m.group(0).upper())

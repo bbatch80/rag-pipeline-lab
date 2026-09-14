@@ -8,6 +8,7 @@ Model is local (no-paid-API constraint), pre-fetched by
 """
 
 import os
+import threading
 
 from raglab.retrieval import Candidate
 
@@ -85,14 +86,16 @@ def _predict(model, pairs: list[tuple[str, str]]) -> list[float]:
     """model.predict in the configured precision."""
     if not pairs:
         return []
-    if RERANK_DTYPE == "bf16":
-        import torch
+    with _predict_lock:
+        if RERANK_DTYPE == "bf16":
+            import torch
 
-        with torch.autocast("cpu", dtype=torch.bfloat16):
-            return [float(x) for x in model.predict(pairs)]
-    return [float(x) for x in model.predict(pairs)]
+            with torch.autocast("cpu", dtype=torch.bfloat16):
+                return [float(x) for x in model.predict(pairs)]
+        return [float(x) for x in model.predict(pairs)]
 CACHE_STATS = {"hits": 0, "misses": 0}
-_cache_conn = None
+_cache_local = threading.local()  # one autocommit cache connection per thread (the eval runs items in parallel)
+_predict_lock = threading.Lock()  # inference is CPU-bound: one prediction at a time, network waits overlap elsewhere
 _model_key: str | None = None
 
 
@@ -118,13 +121,14 @@ def _cache_connection():
     """An owner connection of its own (autocommit): the pipeline's session
     may be running under a persona role that cannot write. Tests patch
     this to hand in the rolled-back fixture connection."""
-    global _cache_conn
-    if _cache_conn is None or _cache_conn.closed:
+    conn = getattr(_cache_local, "conn", None)
+    if conn is None or conn.closed:
         from raglab import db
 
-        _cache_conn = db.connect()
-        _cache_conn.autocommit = True
-    return _cache_conn
+        conn = db.connect()
+        conn.autocommit = True
+        _cache_local.conn = conn
+    return conn
 
 
 def score_pairs(model, pairs: list[tuple[str, str]], conn=None) -> list[float]:

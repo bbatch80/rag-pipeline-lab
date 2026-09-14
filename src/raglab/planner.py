@@ -421,6 +421,78 @@ def enforce_document_leg(plan: Plan, question: str) -> Plan:
     return plan
 
 
+# ---- bind the record from the rows (2026-09-15) ----------------------------
+# "Why was the claim they called about on June 11, 2024 denied?" The notes
+# are de-identified before indexing ([DATE_TIME-3619], [CLAIM_ID-0936]), so
+# the date in the question matches nothing in any note; the warehouse row
+# for that date carries the call's id. When a rows leg has run, the row that
+# matches the question's date (or "most recent") pins the record for the
+# document legs that follow: retrieval admits only that record's chunks
+# among the member's records, and the records rule seats them by identity.
+_MONTHS = {m: i + 1 for i, m in enumerate(["january", "february", "march", "april", "may", "june", "july", "august",
+                                            "september", "october", "november", "december"])}
+_MONTHS.update({m[:3]: i for m, i in list(_MONTHS.items())})
+_DATE_PHRASE = re.compile(r"\b(?P<month>jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?"
+                          r"(?:\s+(?P<day>\d{1,2})(?:st|nd|rd|th)?,?)?(?:\s+(?:of\s+)?(?P<year>20\d{2}))?\b", re.IGNORECASE)
+_RECENT = re.compile(r"\b(most recent|latest|last)\b", re.IGNORECASE)
+_ROW_DATE_COLUMNS = ("CALL_DATE", "DECISION_DATE", "SERVICE_DATE", "FILED_DATE")
+_ROW_ID_COLUMNS = ("CALL_ID", "CLAIM_ID", "CASE_ID")
+_ABOUT_A_CLAIM = re.compile(r"\b(claim|denied|denial|deny|appeal)\b", re.IGNORECASE)
+_BOUND_RECORDS_MAX = 8   # every seat the records rule can fill
+_DATED_ROWS_LIMIT = 200  # a dated question reads the whole history, not the newest twenty
+
+
+def question_date(question: str) -> tuple[int | None, int | None, int | None]:
+    """(year, month, day) named in the question, any of them None."""
+    m = _DATE_PHRASE.search(question or "")
+    if not m:
+        return None, None, None
+    month = _MONTHS.get(m.group("month").lower().rstrip("."))
+    day = int(m.group("day")) if m.group("day") else None
+    year = int(m.group("year")) if m.group("year") else None
+    return year, month, day
+
+
+def bind_record_from_rows(ctx: retrieval.Context, question: str, result: dict) -> str | None:
+    """Pin the record the question points at, from a rows leg's result.
+    Returns the bound id, or None when nothing binds (no date, no id
+    column, no matching row, or a record already in context)."""
+    cols = [c.upper() for c in (result.get("columns") or [])]
+    rows = result.get("rows") or []
+    if not rows or result.get("status") != "ok":
+        return None
+    date_col = next((c for c in _ROW_DATE_COLUMNS if c in cols), None)
+    id_col = next((c for c in _ROW_ID_COLUMNS if c in cols), None)
+    if not date_col or not id_col:
+        return None
+    key = id_col.lower()
+    if ctx.record.get(key):
+        return None
+    di, ii = cols.index(date_col), cols.index(id_col)
+    ci = cols.index("CLAIM_ID") if "CLAIM_ID" in cols and id_col != "CLAIM_ID" else None
+    year, month, day = question_date(question)
+    dated = [r for r in rows if r[di] and r[ii]]
+    matches: list = []
+    if month:
+        for r in dated:
+            d = str(r[di]); y, mo, da = int(d[:4]), int(d[5:7]), int(d[8:10])
+            if mo == month and (year is None or y == year) and (day is None or da == day):
+                matches.append(r)
+    elif _RECENT.search(question or ""):
+        newest = max(dated, key=lambda r: str(r[di]), default=None)
+        matches = [newest] if newest else []
+    if not matches:
+        return None
+    if ci is not None and _ABOUT_A_CLAIM.search(question or ""):
+        with_claim = [r for r in matches if r[ci]]  # the question is about a claim: the rows that carry one come first
+        matches = with_claim + [r for r in matches if not r[ci]]
+        if with_claim and not ctx.record.get("claim_id"):
+            ctx.record["claim_id"] = with_claim[0][ci]
+    ids = list(dict.fromkeys(r[ii] for r in matches))[:_BOUND_RECORDS_MAX]
+    ctx.record[key] = ids[0] if len(ids) == 1 else ids
+    return ",".join(ids)
+
+
 def release_unbound_member_legs(plan: Plan, member_id: str | None) -> Plan:
     """No member is open (Ask, or a surface before a key is entered): a leg
     that needs one cannot run, and must not sink the legs that can. The leg
@@ -1040,7 +1112,8 @@ def compose(
     search_note: dict = {}
     by_identity = 0  # chunks seated by the records or row-identity rules, summed over the document legs
     plan = release_unbound_member_legs(plan, member_id or _member_id_of(ctx))
-    for leg in plan.legs:
+    for leg in sorted(plan.legs, key=lambda l: l.kind == "doc_probe"):  # rows first: a row can pin the record the document legs read
+
         if leg.kind == "doc_probe":
             result, reranked, widened = _run_doc_leg(conn, leg, question, caller, ctx, route, watch, available, trace)
             plan.widened = plan.widened or widened
@@ -1071,8 +1144,13 @@ def compose(
                                 "router": built.get("router", {}), "chunk_indexes": list(range(start, len(chunks))),
                                 "widened": widened, "reason": None if built["status"] == "ok" else built["status"]})
         else:
+            if question_date(question)[1] and "limit" in snowlane.NAMED_QUERIES.get(leg.query_name, {}).get("params", {}) and "limit" not in leg.params:
+                leg.params["limit"] = _DATED_ROWS_LIMIT
             w = _run_member_leg(leg, caller, ctx, member_id, route, watch, sf_connect)
             warehouse_results.append(w)
+            bound = bind_record_from_rows(ctx, question, w)
+            if bound and f"record:{bound}" not in plan.enforced:
+                plan.enforced = tuple(plan.enforced) + (f"record:{bound}",)
             _t(trace, "warehouse_leg", leg=leg.name, query_name=leg.query_name, role=caller.warehouse_role,
                status=w["status"], reason=w.get("reason"), row_count=w.get("row_count"), columns=w.get("columns"),
                rows=(w.get("rows") or [])[:3], masked_columns=w.get("masked_columns"), bound=w.get("bound"))
@@ -1285,9 +1363,13 @@ def _run_doc_leg(conn, leg: Leg, question: str, caller: Caller, ctx: retrieval.C
     leg_route = _leg_route(leg, route, ctx, available)
     text = _leg_text(conn, leg, ctx)
     probe = _probe(conn, text, caller.persona, ctx, watch, decision=leg_route)
-    if ctx.member_key and leg.sources:
+    if ctx.member_key and (leg.sources or ctx.record.get("call_id") or ctx.record.get("case_id")):
         member_scoped = set(retrieval._source_flags(conn)[0])
         hinted = set(leg.sources) & member_scoped
+        if ctx.record.get("call_id"):   # a record bound from the rows is the evidence, hinted or not
+            hinted |= {"call_note"} & member_scoped
+        if ctx.record.get("case_id"):
+            hinted |= {"appeal"} & member_scoped
         asked = f"{question or ''} {text or ''}"
         open_ended = bool(_RECORDS_REQUEST.search(asked)) and not _NESTED_FACT.search(asked)
         probe.reranked, probe.identity_evidence = apply_records_rule(probe.reranked, probe.candidates, hinted, ctx.member_key,

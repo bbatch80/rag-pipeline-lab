@@ -69,3 +69,33 @@ def test_a_fact_question_over_the_records_keeps_the_score_verdict():
         assert planner._RECORDS_REQUEST.search(q) and not planner._NESTED_FACT.search(q), q  # open-ended: the record is the answer
     q = "Do their call notes say what their doctor prescribed?"
     assert planner._NESTED_FACT.search(q)  # a fact asked of the records: the verdict stays with the scores
+
+
+def test_a_dated_question_binds_the_record_from_the_rows():
+    """compound-01 / call_note-06 / call_note-07 (2026-09-15): the notes are
+    de-identified, so the question's date matches no note text; the calls
+    row for that date pins the call id for the document legs."""
+    from raglab import retrieval
+
+    calls = {"status": "ok", "columns": ["CALL_ID", "CALL_DATE", "REP_ID", "REASON_CODE"],
+             "rows": [["C0008042", "2026-08-22", "RKO", "APPEAL_INFO"], ["C0002943", "2024-06-11", "TAB", "APPEAL_INFO"], ["C0002617", "2024-11-03", "RKO", "CLAIM_STATUS"]]}
+    assert planner.question_date("Why was the claim they called about on June 11, 2024 denied?") == (2024, 6, 11)
+    assert planner.question_date("What did we tell them when they called about the denied claim in August 2026?") == (2026, 8, None)
+    assert planner.question_date("Why was the claim they called about in November of 2024 denied?") == (2024, 11, None)
+    assert planner.question_date("What was their most recent call about?") == (None, None, None)
+    ctx = retrieval.Context(member_key="k")
+    assert planner.bind_record_from_rows(ctx, "Why was the claim they called about on June 11, 2024 denied?", calls) == "C0002943" and ctx.record["call_id"] == "C0002943"
+    ctx = retrieval.Context(member_key="k")
+    assert planner.bind_record_from_rows(ctx, "in August 2026?", calls) == "C0008042"                       # month + year
+    month = {"status": "ok", "columns": ["CALL_ID", "CALL_DATE", "REASON_CODE", "CLAIM_ID"],
+             "rows": [["C0008041", "2026-08-31", "DEMOGRAPHICS", None], ["C0008017", "2026-08-31", "CLAIM_STATUS", "CLM-9357634956"], ["C0008042", "2026-08-22", "APPEAL_INFO", "CLM-9357634956"]]}
+    ctx = retrieval.Context(member_key="k")
+    assert planner.bind_record_from_rows(ctx, "when they called about the denied claim in August 2026?", month) == "C0008017,C0008042,C0008041"
+    assert ctx.record["call_id"] == ["C0008017", "C0008042", "C0008041"] and ctx.record["claim_id"] == "CLM-9357634956"  # every August call; claim rows first
+    ctx = retrieval.Context(member_key="k")
+    assert planner.bind_record_from_rows(ctx, "What was their most recent call about?", calls) == "C0008042"  # the newest row
+    ctx = retrieval.Context(member_key="k")
+    assert planner.bind_record_from_rows(ctx, "in March 2024?", calls) is None and "call_id" not in ctx.record  # no such row
+    ctx = retrieval.Context(member_key="k", record={"call_id": "C0000001"})
+    assert planner.bind_record_from_rows(ctx, "on June 11, 2024", calls) is None and ctx.record["call_id"] == "C0000001"  # never overrides context
+    assert planner.bind_record_from_rows(retrieval.Context(), "on June 11, 2024", {"status": "ok", "columns": ["NPI", "NAME"], "rows": [["1", "x"]]}) is None

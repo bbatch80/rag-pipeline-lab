@@ -25,12 +25,12 @@ STATIC = Path(__file__).parent / "static"
 
 SURFACE_TITLES = {"ask": "Ask", "agent_assist": "Agent Assist", "appeals_workbench": "Appeals Workbench",
                   "analyst_view": "Analyst View", "console": "Console"}
-SURFACE_BLURBS = {
-    "ask": "One question, no hints. The context your role is entitled to.",
-    "agent_assist": "A member on the screen: their plan, their calls, their claims — then ask.",
-    "appeals_workbench": "A case on the screen: the claim, the notes it cites, the policy in effect — evidence, never a determination.",
-    "analyst_view": "Named aggregate queries; masked columns labeled.",
-    "console": "Sources, evaluation numbers, latency, and the disclosure log.",
+SURFACE_BLURBS = {  # the portal tiles (user's wording, 2026-09-14)
+    "ask": "Plain-language questions about plans, benefits, and policies. No context needed.",
+    "agent_assist": "One member at a time: who they are, their plan, their calls and claims.",
+    "appeals_workbench": "One case at a time: the claim, the record, the policy in effect, the decision's evidence.",
+    "analyst_view": "Aggregate queries across members and providers; identities masked.",
+    "console": "Platform health, evaluation scores, and the record of who saw what.",
 }
 GROUP_DESCRIPTIONS = {name: spec[3] for name, spec in identity.GROUPS.items()}
 

@@ -1,24 +1,24 @@
 {
-  "run_id": 689,
-  "git_sha": "12d4fdd",
+  "run_id": 707,
+  "git_sha": "f9aaa2c",
   "corpus_hash": "41a4fd0f60ed63d14e46a4356c5c8fbf6e7a1732f703c43853a015d6ed262b86",
-  "written_at": "2026-09-14T17:11:47+00:00",
+  "written_at": "2026-09-14T17:45:54+00:00",
   "overall": {
-    "item_pass": 0.682,
-    "hit@5": 0.864406779661017,
-    "precision@5": 0.43050847457627117,
-    "source_coverage": 0.8319679849340866
+    "item_pass": 0.692,
+    "hit@5": 0.8739495798319328,
+    "precision@5": 0.42857142857142855,
+    "source_coverage": 0.8333800186741362
   },
   "by_work": {
     "0": {
       "name": "Guardrails",
-      "rate": 0.962,
-      "n": 26
+      "rate": 0.963,
+      "n": 27
     },
     "1": {
       "name": "Factual lookup",
-      "rate": 0.971,
-      "n": 35
+      "rate": 0.972,
+      "n": 36
     },
     "2": {
       "name": "Explanation with exceptions",
@@ -42,7 +42,7 @@
     },
     "6": {
       "name": "Comprehensive identification",
-      "rate": 0.4,
+      "rate": 0.6,
       "n": 5
     },
     "7": {
@@ -87,7 +87,7 @@
       "n": 12
     },
     "compound": {
-      "rate": 0.333,
+      "rate": 0.389,
       "n": 18
     },
     "cross_plan": {
@@ -103,8 +103,8 @@
       "n": 11
     },
     "internal_table": {
-      "rate": 0.5,
-      "n": 4
+      "rate": 0.6,
+      "n": 5
     },
     "named_query": {
       "rate": 0.5,
@@ -123,8 +123,8 @@
       "n": 4
     },
     "unanswerable": {
-      "rate": 0.833,
-      "n": 6
+      "rate": 0.857,
+      "n": 7
     },
     "version_negative": {
       "rate": 0.75,
@@ -158,6 +158,7 @@
     "unanswerable-04",
     "unanswerable-05",
     "unanswerable-06",
+    "unanswerable-07",
     "version_negative-01",
     "version_negative-02",
     "version_negative-03",
@@ -208,6 +209,7 @@
     "compound-09": 1,
     "compound-15": 1,
     "compound-16": 1,
+    "compound-17": 1,
     "factual-01": 1,
     "factual-02": 1,
     "factual-03": 1,
@@ -230,6 +232,7 @@
     "internal_factual-09": 1,
     "internal_table-01": 1,
     "internal_table-03": 1,
+    "internal_table-05": 1,
     "named_query-01": 1,
     "named_query-02": 1,
     "named_query-03": 1,
@@ -259,6 +262,7 @@
     "unanswerable-04": 1,
     "unanswerable-05": 1,
     "unanswerable-06": 1,
+    "unanswerable-07": 1,
     "version_negative-01": 1,
     "version_negative-02": 1,
     "version_negative-03": 1,
@@ -296,7 +300,6 @@
     "compound-12": 0,
     "compound-13": 0,
     "compound-14": 0,
-    "compound-17": 0,
     "compound-18": 0,
     "cross_plan-01": 0,
     "cross_plan-02": 0,
@@ -322,11 +325,11 @@
     "yoy-09": 0
   },
   "health": {
-    "tie_rate": 0.298,
+    "tie_rate": 0.293,
     "median_margin": 0.0231,
-    "duplicate_share": 0.105,
-    "index_seat_share": 0.012,
+    "duplicate_share": 0.101,
+    "index_seat_share": 0.011,
     "needless_split_rate": 0.255,
-    "n_payloads": 153
+    "n_payloads": 155
   }
 }

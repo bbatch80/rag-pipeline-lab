@@ -232,3 +232,23 @@ def test_both_model_calls_are_deterministic_and_keyed_by_the_sampling(monkeypatc
     planner._call_reader("q", client=_Client())
     assert [kw["extra_body"]["temperature"] for kw in seen] == [0.0, 0.0]  # SDK 1.0 has no temperature parameter; the body field works
     assert planner.plan_key_model().endswith("@t0") and planner.plan_key_model().startswith(planner.PLANNER_MODEL)
+
+
+def test_a_split_plan_is_stored_with_its_titled_legs(monkeypatch):
+    """CI's gate has no model key: the brochure titles must travel with the
+    stored plan, not be re-asked at compose time (PR #62's CI gate)."""
+    from raglab import planner
+
+    monkeypatch.setattr(planner, "PLAN_CACHE", False)
+    monkeypatch.setattr(planner, "benefit_row_titles", lambda items: ("Physical, occupational, speech, habilitative and rehabilitative therapy",
+                                                                       "Lab, x-ray and other diagnostic tests"))
+    q = "What are the costs for physical therapy and imaging?"
+    outcome = {"shape": "simple", "legs": [{"name": "documents", "kind": "doc_probe", "text": "costs for physical therapy and imaging", "sources": ["brochure"]}]}
+    available = {"sources": ("brochure", "kb"), "named_queries": ()}
+    plan = planner._plan_finish(None, q, available, key=("h", "m", "model"), translated=q, outcome=outcome, latency_ms=1.0)
+    assert plan.origin == "model" and plan.enforced == ("split_by_benefit",)
+    assert [l.text for l in plan.legs] == ["What do I pay for Physical, occupational, speech, habilitative and rehabilitative therapy?",
+                                           "What do I pay for Lab, x-ray and other diagnostic tests?"]
+    stored = planner.plan_from_dict(plan.to_dict(), origin="model", model="model")
+    assert stored.enforced == ("split_by_benefit",) and len(stored.legs) == 2
+    assert planner.split_benefit_list(stored, q, titles=lambda items: None).legs is stored.legs  # already split: untouched at compose

@@ -162,7 +162,9 @@ def plan_from_dict(spec: dict, origin: str = "caller", model: str | None = None)
                 slots=tuple(l.get("slots") or ()), params={k: v for k, v in (l.get("params") or {}).items() if v is not None},
                 required=bool(l.get("required", True)))
             for i, l in enumerate(spec.get("legs", []))]
-    return Plan(shape=spec.get("shape") or ("compound" if len(legs) > 1 else "simple"), legs=legs, origin=origin, model=model)
+    plan = Plan(shape=spec.get("shape") or ("compound" if len(legs) > 1 else "simple"), legs=legs, origin=origin, model=model)
+    plan.enforced = tuple(spec.get("enforced") or ())
+    return plan
 
 
 # A question about what a document SAID needs a document leg. The prompt
@@ -602,6 +604,7 @@ def _plan_finish(conn: psycopg.Connection, question: str, available: dict, key: 
         plan = plan_from_dict(outcome, origin="model", model=PLANNER_MODEL)
         plan = repair_query_names(plan, available)
         validate(plan, question, available)
+        plan = split_benefit_list(plan, question)  # the titled legs are stored with the plan: CI and the VM reuse them without a model call
     except Exception as exc:  # noqa: BLE001 — every model failure degrades to rules, and says why
         reason = f"{type(exc).__name__}: {str(exc)[:200]}"
         plan = plan_rules(question)

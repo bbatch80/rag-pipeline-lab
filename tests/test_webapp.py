@@ -87,7 +87,7 @@ def test_the_same_screen_composes_under_the_job_s_module(client):
     assert client.get("/surfaces/agent_assist").json() == {"surface": "agent_assist", "module": "care_management"}
     _login(client, "admin")
     assert client.get("/surfaces/console").json() == {"surface": "console", "module": None}
-    assert client.get("/me").json()["modules"]["agent_assist"] == "agent_assist"
+    assert client.get("/me").json()["modules"]["agent_assist"] == "*"  # the admin sees everything (ruling 2026-09-14)
 
 
 def test_module_for_covers_every_surface_and_group():
@@ -96,7 +96,7 @@ def test_module_for_covers_every_surface_and_group():
     for group in identity.GROUPS:
         for surface in webapp.SURFACES:
             module = webapp.module_for(surface, group)
-            assert module is None or module in planner.MODULES, (surface, group, module)
+            assert module is None or module == webapp.UNSCOPED or module in planner.MODULES, (surface, group, module)
     with pytest.raises(ValueError):
         webapp.module_for("benefits_lookup", "public")
 
@@ -268,6 +268,8 @@ def test_query_composes_under_the_surface_s_module_as_the_session_identity(clien
     assert client.post("/query", json={"question": "q", "surface": "console"}).status_code == 403
     _login(client, "admin")
     assert client.post("/query", json={"question": "q", "surface": "console"}).status_code == 400  # composes nothing
+    client.post("/query", json={"question": "q", "surface": "agent_assist", "member_id": "M767394984"})
+    assert seen["module"] is None  # the admin composes over the whole menu
 
 
 def test_member_data_runs_the_surface_s_menu_as_the_warehouse_role(client_with_corpus):

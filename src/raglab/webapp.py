@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from starlette.middleware.sessions import SessionMiddleware
 
-from raglab import console, context_services, db, identity, planner
+from raglab import console, context_services, db, identity, planner, snowlane
 
 SESSION_SECRET_ENV = "RAGLAB_SESSION_SECRET"
 SESSION_KEY = "username"
@@ -32,8 +32,13 @@ SESSION_KEY = "username"
 # composes under the care_management menu — same screen, data per
 # entitlement. The page names the surface; the server decides the module.
 SURFACES = ("ask", "agent_assist", "appeals_workbench", "analyst_view", "console")
+UNSCOPED = "*"  # the administrator composes over the whole menu: every family and query the entitlement allows
 SURFACE_MODULES: dict[tuple[str, str], str | None] = {
     ("agent_assist", "care_management"): "care_management",
+    ("agent_assist", "admin"): UNSCOPED,       # user ruling 2026-09-14: the admin sees everything
+    ("appeals_workbench", "admin"): UNSCOPED,
+    ("analyst_view", "admin"): UNSCOPED,
+    ("ask", "admin"): UNSCOPED,
     ("console", "admin"): None,  # the Console composes nothing
 }
 
@@ -188,14 +193,14 @@ def create_app(connect: Callable = db.connect, warehouse: context_services.Wareh
         module = _surface(ident, surface)
         with app.state.connect() as conn:
             return context_services.compose(conn, ident, question, member_id=member_id, case_id=case_id,
-                                            module=module, source="web", warehouse=warehouse)
+                                            module=None if module == UNSCOPED else module, source="web", warehouse=warehouse)
 
     def member_data_for(ident: identity.Identity, query_name: str, surface: str, params: dict) -> dict:
         """One named query from a surface's menu as the identity's warehouse
         role — the grant and the menu check, then the same call the MCP tool
         makes. The JSON route and the pages both come through here."""
         module = _surface(ident, surface)
-        menu = planner.MODULES[module]["named_queries"]
+        menu = tuple(snowlane.NAMED_QUERIES) if module == UNSCOPED else planner.MODULES[module]["named_queries"]
         if query_name not in menu:
             raise HTTPException(status_code=400, detail={"error": f"{query_name!r} is not on the {surface!r} menu",
                                                          "menu": list(menu)})

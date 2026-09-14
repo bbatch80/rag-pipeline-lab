@@ -434,10 +434,7 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
         p50, p95 = latency["total"]
         cards.append(_card("latency p95 (ms)", int(p95),
                            f"budget ≤ {BUDGET_P95_MS} ms · p50 {p50:.0f} · not gated"
-                           "<span class='why'>Why so high: the cross-encoder reranker scores every candidate pair on CPU — no GPU anywhere in "
-                           "this stack — and the pool is kept full on purpose (fewer candidates would trade recall for speed). Measured here on "
-                           "a laptop while four eval workers share one reranker; the 4-vCPU VM answers a fresh question in 15–17 s and a "
-                           "repeat in about 1 s from the caches. A GPU or a hosted reranker is the lever, not the pipeline.</span>", None))
+                           "<span class='why'>Why: the reranker scores every candidate on CPU — no GPU in this stack — and the candidate pool is kept full for recall. A repeat question takes about 1 s from the caches.</span>", None))
     if deid:
         cards.append(_card("de-id recall", float(deid.get("overall_recall", 0)),
                            "measured vs manifest", None))

@@ -34,7 +34,44 @@ def test_ok_renders_evidence_then_plan_line_then_footer_and_no_banner():
     assert "banner" not in html
     evidence, plan, foot = _order(html, 'class="evidence"', 'class="planline"', 'class="payloadfoot"')
     assert evidence < plan < foot
-    assert "draft" not in html.lower()  # the page returns the payload and nothing else
+
+
+class _Answerer:
+    name = "fake-answerer"
+
+    def generate(self, payload):
+        return f"**Yes.** Drawn from {len(payload['chunks'])} chunks.\n\nSee <71-006> page 9."
+
+
+def test_answer_renders_first_from_the_payload_and_never_without_evidence(monkeypatch):
+    """User ruling 2026-09-14: the surface shows the model's answer, the
+    evidence beneath it — generated only when the platform served evidence."""
+    monkeypatch.setenv("RAGLAB_ANSWERS", "on")
+
+    class _App:
+        class state:
+            generator = _Answerer
+
+    answer = ui.answer_for(_App, FIXTURE)
+    html = ui.render_answer(answer) + ui.render_payload(FIXTURE)
+    a, evidence = _order(html, 'class="answer"', 'class="evidence"')
+    assert a < evidence and "fake-answerer" in html
+    assert "<strong>Yes.</strong>" in html and "&lt;71-006&gt;" in html  # bold allowed, markup escaped
+    assert ui.answer_for(_App, {**FIXTURE, "status": "insufficient_evidence"}) is None
+    assert ui.answer_for(_App, {**FIXTURE, "chunks": [], "warehouse_results": []}) is None
+    monkeypatch.setenv("RAGLAB_ANSWERS", "off")
+    assert ui.answer_for(_App, FIXTURE) is None
+
+    class _Broken:
+        name = "broken"
+
+        def generate(self, payload):
+            raise RuntimeError("credit balance is too low")
+
+    monkeypatch.setenv("RAGLAB_ANSWERS", "on")
+    _App.state.generator = _Broken
+    out = ui.render_answer(ui.answer_for(_App, FIXTURE))
+    assert "No answer could be generated" in out and "credit balance" in out
     assert FIXTURE["chunks"][0]["source"]["title"] in html and FIXTURE["payload_id"] in html
     assert "chip-acl" in html and "public" in html
     assert "1234 ms" in html and "(rerank 900)" in html
@@ -93,9 +130,11 @@ def app(db, monkeypatch):
     # Ask composes through the planner; the pages' test stands the single
     # probe in for it so no model is called — the funnel, RLS, and disclosure are real
     monkeypatch.setattr(context_services, "compose",
-                        lambda conn, ident, question, member_id=None, module=None, source="web", warehouse=None:
+                        lambda conn, ident, question, member_id=None, case_id=None, module=None, source="web", warehouse=None:
                         context_services.search(conn, ident, question, member_id=member_id, source=source))
-    return webapp.create_app(connect=lambda: _Lease(_NoCommit(db)), warehouse=context_services.Warehouse(connect=None))
+    app = webapp.create_app(connect=lambda: _Lease(_NoCommit(db)), warehouse=context_services.Warehouse(connect=None))
+    app.state.generator = _Answerer
+    return app
 
 
 def _session(app, username):
@@ -128,6 +167,7 @@ def test_two_window_flagship_in_ask(app, db):
     db.execute("RESET ROLE")
     ids = [re.search(r"payload <code>([0-9a-f-]{36})</code>", h).group(1) for h in (rep_html, cm_html)]
     assert ids[0] != ids[1]
+    assert rep_html.index('class="answer"') < rep_html.index('class="evidence"')  # the answer first, from the evidence
     # the rep's tiers are public + employee; the care manager's clinical tier is
     # member-scoped, so with no member on the screen she sees public only —
     # and never the employee material the rep sees
@@ -167,6 +207,11 @@ class _RecordCursor:
             self._rows, self.description = [(self.role,)], [("CURRENT_ROLE()",)]
         elif sql.startswith("ALTER SESSION"):
             self._rows = []
+        elif "FROM PATIENTS p" in sql:  # member_profile: who the member is + current enrollment
+            self.description = [(c,) for c in ("MEMBER_ID", "MRN", "FIRST_NAME", "LAST_NAME", "BIRTHDATE", "GENDER", "CITY", "STATE", "ZIP",
+                                               "LINE_OF_BUSINESS", "ENROLLMENT_YEAR", "PLAN_CODE", "PLAN_OPTION", "TIER", "ENROLLMENT_CODE")]
+            self._rows = [(FAKE_MEMBER, "MRN0000001", "Test", "Member", "1970-01-01", "F", "Kansas City", "MO", "641",
+                           "FEHB", 2026, "71-006", "High", "Self Only", "311")] if params["member_id"] == FAKE_MEMBER else []
         elif "FROM ENROLLMENT" in sql:
             self.description = [(c,) for c in ("MEMBER_ID", "YEAR", "LINE_OF_BUSINESS", "PLAN_CODE", "PLAN_OPTION", "TIER", "ENROLLMENT_CODE")]
             self._rows = [(FAKE_MEMBER, 2026, "FEHB", "71-006", "High", "Self Only", "311")] if params["member_id"] == FAKE_MEMBER else []
@@ -215,14 +260,15 @@ def surfaces(db, monkeypatch):
     db.execute("UPDATE chunks SET member_key = %s WHERE document_id IN (SELECT id FROM documents WHERE title LIKE 'doc-%%')", (FAKE_PATIENT,))
     seen = []
 
-    def compose(conn, ident, question, member_id=None, module=None, source="web", warehouse=None):
-        seen.append({"question": question, "member_id": member_id, "module": module, "persona": ident.persona})
+    def compose(conn, ident, question, member_id=None, case_id=None, module=None, source="web", warehouse=None):
+        seen.append({"question": question, "member_id": member_id, "case_id": case_id, "module": module, "persona": ident.persona})
         return context_services.search(conn, ident, question, member_id=member_id, source=source)
 
     monkeypatch.setattr(context_services, "compose", compose)
     app = webapp.create_app(connect=lambda: _Lease(_NoCommit(db)),
                             warehouse=context_services.Warehouse(connect=lambda role: _RecordWarehouse(role)))
     app.state.seen = seen
+    app.state.generator = _Answerer
     return app
 
 
@@ -235,8 +281,9 @@ def test_agent_assist_loads_nothing_until_a_valid_known_member_is_typed(surfaces
     nobody = rep.post("/ui/agent_assist/open", data={"member_id": UNKNOWN_MEMBER}).text
     assert f"No member id {UNKNOWN_MEMBER} on record" in nobody and "headerrow" not in nobody
     opened = rep.post("/ui/agent_assist/open", data={"member_id": " m999900004 "}).text  # surface form → canonical
-    assert "headerrow" in opened and f"Member {FAKE_MEMBER} — enrollment" in opened and "71-006" in opened
-    assert f'name="member_id" value="{FAKE_MEMBER}"' in opened and 'hx-post="/ui/agent_assist/ask"' in opened
+    assert f"Member {FAKE_MEMBER} is open" in opened and 'hx-post="/ui/agent_assist/ask"' in opened
+    assert "headerrow" not in opened and "1970-01-01" not in opened and "71-006" not in opened  # nothing rendered until a question is asked
+    assert f'name="member_id" value="{FAKE_MEMBER}"' in opened
     assert 'value=""' in opened  # the question box starts empty: no canned question
 
 
@@ -255,7 +302,7 @@ def test_rep_s_agent_assist_shows_no_clinical_text_and_the_care_manager_s_does(s
     assert f"member {FAKE_MEMBER}" in rep_html  # the plan line names the member context
     modules = [s["module"] for s in surfaces.state.seen]
     assert modules == ["agent_assist", "care_management"]  # same screen, the job's module
-    assert all(s["member_id"] == FAKE_MEMBER for s in surfaces.state.seen)
+    assert all(s["member_id"] == FAKE_MEMBER and s["case_id"] is None for s in surfaces.state.seen)
 
 
 def test_workbench_opens_a_case_and_starts_the_question_with_it(surfaces):
@@ -264,12 +311,12 @@ def test_workbench_opens_a_case_and_starts_the_question_with_it(surfaces):
     assert "not a valid case id" in analyst.post("/ui/appeals_workbench/open", data={"case_id": "APL-000000"}).text
     assert "on record" in analyst.post("/ui/appeals_workbench/open", data={"case_id": identifiers.case_id(8)}).text
     opened = analyst.post("/ui/appeals_workbench/open", data={"case_id": KNOWN_CASE}).text
-    assert f"Case {KNOWN_CASE}" in opened and "not medically necessary" in opened and "CP-0003" in opened
-    assert f'value="Case {KNOWN_CASE}: "' in opened  # the box starts with the case, visible and editable
-    assert f'name="member_id" value="{FAKE_MEMBER}"' in opened  # the case's member, from the platform's row
+    assert f"Case {KNOWN_CASE} is open" in opened and "not medically necessary" not in opened  # validated and found; nothing rendered yet
+    assert f'name="case_id" value="{KNOWN_CASE}"' in opened   # the open case is the context, as page state
+    assert 'value=""' in opened and "Case APL" not in opened.split("askbox")[1][:200]  # no prefix: ask naturally
     assert "Evidence, never a determination" in opened
-    analyst.post("/ui/appeals_workbench/ask", data={"question": f"Case {KNOWN_CASE}: why was it upheld?", "member_id": FAKE_MEMBER})
-    assert surfaces.state.seen[-1] == {"question": f"Case {KNOWN_CASE}: why was it upheld?", "member_id": FAKE_MEMBER,
+    analyst.post("/ui/appeals_workbench/ask", data={"question": "Describe this appeal.", "case_id": KNOWN_CASE})
+    assert surfaces.state.seen[-1] == {"question": "Describe this appeal.", "member_id": None, "case_id": KNOWN_CASE,
                                        "module": "appeals_workbench", "persona": "appeals"}
 
 

@@ -198,6 +198,22 @@ def verify(sf_conn) -> dict:
 # top: what each role sees inside these results is masked/trimmed by
 # Snowflake, not by this code.
 NAMED_QUERIES = {
+    "member_profile": {
+        "doc": ("WHO a member is, by member ID: name, date of birth, gender, MRN, city/state, line of "
+                "business, and the current enrollment (year, plan, option, tier, enrollment code). "
+                "The query for 'what is this member's name / DOB / plan' — identity, not activity."),
+        "params": {"member_id": str},
+        "sql": """
+            SELECT p.MEMBER_ID, p.MRN, p.FIRST_NAME, p.LAST_NAME, p.BIRTHDATE, p.GENDER,
+                   p.CITY, p.STATE, p.ZIP, p.LINE_OF_BUSINESS,
+                   e.YEAR AS ENROLLMENT_YEAR, e.PLAN_CODE, e.PLAN_OPTION, e.TIER, e.ENROLLMENT_CODE
+            FROM PATIENTS p
+            LEFT JOIN ENROLLMENT e
+              ON e.MEMBER_ID = p.MEMBER_ID
+             AND e.YEAR = (SELECT MAX(x.YEAR) FROM ENROLLMENT x WHERE x.MEMBER_ID = p.MEMBER_ID)
+            WHERE p.MEMBER_ID = %(member_id)s
+        """,
+    },
     "member_claims_summary": {
         "doc": ("One row per member matched by member ID or by name: claim-line "
                 "count, total claim cost, payer coverage, and service-date span."),

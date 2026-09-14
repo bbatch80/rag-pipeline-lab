@@ -64,7 +64,8 @@ class _Strict(BaseModel):
 class Query(_Strict):
     question: str
     surface: str
-    member_id: str | None = None
+    member_id: str | None = None   # the member the surface has open
+    case_id: str | None = None     # the appeal case the surface has open
 
 
 class Search(_Strict):
@@ -179,14 +180,15 @@ def create_app(connect: Callable = db.connect, warehouse: context_services.Wareh
             raise HTTPException(status_code=400, detail=f"surface {surface!r} composes nothing")
         return module
 
-    def compose_for(ident: identity.Identity, question: str, surface: str, member_id: str | None) -> dict:
+    def compose_for(ident: identity.Identity, question: str, surface: str, member_id: str | None,
+                    case_id: str | None = None) -> dict:
         """One question from a surface → the composed payload: the grant, the
         surface's module, then the same compose the MCP tool runs. The JSON
         route and the pages both come through here."""
         module = _surface(ident, surface)
         with app.state.connect() as conn:
-            return context_services.compose(conn, ident, question, member_id=member_id, module=module,
-                                            source="web", warehouse=warehouse)
+            return context_services.compose(conn, ident, question, member_id=member_id, case_id=case_id,
+                                            module=module, source="web", warehouse=warehouse)
 
     def member_data_for(ident: identity.Identity, query_name: str, surface: str, params: dict) -> dict:
         """One named query from a surface's menu as the identity's warehouse
@@ -208,7 +210,7 @@ def create_app(connect: Callable = db.connect, warehouse: context_services.Wareh
         """One question from a surface → the composed payload (spec 1.1.0).
         The platform plans the legs within the surface's module and runs
         every leg as the session identity."""
-        return compose_for(ident, body.question, body.surface, body.member_id)
+        return compose_for(ident, body.question, body.surface, body.member_id, body.case_id)
 
     @app.post("/search")
     def search(body: Search, request: Request, ident: identity.Identity = Depends(current_identity)) -> dict:

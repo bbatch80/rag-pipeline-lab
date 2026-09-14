@@ -210,3 +210,25 @@ def test_a_failed_plan_call_finishes_as_the_rules_plan_with_the_reason(db, monke
     pending = planner._PendingPlan(("p",), "q", TimeoutError("planner timed out"), 1.0)
     plan = pending.finish(db, "What is the deductible?", {"sources": ("brochure",), "named_queries": ()})
     assert plan.origin == "rules" and plan.fallback_reason.startswith("TimeoutError")
+
+
+def test_both_model_calls_are_deterministic_and_keyed_by_the_sampling(monkeypatch):
+    """temperature 0 on the planner and the reader; the store key carries it,
+    so plans sampled the old way never come back."""
+    from raglab import planner
+
+    seen = []
+
+    class _Client:
+        class messages:
+            @staticmethod
+            def create(**kw):
+                seen.append(kw)
+                class _R:
+                    content = [type("B", (), {"type": "text", "text": '{"shape": "simple", "legs": []}'})()]
+                return _R()
+
+    planner._call_model("q", {"sources": (), "named_queries": (), "source_docs": {}}, client=_Client())
+    planner._call_reader("q", client=_Client())
+    assert [kw["extra_body"]["temperature"] for kw in seen] == [0.0, 0.0]  # SDK 1.0 has no temperature parameter; the body field works
+    assert planner.plan_key_model().endswith("@t0") and planner.plan_key_model().startswith(planner.PLANNER_MODEL)

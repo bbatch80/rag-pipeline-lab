@@ -59,7 +59,7 @@
       {% set found = leg_found[loop.index0] %}
       <span class="leg {{ 'leg-found' if found else 'leg-empty' }}">{{ leg.name or leg.query_name or (leg.sources | join('+')) }} ({{ "found" if found else "nothing" }})</span>{% if not loop.last %} · {% endif %}
     {% endfor %}
-    {% if p.plan.origin %}<small class="origin">plan by {{ p.plan.origin }}{% if p.plan.fallback_reason %} — {{ p.plan.fallback_reason }}{% endif %}{% if p.plan.widened %} · widened once{% endif %}</small>{% endif %}
+    {% if p.plan.origin %}<small class="origin">plan by {{ p.plan.origin }}{% if p.plan.fallback_reason %} — {{ p.plan.fallback_reason }}{% endif %}{% if p.plan.enforced %} · platform added: {{ p.plan.enforced | join(", ") | replace("_", " ") }}{% endif %}{% if p.plan.widened %} · widened once{% endif %}</small>{% endif %}
   {% elif p.router %}looked in: {{ p.router.years | join(", ") }}{% if p.router.plan_codes %} · plans {{ p.router.plan_codes | join(", ") }}{% endif %}{% if p.router.as_of %} · as of {{ p.router.as_of }}{% endif %}
   {% endif %}
   {% if p.member_context %} · member {{ p.member_context }}{% endif %}

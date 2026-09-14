@@ -129,7 +129,7 @@ def test_warehouse_leg_runs_as_the_callers_role_with_bound_parameters(db, monkey
     # the binding path itself, not the population.
     from raglab.retrieval import Context
     monkeypatch.setattr(planner.retrieval, "resolve_context",
-                        lambda conn, member_id, q: Context(query=q, record={"claim_id": "CLM-1363781509"}, as_of="2024-08-01"))
+                        lambda conn, member_id, q, case_id=None: Context(query=q, record={"claim_id": "CLM-1363781509"}, as_of="2024-08-01"))
     plan = _plan({"name": "adj", "kind": "member_query", "query_name": "claim_adjudication", "slots": ["claim_id"]})
     out = planner.compose(_NoCommit(db), "Was claim CLM-1363781509 denied?", _caller("appeals", "APPEALS_ANALYST"), plan=plan, sf_connect=connect)
     assert seen["role"] == "APPEALS_ANALYST" and seen["closed"]
@@ -200,3 +200,27 @@ def test_out_of_scope_route_short_circuits_composition(db, monkeypatch):
     built = planner.compose(db, "What does Blue Cross FEP Basic charge for a specialist visit?", planner.Caller(persona="public"), module="ask", source="test")
     assert built["status"] == "out_of_scope" and "Blue Cross FEP" in built["boundary_response"]
     assert built["chunks"] == [] and built["plan"] is None and built["sub_results"] == [] and built["warehouse_results"] == []
+
+
+def test_a_question_about_what_a_document_said_gets_a_document_leg():
+    """L2 (appeal-03, persona_negative-03, the Workbench probe): the model's
+    warehouse-only plan gains one document leg over the module's menu; plans
+    that already search documents, caller plans, and full plans are untouched."""
+    from raglab import planner
+
+    def plan(*legs, origin="model"):
+        return planner.Plan(shape="simple" if len(legs) == 1 else "compound", origin=origin,
+                            legs=[planner.Leg(**l) for l in legs])
+
+    wh = {"name": "case", "kind": "member_query", "query_name": "appeal_case", "slots": ("case_id",)}
+    out = planner.enforce_document_leg(plan(wh), "What did the determination letter tell the member on case APL-1215086?")
+    assert [l.kind for l in out.legs] == ["member_query", "doc_probe"] and out.enforced == ("document_leg",)
+    assert out.legs[1].sources == () and out.shape == "compound"        # the module's whole document menu
+    out = planner.enforce_document_leg(plan(wh), "Why was the denial upheld?")
+    assert out.enforced == ("document_leg",)
+    assert planner.enforce_document_leg(plan(wh), "When did the member file the appeal?").enforced == ()  # a fact: no rule
+    doc = {"name": "d", "kind": "doc_probe", "text": "x"}
+    assert planner.enforce_document_leg(plan(wh, doc), "What did the letter say?").enforced == ()    # already searches
+    assert planner.enforce_document_leg(plan(wh, origin="caller"), "What did the letter say?").enforced == ()
+    full = plan(wh, {**wh, "name": "b"}, {**wh, "name": "c"})
+    assert planner.enforce_document_leg(full, "What did the letter say?").enforced == ()              # at the leg limit

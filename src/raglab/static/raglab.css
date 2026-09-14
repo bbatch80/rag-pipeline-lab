@@ -52,3 +52,7 @@ nav form { margin: 0; }
 .auditrows td.docs { max-width: 22rem; font-size: .72rem; color: var(--pico-muted-color); }
 .queryform { max-width: 40rem; }
 iframe.dashboard { width: 100%; height: 70vh; border: 1px solid var(--pico-muted-border-color); border-radius: var(--pico-border-radius); background: white; }
+
+.answer { border-left: .35rem solid #2f5d3a; padding: .75rem 1rem; margin-bottom: 1rem; }
+.answer header { display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap; margin-bottom: .4rem; }
+.answer p { margin: 0 0 .5rem; }

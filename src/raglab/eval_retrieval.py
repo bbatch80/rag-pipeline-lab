@@ -112,6 +112,17 @@ def caller_for(item: dict) -> planner.Caller:
     return planner.Caller(persona=doc_persona, warehouse_role=role)
 
 
+def _only_the_warehouse_is_missing(payload: dict) -> bool:
+    """insufficient_evidence caused solely by warehouse legs that could not
+    run for want of a warehouse, while every document leg found evidence."""
+    if payload.get("status") != "insufficient_evidence" or not checks._warehouse_unavailable(payload):
+        return False
+    not_run = {w.get("leg") for w in payload.get("warehouse_results") or [] if w.get("status") == "not_executed"}
+    missing = set(payload.get("missing") or [])
+    doc_legs = payload.get("sub_results") or []
+    return bool(missing) and missing <= not_run and bool(doc_legs) and all(s.get("status") == "ok" for s in doc_legs)
+
+
 def _member_on_screen(item: dict) -> str | None:
     """The member the screen has open — unless the item types the id into
     the question on purpose (`typed_member_id`), which tests that path."""
@@ -120,7 +131,7 @@ def _member_on_screen(item: dict) -> str | None:
 
 def _compose(conn, item: dict, question: str, persona: str | None = None) -> dict:
     caller = caller_for({**item, "persona": persona}) if persona is not None else caller_for(item)
-    return planner.compose(conn, question, caller, member_id=_member_on_screen(item),
+    return planner.compose(conn, question, caller, member_id=_member_on_screen(item), case_id=item.get("case_id"),
                            module=item.get("module"), source="eval")
 
 
@@ -165,6 +176,13 @@ def score_item(conn, item: dict) -> list[tuple]:
     if "persona_allow" in item or "persona_deny" in item:
         if item.get("persona_allow"):
             allowed = _compose(conn, item, item["question"], persona=item["persona_allow"])
+            if _only_the_warehouse_is_missing(allowed):
+                # CI holds no warehouse: a required warehouse leg could not run,
+                # so the status reads insufficient although the document legs
+                # found the evidence. The wall is about the documents — judge
+                # them, and record that the warehouse half was skipped.
+                add(WAREHOUSE_SKIPPED, 1.0, {"check": "check_allow", "reason": "warehouse unavailable: required warehouse leg not executed"})
+                allowed = {**allowed, "status": "ok"}
             add(*checks.check_allow_titles(item, allowed))
             for metric, value, detail in checks.source_metrics(item, allowed):
                 add(metric, value, detail)
@@ -200,10 +218,46 @@ def score_item(conn, item: dict) -> list[tuple]:
 
 
 # ---------------------------------------------------------------- the run
+def _score_items_parallel(items: list[dict], workers: int) -> list[list[tuple]]:
+    """score_item over `items` on `workers` threads, each with its own owner
+    connection (a scored item SETs a role and commits its disclosure — never
+    on a shared connection). Results come back in golden order, so a parallel
+    run stores exactly what a sequential run would. Model calls and embedding
+    waits overlap; reranking is serialized inside rerank._predict."""
+    import queue
+    from concurrent.futures import ThreadPoolExecutor
+
+    from raglab import db, rerank
+
+    rerank._get_model()  # load once on this thread, not racing inside the pool
+    pool: queue.Queue = queue.Queue()
+    conns = [db.connect() for _ in range(workers)]
+    for c in conns:
+        pool.put(c)
+
+    def one(item: dict) -> list[tuple]:
+        c = pool.get()
+        try:
+            return score_item(c, item)
+        finally:
+            pool.put(c)
+
+    try:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="eval") as ex:
+            return list(ex.map(one, items))
+    finally:
+        for c in conns:
+            try:
+                c.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def run(
     conn: psycopg.Connection,
     config_label: str = "baseline",
     sabotage: bool = False,
+    workers: int = 1,
     categories: tuple[str, ...] = (),
     replan: bool = False,
 ) -> RetrievalEvalResult:
@@ -228,18 +282,21 @@ def run(
     replans: list[tuple] = []
     registry = sources.load(conn)
 
-    for item in ablation.load_golden():
-        qid, category = item["id"], item["category"]
-        if categories and category not in categories:
-            continue
-        if sabotage:
-            scores.extend((qid, category, m, v, d) for m, v, d in _score_sabotaged(conn, item, registry))
-            continue
-        if replan and not item.get("unanswerable"):
-            stored, fresh = planner.replan(conn, item["question"], module=item.get("module"))
-            if _legs_key(stored) != _legs_key(fresh.to_dict()):
-                replans.append((qid, _legs_key(stored), _legs_key(fresh.to_dict())))
-        scores.extend((qid, category, m, v, d) for m, v, d in score_item(conn, item))
+    items = [item for item in ablation.load_golden() if not categories or item["category"] in categories]
+    if sabotage or replan or workers <= 1:
+        for item in items:
+            qid, category = item["id"], item["category"]
+            if sabotage:
+                scores.extend((qid, category, m, v, d) for m, v, d in _score_sabotaged(conn, item, registry))
+                continue
+            if replan and not item.get("unanswerable"):
+                stored, fresh = planner.replan(conn, item["question"], module=item.get("module"))
+                if _legs_key(stored) != _legs_key(fresh.to_dict()):
+                    replans.append((qid, _legs_key(stored), _legs_key(fresh.to_dict())))
+            scores.extend((qid, category, m, v, d) for m, v, d in score_item(conn, item))
+    else:
+        for item, rows in zip(items, _score_items_parallel(items, workers), strict=True):
+            scores.extend((item["id"], item["category"], m, v, d) for m, v, d in rows)
 
     scores.extend(_item_verdict_rows(scores))
     by_qid = {item["id"]: expected_source(item, registry) for item in ablation.load_golden()}
@@ -278,7 +335,7 @@ def _score_sabotaged(conn, item: dict, registry) -> list[tuple]:
     junk_text = "zzqx zzqv zzqw"
     reading = planner.read_route(conn, item["question"])
     decision = router.route(item["question"], hierarchies=registry.hierarchies(), reading=reading)
-    ctx = retrieval.resolve_context(conn, _member_on_screen(item), item["question"])
+    ctx = retrieval.resolve_context(conn, _member_on_screen(item), item["question"], case_id=item.get("case_id"))
     decision = retrieval.expand_versions(conn, decision, ctx, item["question"])
     decision = retrieval.bind_enrollment_plan(decision, ctx)
     question = deid.translate_query(conn, ctx.query)

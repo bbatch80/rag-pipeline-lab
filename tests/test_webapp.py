@@ -248,8 +248,8 @@ def test_a_body_naming_an_identity_or_a_module_is_400_not_ignored(client_with_co
 def test_query_composes_under_the_surface_s_module_as_the_session_identity(client_with_corpus, monkeypatch):
     seen = {}
 
-    def fake_compose(conn, question, caller, member_id=None, plan=None, source="interactive", sf_connect=None, module=None):
-        seen.update(question=question, caller=caller, member_id=member_id, source=source, module=module)
+    def fake_compose(conn, question, caller, member_id=None, plan=None, source="interactive", sf_connect=None, module=None, case_id=None):
+        seen.update(question=question, caller=caller, member_id=member_id, case_id=case_id, source=source, module=module)
         sf_connect("CARE_MANAGER").close()  # a leg closes what it is handed; the shared session survives
         return {"status": "ok", "payload_id": "p"}
 
@@ -260,6 +260,8 @@ def test_query_composes_under_the_surface_s_module_as_the_session_identity(clien
                                        "member_id": "M767394984"})
     assert resp.status_code == 200, resp.text
     assert seen["module"] == "care_management" and seen["source"] == "web" and seen["member_id"] == "M767394984"
+    resp = client.post("/query", json={"question": "describe this appeal", "surface": "agent_assist", "case_id": "APL-0035378"})
+    assert resp.status_code == 200 and seen["case_id"] == "APL-0035378" and seen["member_id"] is None
     assert seen["caller"].persona == "care_team" and seen["caller"].warehouse_role == "CARE_MANAGER"
     assert client.opened_warehouse["CARE_MANAGER"].cursors == []  # opened once, never closed by the leg
     assert client.post("/query", json={"question": "q", "surface": "appeals_workbench"}).status_code == 403

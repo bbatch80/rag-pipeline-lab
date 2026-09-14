@@ -73,6 +73,7 @@ class Probe:
     candidates: list = None  # the fused pool before reranking (for traces)
     search_stats: dict = field(default_factory=dict)  # readings / candidates / trimmed / cap
     identity_evidence: int = 0  # chunks seated because they are the open member's own records (the records rule)
+    row_matches: tuple = ()  # table row keys the question named exactly (the row-identity rule)
 
 
 def _probe(conn, query: str, persona: str | None, ctx: retrieval.Context, watch: Stopwatch,

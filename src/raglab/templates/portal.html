@@ -7,7 +7,7 @@
   <a href="/{{ surface }}" class="tile"><article>
     <h3>{{ surface_titles[surface] }}</h3>
     <p>{{ surface_blurbs[surface] }}</p>
-    {% if me.modules[surface] %}<small>composes under <code>{{ me.modules[surface] }}</code></small>{% else %}<small>reads only</small>{% endif %}
+    {% if me.modules[surface] == "*" %}<small>composes over the whole menu</small>{% elif me.modules[surface] %}<small>composes under <code>{{ me.modules[surface] }}</code></small>{% else %}<small>reads only</small>{% endif %}
   </article></a>
   {% endfor %}
 </div>

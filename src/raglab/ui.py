@@ -247,12 +247,19 @@ def mount(app: FastAPI) -> None:
     # ---- Analyst View: the module's named queries, no free text ----
     @app.get("/analyst_view", response_class=HTMLResponse)
     def analyst_page(request: Request, ident: identity.Identity = Depends(require_surface("analyst_view"))):
-        return _page("analyst_view.html", request, _me(ident), current="analyst_view",
-                     menu=planner.MODULES["analyst_view"]["named_queries"])
+        from raglab.webapp import UNSCOPED, module_for
+
+        module = module_for("analyst_view", ident.group)
+        menu = tuple(snowlane.NAMED_QUERIES) if module == UNSCOPED else planner.MODULES[module]["named_queries"]
+        return _page("analyst_view.html", request, _me(ident), current="analyst_view", menu=menu)
 
     @app.get("/ui/analyst_view/params", response_class=HTMLResponse)
     def analyst_params(query_name: str, ident: identity.Identity = Depends(require_surface("analyst_view"))):
-        if query_name not in planner.MODULES["analyst_view"]["named_queries"]:
+        from raglab.webapp import UNSCOPED, module_for
+
+        module = module_for("analyst_view", ident.group)
+        menu = tuple(snowlane.NAMED_QUERIES) if module == UNSCOPED else planner.MODULES[module]["named_queries"]
+        if query_name not in menu:
             raise HTTPException(status_code=400, detail=f"{query_name!r} is not on the analyst_view menu")
         return HTMLResponse(env.get_template("partials/params.html").render(
             doc=snowlane.NAMED_QUERIES[query_name]["doc"], params=query_params(query_name)))

@@ -1,13 +1,13 @@
 {
-  "run_id": 800,
-  "git_sha": "7c2535c",
+  "run_id": 813,
+  "git_sha": "b5489ae",
   "corpus_hash": "41a4fd0f60ed63d14e46a4356c5c8fbf6e7a1732f703c43853a015d6ed262b86",
-  "written_at": "2026-09-15T01:50:35+00:00",
+  "written_at": "2026-09-15T02:06:03+00:00",
   "overall": {
-    "item_pass": 0.725,
-    "hit@5": 0.9083333333333333,
-    "precision@5": 0.4316666666666667,
-    "source_coverage": 0.8597685185185184
+    "item_pass": 0.733,
+    "hit@5": 0.9256198347107438,
+    "precision@5": 0.4380165289256198,
+    "source_coverage": 0.8774563820018365
   },
   "by_work": {
     "0": {
@@ -52,13 +52,13 @@
     },
     "8": {
       "name": "Temporal",
-      "rate": 0.733,
+      "rate": 0.8,
       "n": 15
     },
     "9": {
       "name": "Diagnosis evidence",
-      "rate": 0.417,
-      "n": 12
+      "rate": 0.462,
+      "n": 13
     }
   },
   "by_group": {
@@ -67,8 +67,8 @@
       "n": 3
     },
     "appeal": {
-      "rate": 0.562,
-      "n": 16
+      "rate": 0.647,
+      "n": 17
     },
     "call_note": {
       "rate": 0.636,
@@ -173,12 +173,14 @@
     "appeal-01": 1,
     "appeal-02": 1,
     "appeal-03": 1,
+    "appeal-04": 1,
     "appeal-08": 1,
     "appeal-09": 1,
     "appeal-12": 1,
     "appeal-14": 1,
     "appeal-15": 1,
     "appeal-16": 1,
+    "appeal-17": 1,
     "call_note-01": 1,
     "call_note-02": 1,
     "call_note-03": 1,
@@ -283,7 +285,6 @@
     "yoy-05": 1,
     "yoy-06": 1,
     "yoy-08": 1,
-    "appeal-04": 0,
     "appeal-05": 0,
     "appeal-06": 0,
     "appeal-07": 0,
@@ -329,11 +330,11 @@
     "yoy-09": 0
   },
   "health": {
-    "tie_rate": 0.299,
-    "median_margin": 0.0236,
-    "duplicate_share": 0.119,
-    "index_seat_share": 0.011,
-    "needless_split_rate": 0.35,
-    "n_payloads": 159
+    "tie_rate": 0.293,
+    "median_margin": 0.0231,
+    "duplicate_share": 0.135,
+    "index_seat_share": 0.012,
+    "needless_split_rate": 0.313,
+    "n_payloads": 160
   }
 }

@@ -137,6 +137,17 @@ def resolve_context(conn: psycopg.Connection, member_id: str | None, query_text:
         ctx.member_key = ctx.member_key or str(row[0])
         if not ctx.enrollment:
             ctx.enrollment = _enrollment_plans(conn, ctx.member_key)
+        if "member_id" not in ctx.record:
+            # A case or claim belongs to one member: bind that member's id too, so the
+            # member queries can run with only a case open (the Workbench, 2026-09-15:
+            # "what plan was this member on when they filed the appeal?").
+            try:
+                with conn.transaction():
+                    mid = conn.execute("SELECT member_id FROM synthea.patients WHERE id = %s", (ctx.member_key,)).fetchone()
+            except psycopg.errors.UndefinedTable:
+                mid = None
+            if mid and mid[0]:
+                ctx.record["member_id"] = mid[0]
         if kind in _RECORD_FIELD:
             ctx.record.setdefault(_RECORD_FIELD[kind], canon)
         if kind in ("case_id", "claim_id"):

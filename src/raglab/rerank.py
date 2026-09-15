@@ -152,7 +152,7 @@ def score_pairs(model, pairs: list[tuple[str, str]], conn=None) -> list[float]:
             ).fetchall()
     except Exception:  # no table / no database: score everything
         return _predict(model, pairs)
-    known = {(q, t): float(s) for q, t, s in rows}
+    known = {(q, t): float(s) for q, t, s in rows if s == s}  # a cached NaN is a miss, never a score
     scores: list[float | None] = [known.get(k) for k in keys]
     miss_idx = [i for i, s in enumerate(scores) if s is None]
     CACHE_STATS["hits"] += len(pairs) - len(miss_idx)
@@ -165,12 +165,13 @@ def score_pairs(model, pairs: list[tuple[str, str]], conn=None) -> list[float]:
             # One statement for the whole batch (unnest), not one per row:
             # ~500 misses per question would otherwise be ~500 round trips —
             # the cold pass measured +2.7 s/question with executemany.
+            keep = [(i, s) for i, s in zip(miss_idx, fresh, strict=True) if s == s]  # NaN is never cached
             with conn.transaction():
                 conn.execute(
                     "INSERT INTO rerank_scores (model, query_hash, text_hash, score) "
                     "SELECT %s, q, t, s FROM unnest(%s::text[], %s::text[], %s::real[]) AS u(q, t, s) "
                     "ON CONFLICT DO NOTHING",
-                    (mk, [keys[i][0] for i in miss_idx], [keys[i][1] for i in miss_idx], fresh),
+                    (mk, [keys[i][0] for i, _ in keep], [keys[i][1] for i, _ in keep], [s for _, s in keep]),
                 )
         except Exception:
             pass  # a cache write failure never fails a query
@@ -196,22 +197,53 @@ class _Qwen3Reranker:
 
         self.torch = torch
         self.tok = AutoTokenizer.from_pretrained(name, padding_side="left", local_files_only=True)
-        self.model = AutoModelForCausalLM.from_pretrained(name, local_files_only=True).eval()
         self.device = "mps" if torch.backends.mps.is_available() else "cpu"
+        # bf16 on the GPU (the VM already runs the shipped reranker in bf16, verified
+        # verdict-for-verdict on run 623); fp32 on CPU. The same scorer is measured and shipped.
+        dtype = torch.bfloat16 if self.device == "mps" else torch.float32
+        self.model = AutoModelForCausalLM.from_pretrained(name, local_files_only=True, dtype=dtype).eval()
         self.model.to(self.device)
         self.yes, self.no = self.tok.convert_tokens_to_ids("yes"), self.tok.convert_tokens_to_ids("no")
 
-    def predict(self, pairs, batch_size: int = 8):
-        out = []
-        for i in range(0, len(pairs), batch_size):
-            batch = [self._PREFIX + f"<Instruct>: {self._INSTRUCT}\n<Query>: {q}\n<Document>: {d}" + self._SUFFIX
-                     for q, d in pairs[i:i + batch_size]]
-            enc = self.tok(batch, padding=True, truncation=True, max_length=2048, return_tensors="pt").to(self.device)
-            with self.torch.no_grad():
-                logits = self.model(**enc).logits[:, -1, :]
-                two = self.torch.stack([logits[:, self.no], logits[:, self.yes]], dim=1)
-                out += self.torch.nn.functional.log_softmax(two, dim=1)[:, 1].exp().tolist()
-        return out
+    # The longest chunk in the corpus is ~480 tokens and the prompt ~145 (measured
+    # 2026-09-15), so 1024 truncates nothing; batches are length-sorted so padding
+    # is minimal — each pair's score does not depend on what it was batched with.
+    MAX_LEN = 1024
+
+    def predict(self, pairs, batch_size: int = 16):
+        texts = [self._PREFIX + f"<Instruct>: {self._INSTRUCT}\n<Query>: {q}\n<Document>: {d}" + self._SUFFIX
+                 for q, d in pairs]
+        order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
+        scores = [0.0] * len(texts)
+        for i in range(0, len(order), batch_size):
+            idx = order[i:i + batch_size]
+            enc = self.tok([texts[j] for j in idx], padding=True, truncation=True, max_length=self.MAX_LEN,
+                           return_tensors="pt").to(self.device)
+            probs = self._probs(self.model, enc)
+            if any(s != s for s in probs):  # bf16 on the GPU overflows on some inputs: rescore those in fp32
+                bad = [k for k, s in enumerate(probs) if s != s]
+                enc32 = self.tok([texts[idx[k]] for k in bad], padding=True, truncation=True, max_length=self.MAX_LEN,
+                                 return_tensors="pt").to(self.device)
+                for k, s in zip(bad, self._probs(self._fp32(), enc32), strict=True):
+                    probs[k] = s
+            for j, s in zip(idx, probs, strict=True):
+                scores[j] = float(s)
+        return scores
+
+    def _probs(self, model, enc) -> list[float]:
+        with self.torch.no_grad():
+            logits = model(**enc).logits[:, -1, :].float()
+            two = self.torch.stack([logits[:, self.no], logits[:, self.yes]], dim=1)
+            return self.torch.nn.functional.log_softmax(two, dim=1)[:, 1].exp().tolist()
+
+    def _fp32(self):
+        """A full-precision copy, loaded on the first NaN and kept."""
+        if getattr(self, "_model32", None) is None:
+            from transformers import AutoModelForCausalLM
+
+            self._model32 = AutoModelForCausalLM.from_pretrained(
+                self.model.config._name_or_path, local_files_only=True, dtype=self.torch.float32).eval().to(self.device)
+        return self._model32
 
 
 def load_reranker(key: str):

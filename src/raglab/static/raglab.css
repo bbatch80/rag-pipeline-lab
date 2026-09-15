@@ -53,6 +53,15 @@ body > main.container { padding-top: 1.4rem; }
 .door::before { content: ""; position: absolute; left: 0; top: .9rem; bottom: .9rem; width: 3px; background: var(--gold); border-radius: 0 2px 2px 0; opacity: 0; transition: opacity .15s ease; }
 .door:hover::before, .door:focus-visible::before { opacity: 1; }
 .door:hover, .door:focus { text-decoration: none; background: var(--card); }
+.door { --door-accent: var(--steel); }
+.door-ask { --door-accent: var(--gold); }
+.door-agent_assist { --door-accent: var(--steel); }
+.door-appeals_workbench { --door-accent: #6b4b8a; }
+.door-analyst_view { --door-accent: #1d7a87; }
+.door-console { --door-accent: var(--navy); }
+.door::before { background: var(--door-accent); }
+.door .icon { display: inline-flex; width: 1.7rem; height: 1.7rem; color: var(--door-accent); margin-bottom: .35rem; }
+.door .icon svg { width: 100%; height: 100%; }
 .door .eyebrow { display: block; font-size: .7rem; letter-spacing: .08em; text-transform: uppercase; color: var(--steel); font-weight: 600; }
 .door h3 { margin: .15rem 0 .35rem; }
 .door p { margin: 0; color: var(--muted); font-size: .9rem; }

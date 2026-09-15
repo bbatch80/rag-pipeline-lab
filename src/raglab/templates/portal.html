@@ -3,8 +3,16 @@
 {% block content %}
 <div class="portal-head"><h2>AI App Dashboard</h2></div>
 <div class="doors tiles">
+  {% set icons = {
+    "ask": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M9.5 9.2a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.7-.9 1.3"/><circle cx="12" cy="14.6" r=".6" fill="currentColor" stroke="none"/></svg>',
+    "agent_assist": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13a8 8 0 0 1 16 0"/><rect x="3" y="12" width="4" height="6" rx="1.5"/><rect x="17" y="12" width="4" height="6" rx="1.5"/><path d="M19 18a3 3 0 0 1-3 3h-3"/></svg>',
+    "appeals_workbench": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20h9"/><path d="M8.5 4.5l6 6"/><path d="M6.5 6.5l6 6"/><path d="M11 8l8 8"/><path d="M12 7l-3 3"/></svg>',
+    "analyst_view": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16"/><rect x="6" y="11" width="3" height="6" rx=".6"/><rect x="11" y="6" width="3" height="11" rx=".6"/><rect x="16" y="9" width="3" height="8" rx=".6"/></svg>',
+    "console": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>'
+  } %}
   {% for surface in surface_titles if surface in me.surfaces %}
-  <a href="/{{ surface }}" class="tile door">
+  <a href="/{{ surface }}" class="tile door door-{{ surface }}">
+    <span class="icon" aria-hidden="true">{{ icons[surface] | safe }}</span>
     <h3>{{ surface_titles[surface] }}</h3>
     <p>{{ surface_blurbs[surface] }}</p>
   </a>

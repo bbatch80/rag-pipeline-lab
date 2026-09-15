@@ -311,7 +311,7 @@ FUSED_LIMIT = int(os.environ.get("RAGLAB_FUSED_LIMIT", "50"))
 # FULL pool; the reranker's work grows with the number of readings, bounded
 # by this cap on the merged pool. When the cap trims, the payload says so.
 MAX_CANDIDATES = int(os.environ.get("RAGLAB_MAX_CANDIDATES", "600"))
-EF_SEARCH = 40  # Phase 2 benchmark operating point
+EF_SEARCH = int(os.environ.get("RAGLAB_EF_SEARCH", "40"))  # Phase 2 benchmark operating point; env override for measurement
 
 
 @dataclass

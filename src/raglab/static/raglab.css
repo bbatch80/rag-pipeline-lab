@@ -129,7 +129,8 @@ h2.sec small { display: block; font-weight: 400; letter-spacing: 0; text-transfo
 .payloadfoot code { font-family: var(--mono); font-size: .74rem; color: var(--steel); background: none; padding: 0; }
 
 /* ---- console ---- */
-.cards article { padding: .75rem 1rem; margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 8px; box-shadow: none; }
+.cards article { padding: .75rem 1rem; margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 8px; box-shadow: none; overflow-wrap: anywhere; }
+.auditrows td.docs .more { color: var(--steel); white-space: nowrap; }
 .cards article header { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: var(--steel); font-weight: 600; padding: 0; margin-bottom: .3rem; background: none; border: 0; }
 .cards ul { margin: 0; padding-left: 1rem; }
 .auditform { align-items: end; }

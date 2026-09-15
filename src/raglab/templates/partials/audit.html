@@ -6,7 +6,8 @@
   <tbody>{% for r in audit.rows %}<tr>
     <td>{{ r.asked_at[:16].replace("T", " ") }}</td><td>{{ r.username or "—" }}</td><td>{{ r.persona }}</td><td>{{ r.source }}</td>
     <td>{{ r.payload_status }}</td><td class="q">{{ r.query }}</td>
-    <td class="docs">{{ r.doc_titles | join("; ") }}</td><td>{{ r.acl_basis | join(",") }}</td>
+    {% set titles = r.doc_titles | unique | list %}
+    <td class="docs">{{ titles[:3] | join("; ") }}{% if titles | length > 3 %} <span class="more">+{{ titles | length - 3 }} more</span>{% endif %}</td><td>{{ r.acl_basis | join(",") }}</td>
     <td><a href="/console/payload/{{ r.payload_id }}"><code>{{ r.payload_id[:8] }}</code></a></td>
   </tr>{% endfor %}</tbody>
 </table></div>

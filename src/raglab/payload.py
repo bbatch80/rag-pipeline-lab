@@ -106,6 +106,10 @@ def compose(
     legs = {r["leg"]: r for r in sub_results + warehouse_results}
     missing = [name for name, leg in plan_legs(plan).items()
                if leg.get("required", True) and legs.get(name, {}).get("status") != "ok"]
+    # Released (best-effort) legs never make an EMPTY payload read ok: if no leg answered, nothing did.
+    answered = any(r.get("status") == "ok" for r in legs.values())
+    if not missing and not answered and plan_legs(plan):
+        missing = [name for name in plan_legs(plan) if legs.get(name, {}).get("status") != "ok"]
     confidences = [r.get("confidence") for r in sub_results if r.get("confidence") is not None]
     return {
         "spec_version": SPEC_VERSION,

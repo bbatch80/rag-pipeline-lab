@@ -65,7 +65,7 @@ def compose_context(question: str, member_id: str | None = None, module: str | N
     platform decides the legs (document probes over the governed corpus,
     named warehouse queries from the catalog — at most three, one pass),
     runs every leg as your session identity, and returns one composed
-    payload (spec 1.1.0) under one payload id.
+    payload (spec 1.2.0) under one payload id.
 
     Use this for a question you have not already split yourself. Use
     `search_documents` / `query_member_data` when you know the exact leg.
@@ -102,7 +102,7 @@ def search_documents(query: str, member_id: str | None = None) -> dict:
     about one member (call notes) are searched only with a member context
     and only for that member; without it they are not searched.
 
-    Returns a context payload (spec 1.1.0, single probe): status (ok |
+    Returns a context payload (spec 1.2.0, single probe): status (ok |
     insufficient_evidence | out_of_scope), confidence, and provenance-rich
     chunks. For a question that spans sources use `compose_context`.
     HONOR THE STATUS: on insufficient_evidence say you cannot answer

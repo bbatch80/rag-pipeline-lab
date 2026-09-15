@@ -199,15 +199,21 @@ def ingest_document(
     from raglab import indexcopy
 
     source = sources.load(conn).for_doc_type(meta.doc_type)
-    digest = content_hash(
-        pdf_path, processing_recipe(backend.name, source.phi, indexcopy.is_normalized(source), bool(meta.record))
-    )
+    recipe = processing_recipe(backend.name, source.phi, indexcopy.is_normalized(source), bool(meta.record))
+    digest = content_hash(pdf_path, recipe)
 
     row = conn.execute(
         "SELECT id, content_hash FROM documents WHERE source_path = %s",
         (source_path,),
     ).fetchone()
     if row is not None and row[1] == digest:
+        # Provenance: a matching fingerprint proves THIS recipe produced the
+        # stored document, so it is recorded without re-ingesting (metadata-
+        # only backfill on the skip path).
+        conn.execute(
+            "UPDATE documents SET recipe = %s WHERE id = %s AND recipe IS DISTINCT FROM %s",
+            (recipe, row[0], recipe),
+        )
         if meta.member_key:  # backfill the person key without re-ingesting
             conn.execute(
                 "UPDATE documents SET member_key = %s WHERE id = %s AND member_key IS DISTINCT FROM %s",
@@ -283,10 +289,10 @@ def ingest_document(
         conn.execute("DELETE FROM documents WHERE id = %s", (row[0],))
     doc_id = conn.execute(
         """
-        INSERT INTO documents (source_path, title, content_hash, acl_tag, source_id, member_key)
-        VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+        INSERT INTO documents (source_path, title, content_hash, acl_tag, source_id, member_key, recipe)
+        VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
         """,
-        (source_path, meta.title, digest, meta.acl_tag, source.source_id, meta.member_key),
+        (source_path, meta.title, digest, meta.acl_tag, source.source_id, meta.member_key, recipe),
     ).fetchone()[0]
 
     # Record sources: a whole-document near-duplicate points at its original

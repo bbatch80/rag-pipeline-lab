@@ -13,18 +13,20 @@
  "properties": {
   "spec_version": {
    "type": "string",
-   "pattern": "^1\\.[01]\\.0$",
-   "description": "1.0.0 (single probe) or 1.1.0 (adds doc_type on sources and the composed fields; all 1.0.0 fields unchanged)"
+   "pattern": "^1\\.[012]\\.0$",
+   "description": "1.0.0 (single probe), 1.1.0 (adds doc_type on sources and the composed fields), or 1.2.0 (adds provenance on every chunk); every earlier field unchanged"
   },
   "query": {
-   "type": "string"
+   "type": "string",
+   "description": "The question exactly as the caller asked it."
   },
   "status": {
    "enum": [
     "ok",
     "insufficient_evidence",
     "out_of_scope"
-   ]
+   ],
+   "description": "Decided upstream, never by the consumer: ok = evidence served; insufficient_evidence = the corpus could not support an answer (say so); out_of_scope = outside the corpus's domain (relay boundary_response)."
   },
   "confidence": {
    "type": "number",
@@ -38,7 +40,8 @@
   },
   "retrieved_at": {
    "type": "string",
-   "format": "date-time"
+   "format": "date-time",
+   "description": "UTC timestamp of the retrieval, ISO 8601."
   },
   "router": {
    "type": "object",
@@ -51,15 +54,18 @@
      "type": "array",
      "items": {
       "type": "integer"
-     }
+     },
+     "description": "Plan years searched (an event source is exempt from the year filter)."
     },
     "plan_codes": {
      "type": "array",
      "items": {
       "type": "string"
-     }
+     },
+     "description": "Plan codes searched; empty = every plan the caller may see."
     }
-   }
+   },
+   "description": "What the platform actually searched — the routed plan years and plan codes, the as-of date for versioned sources, and whether the plan came from the member's enrollment — never what a model guessed."
   },
   "chunks": {
    "type": "array",
@@ -73,7 +79,8 @@
     ],
     "properties": {
      "text": {
-      "type": "string"
+      "type": "string",
+      "description": "The chunk as delivered: the document text with its context prefix; PHI already pseudonymized at ingest."
      },
      "source": {
       "type": "object",
@@ -87,28 +94,34 @@
       ],
       "properties": {
        "title": {
-        "type": "string"
+        "type": "string",
+        "description": "Document title (cite this)."
        },
        "path": {
-        "type": "string"
+        "type": "string",
+        "description": "Source file path relative to the corpus root."
        },
        "plan_code": {
         "type": [
          "string",
          "null"
-        ]
+        ],
+        "description": "Plan code the document belongs to; null for documents that are not plan-specific."
        },
        "year": {
-        "type": "integer"
+        "type": "integer",
+        "description": "Plan year of the document (issue year for event sources)."
        },
        "pages": {
         "type": "array",
         "items": {
          "type": "integer"
-        }
+        },
+        "description": "Page numbers the chunk spans (cite these)."
        },
        "section": {
-        "type": "string"
+        "type": "string",
+        "description": "Section heading the chunk sits under."
        },
        "content_hash": {
         "type": "string",
@@ -122,7 +135,38 @@
         "type": [
          "string",
          "null"
-        ]
+        ],
+        "description": "Source type from the registry: brochure, carrier_letter, clinical_policy, bulletin, sop, formulary, kb, rates, call_note, appeal, clinical_note."
+       }
+      },
+      "description": "Where the text came from: enough to cite it and to identify the exact document version."
+     },
+     "provenance": {
+      "type": "object",
+      "description": "Reproducibility facts (spec 1.2.0): the document version label read from governed metadata, the processing recipe that produced the document, and the model that embedded the chunk. null recipe/model = ingested before provenance was recorded.",
+      "required": [
+       "document_version",
+       "recipe",
+       "embedding_model"
+      ],
+      "properties": {
+       "document_version": {
+        "type": "string",
+        "description": "A version label read from governed metadata (policy version and effective date, letter or bulletin id, plan year, record date, or the plan-year edition) — what a person says out loud; content_hash is the exact identity."
+       },
+       "recipe": {
+        "type": [
+         "string",
+         "null"
+        ],
+        "description": "The processing recipe that produced the document: parser, chunk limits, contextual mode, de-identification mode and version, search-copy dictionary. Compare with the current corpus before re-running anything."
+       },
+       "embedding_model": {
+        "type": [
+         "string",
+         "null"
+        ],
+        "description": "The model that embedded this chunk; a query must be embedded by the same model to be comparable."
        }
       }
      },
@@ -144,31 +188,38 @@
       ],
       "properties": {
        "rrf": {
-        "type": "number"
+        "type": "number",
+        "description": "Reciprocal-rank-fusion score from the hybrid (vector + lexical) search."
        },
        "rerank": {
-        "type": "number"
+        "type": "number",
+        "description": "Cross-encoder reranker score, 0–1; the abstention threshold is applied to the best of these."
        }
-      }
+      },
+      "description": "Per-stage ranking scores; informational."
      }
     }
-   }
+   },
+   "description": "The evidence, ranked by the reranker; each entry is a self-contained citation unit."
   },
   "payload_id": {
    "type": "string",
    "description": "UUID; joins to the disclosure log."
   },
   "persona": {
-   "type": "string"
+   "type": "string",
+   "description": "The document-lane persona the retrieval ran as (the row-level-security role)."
   },
   "member_context": {
    "type": [
     "string",
     "null"
-   ]
+   ],
+   "description": "The member key the retrieval was scoped to, when a member context was supplied; null otherwise."
   },
   "record_context": {
-   "type": "object"
+   "type": "object",
+   "description": "The record fields bound from identifiers in the question or the surface (case id, claim id, policy id): filters, never search words."
   },
   "unresolved_identifiers": {
    "type": "array",
@@ -180,10 +231,12 @@
     ],
     "properties": {
      "kind": {
-      "type": "string"
+      "type": "string",
+      "description": "Identifier kind: member_id, mrn, claim_id, case_id, policy_id, bulletin_id."
      },
      "value": {
-      "type": "string"
+      "type": "string",
+      "description": "The identifier as typed."
      }
     }
    },
@@ -212,23 +265,27 @@
      "enum": [
       "simple",
       "compound"
-     ]
+     ],
+     "description": "simple = one document probe; compound = several legs composed under one status."
     },
     "origin": {
      "enum": [
       "rules",
       "caller",
       "model"
-     ]
+     ],
+     "description": "Who produced the plan: rules (the platform's structural rules), caller (the surface supplied it), model (the planner model proposed it and the platform validated it)."
     },
     "widened": {
-     "type": "boolean"
+     "type": "boolean",
+     "description": "True when the platform widened the plan beyond what was proposed (e.g. a document leg added to a warehouse-only question)."
     },
     "model": {
      "type": [
       "string",
       "null"
-     ]
+     ],
+     "description": "The planner model used, or null when no model call was made."
     },
     "legs": {
      "type": "array",
@@ -243,45 +300,54 @@
       ],
       "properties": {
        "name": {
-        "type": "string"
+        "type": "string",
+        "description": "Leg name; sub_results and warehouse_results refer to it."
        },
        "kind": {
         "enum": [
          "doc_probe",
          "member_query"
-        ]
+        ],
+        "description": "doc_probe = a search over the governed document corpus; member_query = a named warehouse query."
        },
        "text": {
         "type": [
          "string",
          "null"
-        ]
+        ],
+        "description": "For a document leg: the search text the platform ran (identifiers resolved, not searched)."
        },
        "sources": {
         "type": "array",
         "items": {
          "type": "string"
-        }
+        },
+        "description": "For a document leg: the source types it was narrowed to; empty = every source the caller may see."
        },
        "query_name": {
         "type": [
          "string",
          "null"
-        ]
+        ],
+        "description": "For a warehouse leg: the named query from the catalog."
        },
        "slots": {
         "type": "array",
         "items": {
          "type": "string"
-        }
+        },
+        "description": "For a warehouse leg: the parameters the platform bound (member_id, claim_id, case_id …)."
        },
        "required": {
-        "type": "boolean"
+        "type": "boolean",
+        "description": "True = this leg must return evidence for the payload to be ok; false = best-effort."
        }
       }
-     }
+     },
+     "description": "The legs, in the order they ran."
     }
-   }
+   },
+   "description": "What the platform decided to look at for this question: the shape, who decided, and the legs it ran (at most three, one pass, no chaining)."
   },
   "sub_results": {
    "type": "array",
@@ -293,7 +359,8 @@
     ],
     "properties": {
      "leg": {
-      "type": "string"
+      "type": "string",
+      "description": "The leg name from plan.legs."
      },
      "status": {
       "enum": [
@@ -301,34 +368,41 @@
        "insufficient_evidence",
        "out_of_scope",
        "not_executed"
-      ]
+      ],
+      "description": "The leg's own status; not_executed = the platform could not run it (no member context, no entitlement)."
      },
      "confidence": {
       "type": [
        "number",
        "null"
-      ]
+      ],
+      "description": "Best reranker score for this leg."
      },
      "reason": {
       "type": [
        "string",
        "null"
-      ]
+      ],
+      "description": "Why a leg did not return evidence, in words."
      },
      "router": {
-      "type": "object"
+      "type": "object",
+      "description": "The route this leg searched (years, plan_codes, as_of)."
      },
      "chunk_indexes": {
       "type": "array",
       "items": {
        "type": "integer"
-      }
+      },
+      "description": "Indexes into chunks[] that this leg contributed."
      },
      "widened": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "True when the leg's route was widened (e.g. every version of a policy for a change question)."
      }
     }
-   }
+   },
+   "description": "One entry per document leg: what it returned."
   },
   "warehouse_results": {
    "type": "array",
@@ -340,7 +414,8 @@
     ],
     "properties": {
      "leg": {
-      "type": "string"
+      "type": "string",
+      "description": "The leg name from plan.legs."
      },
      "status": {
       "enum": [
@@ -348,37 +423,45 @@
        "insufficient_evidence",
        "not_executed",
        "unknown_query"
-      ]
+      ],
+      "description": "ok = rows returned; insufficient_evidence = no rows; not_executed = the leg could not run (no warehouse identity, no bound parameter); unknown_query = not in the catalog."
      },
      "query_name": {
       "type": [
        "string",
        "null"
-      ]
+      ],
+      "description": "The named query that ran."
      },
      "reason": {
       "type": [
        "string",
        "null"
-      ]
+      ],
+      "description": "Why the leg returned nothing, in words."
      },
      "columns": {
-      "type": "array"
+      "type": "array",
+      "description": "Column names, in order."
      },
      "rows": {
-      "type": "array"
+      "type": "array",
+      "description": "Rows as arrays aligned to columns; values in masked_columns are policy-masked, not absent."
      },
      "row_count": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Number of rows returned."
      },
      "masked_columns": {
       "type": "array",
       "items": {
        "type": "string"
-      }
+      },
+      "description": "Columns the warehouse masked for this role — report them as 'not visible to your role'; a null elsewhere is genuinely absent data."
      }
     }
-   }
+   },
+   "description": "One entry per warehouse leg: the rows the named query returned as the caller's warehouse role."
   },
   "missing": {
    "type": "array",
@@ -402,31 +485,36 @@
    ],
    "properties": {
     "field": {
-     "type": "string"
+     "type": "string",
+     "description": "The metadata level the rule expanded (e.g. plan_code)."
     },
     "asked": {
      "type": [
       "string",
       "null"
-     ]
+     ],
+     "description": "The level the question named (e.g. the program)."
     },
     "keys": {
      "type": "array",
      "items": {
       "type": "string"
-     }
+     },
+     "description": "Every key beneath that was searched."
     },
     "in_corpus": {
      "type": "array",
      "items": {
       "type": "string"
-     }
+     },
+     "description": "Keys the corpus holds documents for."
     },
     "with_evidence": {
      "type": "array",
      "items": {
       "type": "string"
-     }
+     },
+     "description": "Keys that contributed evidence to this payload."
     },
     "missing_from_corpus": {
      "type": "array",
@@ -446,7 +534,8 @@
        "null"
       ],
       "description": "which level the question named: program (plans beneath covered) or option (programs above covered)"
-     }
+     },
+     "description": "Keys the registry declares but the corpus lacks — the consumer should say these were not covered."
     }
    },
    "description": "The coverage rule fired: the question named a level (e.g. a program) but not the level beneath (its plans); every key beneath was searched — which have evidence here, which the corpus lacks"
@@ -456,16 +545,20 @@
    "description": "How much searching the question needed: readings = sub-searches run (one per covered plan, routed year, or policy version); candidates = the merged pool the reranker scored; trimmed = candidates cut by the cap. More ambiguity means more readings and more time.",
    "properties": {
     "readings": {
-     "type": "integer"
+     "type": "integer",
+     "description": "Sub-searches run: one per covered plan, routed year, or policy version."
     },
     "candidates": {
-     "type": "integer"
+     "type": "integer",
+     "description": "Size of the merged candidate pool the reranker scored."
     },
     "trimmed": {
-     "type": "integer"
+     "type": "integer",
+     "description": "Candidates cut by the cap before reranking."
     },
     "cap": {
-     "type": "integer"
+     "type": "integer",
+     "description": "The candidate cap in force."
     }
    }
   }

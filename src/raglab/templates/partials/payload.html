@@ -41,6 +41,7 @@
       <span class="chip chip-acl" title="the entitlement that admitted this chunk">{{ c.acl_basis }}</span>
       {% if c.scores and c.scores.rerank is not none %}<span class="score num">{{ "%.2f" | format(c.scores.rerank) }}</span>{% endif %}
     </summary>
+    <p class="provenance">{% if c.provenance %}<span>doc <b>{{ c.provenance.document_version }}</b></span><span class="hash" title="content hash: source bytes + processing recipe">{{ c.source.content_hash[:8] }}</span><span>parsed <b>{{ c.provenance.recipe or "not recorded" }}</b></span><span>embedded <b>{{ c.provenance.embedding_model or "not recorded" }}</b></span><span>visible to <b>{{ c.acl_basis }}</b></span>{% else %}<span class="hash" title="content hash: source bytes + processing recipe">{{ c.source.content_hash[:8] }}</span><span>provenance not recorded (logged before payload spec 1.2)</span>{% endif %}</p>
     <pre class="chunktext">{{ c.text }}</pre>
   </details>
   {% endfor %}

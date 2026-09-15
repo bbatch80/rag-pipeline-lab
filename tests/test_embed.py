@@ -62,6 +62,10 @@ def test_embed_selects_only_null_and_resumes(db):
     sent = [text for batch in client.batches for text in batch]
     assert len(sent) == 5, "pre-embedded chunks must never be re-sent"
 
+    models = db.execute(
+        "SELECT embedding_model, count(*) FROM chunks GROUP BY 1 ORDER BY 1 NULLS LAST"
+    ).fetchall()
+    assert models == [("text-embedding-3-small", 5), (None, 2)], "the model is recorded on what THIS run embedded"
     remaining = db.execute(
         "SELECT count(*) FROM chunks WHERE embedding IS NULL"
     ).fetchone()[0]

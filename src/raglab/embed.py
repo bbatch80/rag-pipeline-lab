@@ -48,8 +48,8 @@ def embed_pending(
         )
         for (chunk_id, _), item in zip(rows, response.data, strict=True):
             conn.execute(
-                "UPDATE chunks SET embedding = %s::vector WHERE id = %s",
-                (_to_vector_literal(item.embedding), chunk_id),
+                "UPDATE chunks SET embedding = %s::vector, embedding_model = %s WHERE id = %s",
+                (_to_vector_literal(item.embedding), model, chunk_id),
             )
         conn.commit()  # per-batch commit: interruption loses at most one batch
         stats.embedded += len(rows)

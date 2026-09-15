@@ -70,7 +70,7 @@ def caller_for(ident: identity.Identity) -> planner.Caller:
 def compose(conn: psycopg.Connection, ident: identity.Identity, question: str, *,
             member_id: str | None = None, case_id: str | None = None, module: str | None = None, source: str,
             warehouse: Warehouse | None = None) -> dict:
-    """One question that may span sources → one composed payload (spec 1.1.0)
+    """One question that may span sources → one composed payload (spec 1.2.0)
     under one payload id, every leg run as the identity. `member_id` and
     `case_id` are the surface's context: the member or the case it has open."""
     sf_connect = warehouse.session if warehouse is not None else None

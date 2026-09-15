@@ -7,7 +7,7 @@ work category decide only where the result reports. Each check returns
 `(metric, value, detail)`; the metric is `check_<field>` so a verdict names
 the check that failed, not a bare 0.
 
-The payload is the composed dict from `planner.compose` (spec 1.1.0):
+The payload is the composed dict from `planner.compose` (spec 1.2.0):
 `chunks` (text + source), `warehouse_results` (rows per named-query leg),
 `plan` (the legs that ran), `router` (years, plan codes, as-of), `coverage`
 (the plan-coverage note), `status`, `unresolved_identifiers`.

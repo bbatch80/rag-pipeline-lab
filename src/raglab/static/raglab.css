@@ -113,6 +113,9 @@ h2.sec small { display: block; font-weight: 400; letter-spacing: 0; text-transfo
 .evidence summary .title { font-weight: 600; margin-right: .25rem; }
 .evidence summary .score { margin-left: auto; color: var(--muted); font-size: .8rem; }
 .chunktext { white-space: pre-wrap; font-size: .84rem; line-height: 1.45; margin: .5rem 0 0 1.8rem; padding: .55rem .75rem; background: var(--code); border-radius: 4px; color: var(--ink); }
+.provenance { display: flex; flex-wrap: wrap; gap: .25rem .9rem; margin: .4rem 0 0 1.8rem; font-size: .74rem; color: var(--muted); line-height: 1.5; }
+.provenance b { font-weight: 500; color: var(--steel); }
+.provenance .hash { font-family: var(--pico-font-family-monospace, monospace); }
 
 .chip { display: inline-block; font-size: .7rem; padding: .08rem .5rem; border-radius: 1rem; background: var(--code); color: var(--steel); white-space: nowrap; line-height: 1.4; }
 .chip-muted { background: var(--code); color: var(--muted); }
@@ -161,4 +164,23 @@ iframe.dashboard { width: 100%; height: 70vh; border: 1px solid var(--line); bor
   .topbar nav { flex-wrap: wrap; }
   .topbar .who { text-align: left; }
   .chunktext { margin-left: 0; }
+  .provenance { margin-left: 0; }
 }
+
+/* hand-off specification page */
+.handoff { max-width: 72rem; }
+.handoff h2 { font-size: 1.25rem; margin-top: 2rem; }
+.handoff h3 { font-size: 1.05rem; margin-top: 1.4rem; }
+.handoff p, .handoff li { max-width: 68ch; }
+.handoff table.fields { font-size: .82rem; table-layout: fixed; width: 100%; }
+.handoff table.payload th:nth-child(1) { width: 27%; } .handoff table.payload th:nth-child(2) { width: 15%; } .handoff table.payload th:nth-child(3) { width: 7%; }
+.handoff table.fields td { overflow-wrap: anywhere; }
+.handoff table.fields td, .handoff table.fields th { padding: .3rem .5rem; vertical-align: top; }
+.handoff table.fields td.type { color: var(--steel); }
+.handoff table.fields td.req { color: var(--muted); }
+.handoff table.fields tr.d1 td:first-child { padding-left: 1.4rem; }
+.handoff table.fields tr.d2 td:first-child { padding-left: 2.6rem; }
+.handoff table.fields tr.d3 td:first-child { padding-left: 3.8rem; }
+.handoff .tool header { padding: .4rem .8rem; }
+.handoff .tool pre.doc { white-space: pre-wrap; font-size: .8rem; line-height: 1.45; margin: 0; padding: .6rem .8rem; background: var(--code); color: var(--ink); }
+.handoff details.example summary { cursor: pointer; font-weight: 600; }

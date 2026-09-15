@@ -73,12 +73,44 @@ def test_composed_payload_validates_and_is_worst_of_required():
     chunk = payload.build("q", IN_SCOPE, [_candidate(0.9)])["chunks"][0]
     composed = payload.compose("q", plan, [docs_ok], [adj_missing], [chunk], subject="M344317862", unresolved=[], as_of_defaulted=False)
     jsonschema.validate(composed, SCHEMA)
-    assert composed["spec_version"] == "1.1.0" and composed["status"] == "insufficient_evidence" and composed["missing"] == ["adj"]
+    assert composed["spec_version"] == "1.2.0" and composed["status"] == "insufficient_evidence" and composed["missing"] == ["adj"]
     adj_ok = {**adj_missing, "status": "ok", "reason": None, "columns": ["CLAIM_ID"], "rows": [["CLM-1"]], "row_count": 1, "masked_columns": []}
     composed = payload.compose("q", plan, [docs_ok], [adj_ok], [chunk], subject=None, unresolved=[{"kind": "member_id", "value": "M999900004"}], as_of_defaulted=True)
     jsonschema.validate(composed, SCHEMA)
     assert composed["status"] == "ok" and composed["missing"] == [] and composed["as_of_defaulted"] is True
     assert "partial" not in {composed["status"]}  # no partial status: derived by the surface, never declared
+
+
+def test_provenance_on_every_chunk():
+    c = _candidate(0.9)
+    c.recipe = "unstructured-hi_res|1600/900/200|template"
+    c.embedding_model = "text-embedding-3-small"
+    built = payload.build("q", IN_SCOPE, [c])
+    jsonschema.validate(built, SCHEMA)
+    prov = built["chunks"][0]["provenance"]
+    assert prov == {"document_version": "2026 edition", "recipe": c.recipe, "embedding_model": "text-embedding-3-small"}
+
+
+def test_provenance_never_guesses_when_unrecorded():
+    built = payload.build("q", IN_SCOPE, [_candidate(0.9)])  # no recipe, no model on the candidate
+    jsonschema.validate(built, SCHEMA)
+    prov = built["chunks"][0]["provenance"]
+    assert prov["recipe"] is None and prov["embedding_model"] is None
+
+
+@pytest.mark.parametrize("record,year,label", [
+    ({"version": 2, "effective_from": "2026-01-01", "status": "current"}, 2026, "v2 from 2026-01-01"),
+    ({"letter_id": "2023-01", "letter_date": "January 18, 2023"}, 2023, "letter 2023-01"),
+    ({"bulletin_id": "2024-001", "effective_from": "2024-01-08"}, 2024, "bulletin 2024-001"),
+    ({"formulary_year": 2025, "effective_from": "2025-01-01"}, 2025, "plan year 2025"),
+    ({"case_id": "APL-1", "filed_date": "2025-09-08", "decided_date": "2025-09-20"}, 2025, "decided date 2025-09-20"),
+    ({"call_id": "C1", "call_date": "2026-08-31"}, 2026, "call date 2026-08-31"),
+    ({}, 2026, "2026 edition"),
+])
+def test_document_version_reads_governed_metadata(record, year, label):
+    c = _candidate(0.9)
+    c.record, c.year = record, year
+    assert payload.document_version(c) == label
 
 
 def test_one_point_zero_shape_still_validates():

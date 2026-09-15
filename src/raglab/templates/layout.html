@@ -22,7 +22,7 @@
     </ul>
     <ul>
       {% if me %}
-      <li class="who"><strong>{{ me.display_name }}</strong>{% if me.warehouse_role %}<small>Snowflake Role: {{ me.warehouse_role }}</small>{% endif %}</li>
+      <li class="who"><strong>{{ me.display_name }}</strong>{% if me.warehouse_role %}<small>Snowflake Role: {{ me.warehouse_role }}</small>{% endif %}<small>Postgres Role: {{ "persona_" ~ me.persona if me.persona and me.persona != "admin" else "owner (unscoped)" }}</small></li>
       <li><form method="post" action="/ui/logout"><button class="out" type="submit">Log out</button></form></li>
       {% else %}
       <li><a href="/login">Log in</a></li>

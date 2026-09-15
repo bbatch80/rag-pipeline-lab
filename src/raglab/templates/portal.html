@@ -1,7 +1,7 @@
 {% extends "layout.html" %}
 {% block title %}Surfaces{% endblock %}
 {% block content %}
-<div class="portal-head"><h2>{{ me.display_name }}</h2><p>{{ group_descriptions[me.group] }} — the surfaces your role opens. Nothing is loaded until you ask.</p></div>
+<div class="portal-head"><h2>AI App Dashboard</h2></div>
 <div class="doors tiles">
   {% for surface in surface_titles if surface in me.surfaces %}
   <a href="/{{ surface }}" class="tile door">

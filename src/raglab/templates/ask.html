@@ -1,7 +1,7 @@
 {% extends "layout.html" %}
 {% block title %}Ask{% endblock %}
 {% block content %}
-<hgroup><h2>Ask</h2><p>Type a plain-language question about plans, benefits, or policies.</p></hgroup>
+<hgroup><h2>Ask</h2><p>Type a plain-language question about plans, benefits, premiums, clinical policies, OPM carrier letters, or internal guidance.</p></hgroup>
 <form hx-post="/ui/ask" hx-target="#result" hx-indicator="#busy" class="askbox">
   <input type="text" name="question" placeholder="e.g. What is the calendar year deductible for the High Option in 2026?" required autofocus>
   <button type="submit">Ask</button>

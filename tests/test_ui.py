@@ -303,7 +303,7 @@ def surfaces(db, monkeypatch):
 def test_agent_assist_loads_nothing_until_a_valid_known_member_is_typed(surfaces):
     rep = _session(surfaces, "member_services")
     page = rep.get("/agent_assist").text
-    assert "Nothing is loaded until you open a member" in page and "headerrow" not in page and FAKE_MEMBER not in page
+    assert "Enter a member ID to set the context" in page and "headerrow" not in page and FAKE_MEMBER not in page
     bad = rep.post("/ui/agent_assist/open", data={"member_id": "M12345"}).text
     assert "not a valid member id" in bad and "headerrow" not in bad
     nobody = rep.post("/ui/agent_assist/open", data={"member_id": UNKNOWN_MEMBER}).text
@@ -335,7 +335,7 @@ def test_rep_s_agent_assist_shows_no_clinical_text_and_the_care_manager_s_does(s
 
 def test_workbench_opens_a_case_and_starts_the_question_with_it(surfaces):
     analyst = _session(surfaces, "appeals")
-    assert "Nothing is loaded until you open a case" in analyst.get("/appeals_workbench").text
+    assert "Enter an appeal case ID to set the context" in analyst.get("/appeals_workbench").text
     assert "not a valid case id" in analyst.post("/ui/appeals_workbench/open", data={"case_id": "APL-000000"}).text
     assert "on record" in analyst.post("/ui/appeals_workbench/open", data={"case_id": identifiers.case_id(8)}).text
     opened = analyst.post("/ui/appeals_workbench/open", data={"case_id": KNOWN_CASE}).text

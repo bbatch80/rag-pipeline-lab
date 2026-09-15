@@ -37,7 +37,8 @@ SEED_USERS: dict[str, tuple[str, str]] = {
     "analyst":         ("Analyst / actuary",   "analytics"),
     "admin":           ("Platform admin",      "admin"),
 }
-RETIRED_USERS = ("rep.dana", "appeals.lee", "benefits.sam", "cm.priya", "actuary.jo")  # kept for the disclosure log's history; logins disabled
+# The named accounts the role logins replaced: their disclosure history is re-attributed to the role, then they are removed.
+RETIRED_TO = {"rep.dana": "member_services", "appeals.lee": "appeals", "benefits.sam": "benefits", "cm.priya": "care_team", "actuary.jo": "analyst"}
 DEMO_PASSWORD_ENV = "RAGLAB_DEMO_PASSWORD"  # one shared demo password (Phase 4 ruling: prototype-grade)
 
 
@@ -88,8 +89,15 @@ def seed(conn: psycopg.Connection, password: str | None = None) -> dict:
         ).fetchone()
         conn.execute("DELETE FROM user_groups WHERE user_id = %s", (row[0],))
         conn.execute("INSERT INTO user_groups (user_id, group_name) VALUES (%s, %s)", (row[0], group))
-    # Retired names stay as rows (the disclosure log points at them) but can no longer log in.
-    conn.execute("UPDATE users SET password_hash = 'disabled' WHERE username = ANY(%s)", (list(RETIRED_USERS),))
+    # A retired name's history moves to the role that replaced it; the row itself goes.
+    for old, new in RETIRED_TO.items():
+        old_row = conn.execute("SELECT id FROM users WHERE username = %s", (old,)).fetchone()
+        if not old_row:
+            continue
+        new_id = conn.execute("SELECT id FROM users WHERE username = %s", (new,)).fetchone()[0]
+        conn.execute("UPDATE disclosure_log SET user_id = %s WHERE user_id = %s", (new_id, old_row[0]))
+        conn.execute("DELETE FROM user_groups WHERE user_id = %s", (old_row[0],))
+        conn.execute("DELETE FROM users WHERE id = %s", (old_row[0],))
     return {"groups": len(GROUPS), "users": len(SEED_USERS)}
 
 

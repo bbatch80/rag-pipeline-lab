@@ -184,3 +184,35 @@ def test_smoke_gives_up_after_the_wait(monkeypatch):
     transport = httpx.MockTransport(lambda request: (_ for _ in ()).throw(httpx.ConnectError("refused")))
     with pytest.raises(RuntimeError, match="login page not up after 30s: ConnectError"):
         _run(transport, wait=30)
+
+
+def test_deploy_prunes_every_release_image_but_the_running_and_incoming_tags(tmp_path, monkeypatch):
+    """Fifteen 4.4 GB release images filled the host and a deploy failed
+    mid-pull (2026-09-15). Before pulling, `up` keeps only the tag being
+    deployed and the one running (the rollback target); the registry holds
+    the rest."""
+    import os
+    import shutil
+    import subprocess
+
+    root = tmp_path / "raglab"
+    (root / "deploy").mkdir(parents=True)
+    shutil.copy(ROOT / "deploy" / "deploy.sh", root / "deploy" / "deploy.sh")
+    (root / "deploy" / ".env").write_text("TAG=v2.0.14\n")
+    fake_bin = tmp_path / "bin"; fake_bin.mkdir()
+    log = tmp_path / "docker.log"
+    (fake_bin / "docker").write_text(f"""#!/bin/bash
+echo "$@" >> "{log}"
+case "$1 $2" in
+  "images --format") printf '%s\\n' ghcr.io/x/rag-pipeline-lab:v2.0.12 ghcr.io/x/rag-pipeline-lab:v2.0.13 ghcr.io/x/rag-pipeline-lab:v2.0.14 ghcr.io/x/rag-pipeline-lab-db:pg17 ;;
+esac
+exit 0
+""")
+    os.chmod(fake_bin / "docker", 0o755)
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"}
+    subprocess.run(["bash", str(root / "deploy" / "deploy.sh"), "up", "v2.0.15", "--no-pull"], check=True, env=env, capture_output=True)
+    calls = log.read_text().splitlines()
+    removed = [c.split()[-1] for c in calls if c.startswith("rmi")]
+    assert removed == ["ghcr.io/x/rag-pipeline-lab:v2.0.12", "ghcr.io/x/rag-pipeline-lab:v2.0.13"]   # v2.0.14 (running) and v2.0.15 (incoming) kept; the db image untouched
+    assert any(c.startswith("image prune") for c in calls)
+    assert (root / "deploy" / ".env").read_text().strip() == "TAG=v2.0.15" and (root / "deploy" / ".previous-tag").read_text().strip() == "v2.0.14"

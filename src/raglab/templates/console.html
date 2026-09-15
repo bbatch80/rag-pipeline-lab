@@ -17,10 +17,11 @@
   <label>persona <input name="persona" placeholder="member_services" autocomplete="off"></label>
   <label>document <input name="document" placeholder="title contains…" autocomplete="off"></label>
   <label>payload id <input name="payload_id" placeholder="uuid" autocomplete="off"></label>
+  <label>source <select name="source"><option value="web">people at a surface</option><option value="">every source</option><option value="eval">evaluation runs</option><option value="trace">traces</option></select></label>
   <button type="submit">Search</button>
 </form>
 <p id="auditing" class="htmx-indicator" aria-busy="true"></p>
-<section id="audit" hx-get="/ui/console/audit" hx-trigger="load"></section>
+<section id="audit" hx-get="/ui/console/audit?source=web" hx-trigger="load"></section>
 
 <h3>Evaluation scorecard</h3>
 <p class="note">The dashboard every full evaluation run rewrites: pass rate by question category and group against the baseline, payload health, latency, sources, de-identification. <a href="/console/dashboard" target="_blank">Open in its own tab</a>.</p>

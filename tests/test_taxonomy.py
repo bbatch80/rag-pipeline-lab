@@ -87,7 +87,8 @@ def test_dashboard_renders_both_axes(db, tmp_path):
         assert c.name in html
     for g in taxonomy.GROUPS.values():
         assert g.name in html
-    assert "Open defects" in html and "Real questions" in html
+    assert "Open defects" not in html and "Real questions" not in html and "Generation — cross-family" not in html  # v1-era sections dropped (2026-09-15)
+    assert "Progress by release" in html
 
 
 def test_coverage_note_separates_not_offered_from_missing(db):

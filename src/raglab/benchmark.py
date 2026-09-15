@@ -131,8 +131,11 @@ class TierRecall:
 
 def recall_under_rls(
     conn: psycopg.Connection, personas: tuple[str, ...], n_queries: int = 100,
-    k: int = 50, ef_search: int = 40, max_scan_tuples: int | None = None,
+    k: int = 50, ef_search: int | None = None, max_scan_tuples: int | None = None,
 ) -> list[TierRecall]:
+    from raglab import retrieval as _r  # the production operating point unless overridden
+    ef_search = _r.EF_SEARCH if ef_search is None else ef_search
+    max_scan_tuples = _r.MAX_SCAN_TUPLES if max_scan_tuples is None else max_scan_tuples
     total = conn.execute("SELECT count(*) FROM chunks WHERE embedding IS NOT NULL").fetchone()[0]
     queries = [
         row[0] for row in conn.execute(

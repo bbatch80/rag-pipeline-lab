@@ -311,7 +311,12 @@ FUSED_LIMIT = int(os.environ.get("RAGLAB_FUSED_LIMIT", "50"))
 # FULL pool; the reranker's work grows with the number of readings, bounded
 # by this cap on the merged pool. When the cap trims, the payload says so.
 MAX_CANDIDATES = int(os.environ.get("RAGLAB_MAX_CANDIDATES", "600"))
-EF_SEARCH = 40  # Phase 2 benchmark operating point
+# HNSW operating point. Phase 2 set ef_search=40 on 11k chunks; at 23.6k chunks a role that
+# sees half the rows recalled .93 of the exact scan at k=50 (min .22). Measured 2026-09-15 on
+# a fixed 100-query sample: width 200 with a 100k scan cap recovers 1.000 for every persona at
+# ~20 ms more per vector query — invisible beside the reranker.
+EF_SEARCH = int(os.environ.get("RAGLAB_EF_SEARCH", "200"))
+MAX_SCAN_TUPLES = int(os.environ.get("RAGLAB_MAX_SCAN_TUPLES", "100000"))
 
 
 @dataclass
@@ -460,6 +465,7 @@ def search(
     # visible rows (the post-filter starvation problem); iterative scan keeps
     # walking the graph until enough VISIBLE results are found.
     conn.execute("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
+    conn.execute("SELECT set_config('hnsw.max_scan_tuples', %s, true)", (str(MAX_SCAN_TUPLES),))
     if POOLS == "per_source":
         pool, seen_ids = [], set()
         for doc_type in lexical_sources:

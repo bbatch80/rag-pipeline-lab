@@ -33,3 +33,17 @@ def test_unknown_user_is_rejected_and_passwords_verify(db):
     h = identity.hash_password("pw")
     assert h.startswith("scrypt$") and identity.verify_password("pw", h) and not identity.verify_password("PW", h)
     assert identity.hash_password("pw") != h, "fresh salt per hash"
+
+
+def test_a_retired_named_account_is_re_attributed_to_its_role(db):
+    """Logins are roles, not people (2026-09-15): an old named account's
+    disclosure history moves to the role that replaced it and the account
+    goes, so no invented person appears anywhere on the site."""
+    identity.seed(db)
+    old = db.execute("INSERT INTO users (username, display_name, password_hash) VALUES ('rep.dana', 'Dana Okafor', 'x') RETURNING id").fetchone()[0]
+    db.execute("INSERT INTO disclosure_log (payload_id, persona, source, query, payload_status, chunk_ids, content_hashes, doc_titles, acl_basis, payload, user_id) "
+               "VALUES (gen_random_uuid(), 'member_services', 'web', 'q', 'ok', '{}', '{}', '{}', '{}', '{}'::jsonb, %s)", (old,))
+    identity.seed(db)
+    assert db.execute("SELECT count(*) FROM users WHERE username = 'rep.dana'").fetchone()[0] == 0
+    new_id = db.execute("SELECT id FROM users WHERE username = 'member_services'").fetchone()[0]
+    assert db.execute("SELECT user_id FROM disclosure_log WHERE query = 'q'").fetchone()[0] == new_id

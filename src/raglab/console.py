@@ -31,10 +31,15 @@ def _rows(cur) -> list[dict]:
 
 
 def audit(conn: psycopg.Connection, *, persona: str | None = None, username: str | None = None,
-          document: str | None = None, limit: int = 20) -> dict:
+          document: str | None = None, source: str | None = None, limit: int = 20) -> dict:
     """Disclosure rows, newest first, filtered by who asked (persona or
-    username) and/or which document was used (title substring)."""
+    username), which document was used (title substring), and where the
+    question came from (source: web = a person at a surface; eval, trace,
+    mcp… = the platform's own runs, which carry no login)."""
     clauses, params = [], []
+    if source:
+        clauses.append("d.source = %s")
+        params.append(source)
     if persona:
         clauses.append("d.persona = %s")
         params.append(persona)
@@ -48,7 +53,7 @@ def audit(conn: psycopg.Connection, *, persona: str | None = None, username: str
     rows = _rows(conn.execute(f"{_SELECT}{where} ORDER BY d.id DESC LIMIT %s", (*params, limit)))
     total, personas, users = conn.execute(
         "SELECT count(*), count(DISTINCT persona), count(DISTINCT user_id) FROM disclosure_log").fetchone()
-    return {"filters": {"persona": persona, "username": username, "document": document, "limit": limit},
+    return {"filters": {"persona": persona, "username": username, "document": document, "source": source, "limit": limit},
             "totals": {"disclosures": total, "personas": personas, "users": users},
             "rows": rows}
 

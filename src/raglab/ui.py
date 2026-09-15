@@ -159,7 +159,7 @@ def mount(app: FastAPI) -> None:
 
     @app.get("/login", response_class=HTMLResponse)
     def login_page(request: Request):
-        accounts = {u: f"{display} — {GROUP_DESCRIPTIONS[group]}" for u, (display, group) in identity.SEED_USERS.items()}
+        accounts = {u: display for u, (display, group) in identity.SEED_USERS.items()}
         return _page("login.html", request, me_or_none(request), accounts=accounts, error=None)
 
     @app.post("/ui/login")
@@ -167,7 +167,7 @@ def mount(app: FastAPI) -> None:
         with app.state.connect() as conn:
             ident = identity.authenticate(conn, username, password)
         if ident is None:
-            accounts = {u: f"{display} — {GROUP_DESCRIPTIONS[group]}" for u, (display, group) in identity.SEED_USERS.items()}
+            accounts = {u: display for u, (display, group) in identity.SEED_USERS.items()}
             return HTMLResponse(env.get_template("login.html").render(
                 me=None, request=request, accounts=accounts, error="Unknown user or wrong password."), status_code=401)
         request.session.clear()
@@ -281,12 +281,12 @@ def mount(app: FastAPI) -> None:
         return _page("console.html", request, _me(ident), current="console", status=status)
 
     @app.get("/ui/console/audit", response_class=HTMLResponse)
-    def console_audit(username: str = "", persona: str = "", document: str = "", payload_id: str = "",
+    def console_audit(username: str = "", persona: str = "", document: str = "", payload_id: str = "", source: str = "web",
                       ident: identity.Identity = Depends(require_surface("console"))):
         if payload_id.strip():
             return RedirectResponse(f"/console/payload/{payload_id.strip()}", status_code=303)
         with app.state.connect() as conn:
-            audit = console.audit(conn, username=username.strip() or None, persona=persona.strip() or None,
+            audit = console.audit(conn, username=username.strip() or None, persona=persona.strip() or None, source=source.strip() or None,
                                   document=document.strip() or None, limit=50)
         return HTMLResponse(env.get_template("partials/audit.html").render(audit=audit))
 

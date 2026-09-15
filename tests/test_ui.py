@@ -163,7 +163,7 @@ def test_portal_shows_the_granted_tiles_and_nothing_else(app):
     html = client.get("/").text
     assert 'href="/ask"' in html and 'href="/agent_assist"' in html
     assert 'href="/appeals_workbench"' not in html and 'href="/console"' not in html
-    assert "Member services rep" in html and "call_center" in html
+    assert "Member services rep" in html and "MEMBER_SERVICES_REP" in html
     assert TestClient(app).get("/", follow_redirects=False).headers["location"] == "/login"
     assert client.get("/ask").status_code == 200
     bad = TestClient(app).post("/ui/login", data={"username": "member_services", "password": "nope"})

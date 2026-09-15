@@ -1,12 +1,13 @@
 <p class="note">{{ audit.totals.disclosures }} disclosures · {{ audit.totals.personas }} personas · {{ audit.totals.users }} users
-  {% if audit.filters.username or audit.filters.persona or audit.filters.document %} — filtered{% endif %}</p>
+  {% if audit.filters.source %} — showing {{ "user queries" if audit.filters.source == "web" else audit.filters.source }}{% endif %}{% if audit.filters.username or audit.filters.persona or audit.filters.document %} — filtered{% endif %}</p>
 {% if audit.rows %}
 <div class="scroll"><table class="auditrows">
   <thead><tr><th>asked</th><th>user</th><th>persona</th><th>source</th><th>status</th><th>question</th><th>documents</th><th>basis</th><th>payload</th></tr></thead>
   <tbody>{% for r in audit.rows %}<tr>
-    <td>{{ r.asked_at[:16].replace("T", " ") }}</td><td>{{ r.username or "—" }}</td><td>{{ r.persona }}</td><td>{{ r.source }}</td>
+    <td>{{ r.asked_at[:16].replace("T", " ") }}</td><td>{% if r.username %}{{ r.username }}{% else %}<span class="null">platform · {{ r.source }}</span>{% endif %}</td><td>{{ r.persona }}</td><td>{{ r.source }}</td>
     <td>{{ r.payload_status }}</td><td class="q">{{ r.query }}</td>
-    <td class="docs">{{ r.doc_titles | join("; ") }}</td><td>{{ r.acl_basis | join(",") }}</td>
+    {% set titles = r.doc_titles | unique | list %}
+    <td class="docs">{{ titles[:3] | join("; ") }}{% if titles | length > 3 %} <span class="more">+{{ titles | length - 3 }} more</span>{% endif %}</td><td>{{ r.acl_basis | join(",") }}</td>
     <td><a href="/console/payload/{{ r.payload_id }}"><code>{{ r.payload_id[:8] }}</code></a></td>
   </tr>{% endfor %}</tbody>
 </table></div>

@@ -134,7 +134,7 @@ main.container { overflow-x: hidden; }
 .cards article { padding: .75rem 1rem; margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 8px; box-shadow: none; overflow-wrap: anywhere; min-width: 0; }
 .cards article small { display: block; margin-top: .3rem; color: var(--muted); }
 .auditrows td.docs .more { color: var(--steel); white-space: nowrap; }
-.cards article header { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: var(--steel); font-weight: 600; padding: 0; margin-bottom: .3rem; background: none; border: 0; }
+.cards article header { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: var(--steel); font-weight: 600; padding: 0; margin: 0 0 .35rem; background: none; border: 0; width: auto; }  /* Pico bleeds headers to the card edge with negative margins; keep ours inside */
 .cards ul { margin: 0; padding-left: 1rem; }
 .auditform { align-items: end; }
 .auditform button { margin-bottom: var(--pico-spacing); }

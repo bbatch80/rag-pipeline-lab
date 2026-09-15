@@ -383,10 +383,11 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
     trend = [(r, l, float(h) if h is not None else None,
               float(c) if c is not None else None) for r, l, h, c in trend]
 
-    deid = dict(conn.execute(
-        "SELECT metric, value FROM eval_scores WHERE run_id = "
-        "(SELECT max(id) FROM eval_runs WHERE kind = 'deid')"
-    ).fetchall())
+    # The latest de-id run that STORED scores (CI's gated sample runs record only a verdict).
+    deid_run = conn.execute(
+        "SELECT r.id, to_char(r.started_at, 'YYYY-MM-DD') FROM eval_runs r "
+        "WHERE r.kind = 'deid' AND EXISTS (SELECT 1 FROM eval_scores s WHERE s.run_id = r.id) ORDER BY r.id DESC LIMIT 1").fetchone()
+    deid = dict(conn.execute("SELECT metric, value FROM eval_scores WHERE run_id = %s", (deid_run[0],)).fetchall()) if deid_run else {}
 
     # 'abstained' means opposite things on trap vs answerable questions —
     # split it into the two behaviors instead of averaging them together.
@@ -486,6 +487,7 @@ def render(conn: psycopg.Connection, out_path: Path = OUT_PATH) -> Path:
     stamp = (f"latest retrieval run {latest_run[0]} · {latest_run[3]} · "
              f"<span class='mono'>{latest_run[2]}</span>" if latest_run else "no runs yet")
     progress = _progress_svg(conn)
+    deid_when = f", run {deid_run[0]} · {deid_run[1]}" if deid_run else ""
     golden_size = len(ablation.load_golden())
     html = f"""<meta charset="utf-8"><title>raglab — evaluation dashboard</title>
 <style>{_STYLE}</style><div class="wrap">
@@ -529,7 +531,7 @@ set. {stamp}</p>
 <p class="note">The source(s) a question's expected evidence lives in. A new
 source cannot degrade an old one without a number moving here.</p>
 
-<h2>PHI de-identification (latest measured run)</h2>
+<h2>PHI de-identification (latest measured run{deid_when})</h2>
 <table><tr><th>entity type</th><th colspan="2">detection recall</th></tr>
 {deid_rows or '<tr><td colspan=3>no deid runs yet</td></tr>'}</table>
 

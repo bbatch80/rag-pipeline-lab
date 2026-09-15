@@ -299,6 +299,21 @@ def mount(app: FastAPI) -> None:
         return _page("payload_page.html", request, _me(ident), current="console", rec=rec,
                      rendered=render_payload(rec["payload"]))
 
+    @app.get("/console/handoff", response_class=HTMLResponse)
+    def console_handoff(request: Request, ident: identity.Identity = Depends(require_surface("console"))):
+        """The hand-off specification, generated at request time (raglab.handoff)."""
+        from raglab import handoff
+
+        with app.state.connect() as conn:
+            body = handoff.render(conn, env)
+        return _page("handoff.html", request, _me(ident), current="console", body=body)
+
+    @app.get("/console/handoff/payload.schema.json")
+    def console_handoff_schema(ident: identity.Identity = Depends(require_surface("console"))):
+        from raglab import handoff
+
+        return FileResponse(handoff.SCHEMA_PATH, media_type="application/schema+json", filename="payload.schema.json")
+
     @app.get("/console/dashboard")
     def console_dashboard(ident: identity.Identity = Depends(require_surface("console"))):
         """The evaluation dashboard as the last full run wrote it."""

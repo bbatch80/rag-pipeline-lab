@@ -29,7 +29,8 @@ RUN HF_HUB_OFFLINE=0 /app/.venv/bin/python -c \
 # The package, the golden set and baseline the Console reports, the payload schema.
 COPY src ./src
 COPY eval/golden.jsonl eval/baseline.json ./eval/
-COPY db/payload.schema.json ./db/payload.schema.json
+COPY db ./db
+COPY docs ./docs
 COPY README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-default-groups --group rerank

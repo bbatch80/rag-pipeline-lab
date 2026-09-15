@@ -1,0 +1,5 @@
+{% for t in tools %}<article class="tool">
+  <header><code>{{ t.name }}({% for p, req in t.params %}{{ p }}{% if not req %}?{% endif %}{% if not loop.last %}, {% endif %}{% endfor %})</code></header>
+  <pre class="doc">{{ t.description }}</pre>
+</article>{% endfor %}
+<p class="note">{{ tools | length }} tools, read from the running MCP server's registrations. <code>?</code> marks an optional parameter.</p>

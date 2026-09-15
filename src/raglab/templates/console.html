@@ -11,6 +11,9 @@
   <article><header>status</header>{% if status.problems %}<strong>problems</strong><ul>{% for p in status.problems %}<li>{{ p }}</li>{% endfor %}</ul>{% else %}<strong>OK</strong> — nothing quarantined, flags consistent, every payload disclosed{% endif %}</article>
 </div>
 
+<h3>Hand-off specification</h3>
+<p class="note">The contract another team needs to consume or run this platform — payload fields, MCP tools, sources and recipes, entitlement, reproducibility, acceptance — generated from the code at request time. <a href="/console/handoff">Open the specification</a> · <a href="/console/handoff/payload.schema.json">JSON Schema</a>.</p>
+
 <h3>Disclosure log</h3>
 <form hx-get="/ui/console/audit" hx-target="#audit" hx-indicator="#auditing" class="grid auditform">
   <label>username <input name="username" placeholder="member_services" autocomplete="off"></label>

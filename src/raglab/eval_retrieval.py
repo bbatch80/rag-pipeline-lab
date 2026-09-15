@@ -112,6 +112,18 @@ def caller_for(item: dict) -> planner.Caller:
     return planner.Caller(persona=doc_persona, warehouse_role=role)
 
 
+def _required_warehouse_leg_not_executed(payload: dict) -> bool:
+    """A required warehouse leg reported 'warehouse unavailable': the status
+    cannot be judged where there is no warehouse."""
+    legs = {l.get("name"): l for l in (payload.get("plan") or {}).get("legs") or []}
+    for w in payload.get("warehouse_results") or []:
+        leg = legs.get(w.get("leg")) or {}
+        if leg.get("kind") == "member_query" and leg.get("required", True) and w.get("status") == "not_executed" \
+                and str(w.get("reason", "")).startswith("warehouse unavailable"):
+            return True
+    return False
+
+
 def _only_the_warehouse_is_missing(payload: dict) -> bool:
     """insufficient_evidence caused solely by warehouse legs that could not
     run for want of a warehouse, while every document leg found evidence."""
@@ -160,21 +172,19 @@ def score_item(conn, item: dict) -> list[tuple]:
     # Reported retrieval metrics on the item's sources, then the declared checks.
     declared = checks.declared_checks(item)
     warehouse_off = checks._warehouse_unavailable(payload)
-    # CI holds no population either: an item that opens a CASE cannot resolve it there
-    # (no case in the record context), so the case-file rule and the record filter never
-    # fire. Its document checks are unverifiable in CI, not failed (PR #73's CI gate).
-    context_off = warehouse_off and bool(item.get("case_id")) and not (payload.get("record_context") or {}).get("case_id")
+    # CI holds no warehouse: a REQUIRED warehouse leg that could not run makes the
+    # status read insufficient whatever the documents found, so an expected status
+    # is unverifiable there — skipped, not failed (PR #73's CI gate: the case-file
+    # rule found the rationale chunk; the case row could not run).
+    status_unverifiable = warehouse_off and _required_warehouse_leg_not_executed(payload)
     for metric, value, detail in checks.source_metrics(item, payload):
-        if context_off:
-            add(WAREHOUSE_SKIPPED, 1.0, {"check": metric, "reason": "case context unavailable"})
-        else:
-            add(metric, value, detail)
+        add(metric, value, detail)
     for metric, value, detail in checks.run_declared(item, payload, conn):
         field_name = metric[len(checks.CHECK_PREFIX):]
-        if context_off:
-            add(WAREHOUSE_SKIPPED, 1.0, {"check": metric, "reason": "case context unavailable"})
-        elif warehouse_off and field_name in checks.WAREHOUSE_CHECKS:
+        if warehouse_off and field_name in checks.WAREHOUSE_CHECKS:
             add(WAREHOUSE_SKIPPED, 1.0, {"check": metric, "reason": "warehouse unavailable"})
+        elif status_unverifiable and field_name == "expect_status" and item.get("expect_status") == "ok":
+            add(WAREHOUSE_SKIPPED, 1.0, {"check": metric, "reason": "warehouse unavailable: required warehouse leg not executed"})
         else:
             add(metric, value, detail)
     if warehouse_off and any(l.get("kind") == "member_query" for l in (payload.get("plan") or {}).get("legs") or []) \

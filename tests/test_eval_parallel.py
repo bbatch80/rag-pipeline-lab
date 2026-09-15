@@ -141,26 +141,27 @@ def test_allow_wall_is_judged_on_the_documents_when_only_the_warehouse_is_missin
     assert not er._only_the_warehouse_is_missing({**ci_shaped, "status": "ok"})
 
 
-def test_an_item_that_opens_a_case_is_unverifiable_where_the_case_cannot_resolve(monkeypatch):
-    """CI has no population: a case cannot resolve, so neither the record
-    filter nor the case-file rule fires. The item's document checks are
-    recorded as skipped there, never as failures (PR #73's CI gate)."""
+def test_an_expected_ok_status_is_unverifiable_where_a_required_warehouse_leg_could_not_run(monkeypatch):
+    """CI holds no warehouse: the case-file rule found the rationale chunk
+    (hit@5 holds) but the required case row could not run, so the status
+    reads insufficient. The status check is skipped there, not failed; the
+    document checks are still judged (PR #73's CI gate)."""
     from raglab import checks, eval_retrieval as er
 
     item = {"id": "appeal-17", "category": "appeal", "persona": "appeals", "module": "appeals_workbench", "case_id": "APL-4935714",
             "question": "What policy rules applied to this case?", "sources": [{"internal": "appeals/appeal_0018.md"}],
             "expected_legs": ["appeal_case", "doc_probe:appeal"], "expect_status": "ok"}
-    ci_payload = {"status": "insufficient_evidence", "record_context": {}, "chunks": [], "sub_results": [], "missing": ["case"],
+    ci_payload = {"status": "insufficient_evidence", "record_context": {"case_id": "APL-4935714"}, "chunks": [], "sub_results": [], "missing": ["case"],
                   "warehouse_results": [{"leg": "case", "query_name": "appeal_case", "status": "not_executed", "reason": "warehouse unavailable: KeyError"}],
-                  "plan": {"legs": [{"name": "case", "kind": "member_query", "query_name": "appeal_case"}], "enforced": []}, "router": {}}
+                  "plan": {"legs": [{"name": "case", "kind": "member_query", "query_name": "appeal_case", "required": True},
+                                    {"name": "case file", "kind": "doc_probe", "sources": ["appeal"], "required": False}], "enforced": ["case_file"]}, "router": {}}
     monkeypatch.setattr(er, "_compose", lambda conn, it, q, persona=None: ci_payload)
     monkeypatch.setattr(checks, "_warehouse_unavailable", lambda payload: True)
     rows = er.score_item(None, item)
-    metrics = {m for m, _, _ in rows}
-    assert not any(m == "hit@5" or m.startswith("check_") for m in metrics), metrics   # nothing judged; health and latency are reported, not gated
-    assert any(d.get("reason") == "case context unavailable" for _, _, d in rows)
-    local_payload = {**ci_payload, "record_context": {"case_id": "APL-4935714"}}
-    monkeypatch.setattr(er, "_compose", lambda conn, it, q, persona=None: local_payload)
+    skipped = [d for m, _, d in rows if m == er.WAREHOUSE_SKIPPED]
+    assert any(d.get("check") == "check_expect_status" for d in skipped) and not any(m == "check_expect_status" for m, _, _ in rows)
+    assert any(m == "hit@5" for m, _, _ in rows) and any(m == "check_expected_legs" for m, _, _ in rows)   # documents still judged
+    local = {**ci_payload, "status": "ok", "warehouse_results": [{"leg": "case", "query_name": "appeal_case", "status": "ok", "rows": [["APL-4935714"]], "columns": ["CASE_ID"]}]}
+    monkeypatch.setattr(er, "_compose", lambda conn, it, q, persona=None: local)
     monkeypatch.setattr(checks, "_warehouse_unavailable", lambda payload: False)
-    rows = er.score_item(None, item)
-    assert any(m == "hit@5" for m, _, _ in rows)   # with the case in context the checks are judged as usual
+    assert any(m == "check_expect_status" for m, _, _ in er.score_item(None, item))   # with a warehouse the status is judged

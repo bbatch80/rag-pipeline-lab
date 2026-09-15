@@ -50,6 +50,27 @@ _FEHB_CODES = {"hdhp": "71-014", "elevate": "71-018", "elevate_plus": "71-018",
                "high": "71-006", "standard": "71-006"}
 _PSHB_CODES = {"hdhp": "71-026", "elevate": "71-022", "elevate_plus": "71-022",
                "high": "71-021", "standard": "71-021"}
+_OPTION_NAME = {"hdhp": "HDHP", "elevate": "Elevate", "elevate_plus": "Elevate Plus", "high": "High", "standard": "Standard"}
+
+
+def asked_options(query: str, keys: tuple[str, ...]) -> tuple[str, ...]:
+    """The option names a question asked for. The bare 'elevate' pattern also
+    matches 'Elevate Plus'; 'Elevate' counts only when the question says
+    Elevate without Plus somewhere."""
+    names = []
+    for key in keys:
+        if key == "elevate" and "elevate_plus" in keys and not re.search(r"\belevate\b(?!\s+plus\b)", query, re.IGNORECASE):
+            continue
+        names.append(_OPTION_NAME[key])
+    # "High and Standard Option": the pattern reads the option word next to
+    # "option/plan" only; a question naming BOTH of a pair keeps both, so the
+    # filter never drops one side of a comparison (over-inclusion only weakens it).
+    for present, partner, word in (("Standard", "High", r"\bhigh\b"), ("High", "Standard", r"\bstandard\b")):
+        if present in names and partner not in names and re.search(word, query, re.IGNORECASE):
+            names.append(partner)
+    return tuple(dict.fromkeys(names))
+
+
 _OPTION_LABEL = {"hdhp": "HDHP", "elevate": "Elevate", "elevate_plus": "Elevate Plus",
                  "high": "High Option", "standard": "Standard Option"}
 
@@ -84,6 +105,11 @@ class Route:
     cover_keys: tuple[str, ...] = ()
     cover_asked: str | None = None  # the named level's value ('PSHB', 'HDHP')
     cover_level: str | None = None  # which level was named: 'program' (plans beneath covered) | 'option' (programs above covered)
+    # Option names the question asked for, as the registry spells them
+    # ('Elevate', 'Elevate Plus', 'High', 'Standard'): a chunk whose heading
+    # names a DIFFERENT option of the same brochure is filtered out (the
+    # Elevate Plus mail-order page is the distractor for an Elevate question).
+    options: tuple[str, ...] = ()
     plan_from_enrollment: bool = False  # the plan filter came from the member's enrollment, not the question
 
 
@@ -107,6 +133,7 @@ class Reading:
     scope: str = "in_scope"           # in_scope | other_carrier | medicare_program
     boundary_value: str | None = None  # the carrier named, when scope is other_carrier
     origin: str = "rules"             # rules | model
+    option_names: tuple[str, ...] = ()  # the options as the registry spells them (rules reader only; models pass keys)
 
 
 BOUNDARY_TEXT = {
@@ -131,7 +158,7 @@ def read(query: str) -> Reading:
     options = tuple(dict.fromkeys(key for pattern, key in _PLAN_PATTERNS if pattern.search(query)))
     program = "PSHB" if _PSHB.search(query) else ("FEHB" if _FEHB.search(query) else None)
     return Reading(program=program, options=options, years=years, change=bool(_CHANGE_LANGUAGE.search(query)),
-                   as_of=as_of_date(query), origin="rules")
+                   as_of=as_of_date(query), origin="rules", option_names=asked_options(query, options))
 
 
 def route(query: str, hierarchies: dict[str, tuple[str, ...]] | None = None,
@@ -153,7 +180,7 @@ def enforce(reading: Reading, hierarchies: dict[str, tuple[str, ...]] | None = N
         # in-scope question. Enforcement: no name, no boundary.
         reasons.append("other-carrier reading named no carrier -> treated as in scope")
         reading = Reading(program=reading.program, options=reading.options, years=reading.years, change=reading.change,
-                          as_of=reading.as_of, scope="in_scope", origin=reading.origin)
+                          as_of=reading.as_of, scope="in_scope", origin=reading.origin, option_names=reading.option_names)
     if reading.scope == "other_carrier":
         return Route(scope="out_of_domain",
                      boundary_response=BOUNDARY_TEXT["other_carrier"].format(value=reading.boundary_value),
@@ -172,7 +199,7 @@ def enforce(reading: Reading, hierarchies: dict[str, tuple[str, ...]] | None = N
         reasons.append(f"year follows the as-of date {reading.as_of}")
         reading = Reading(program=reading.program, options=reading.options, years=(int(reading.as_of[:4]),),
                           change=reading.change, as_of=reading.as_of, scope=reading.scope,
-                          boundary_value=reading.boundary_value, origin=reading.origin)
+                          boundary_value=reading.boundary_value, origin=reading.origin, option_names=reading.option_names)
     mentioned_years = sorted(reading.years)
     out_of_range = [y for y in mentioned_years if y not in CORPUS_YEARS]
     if out_of_range:
@@ -263,6 +290,7 @@ def enforce(reading: Reading, hierarchies: dict[str, tuple[str, ...]] | None = N
         cover_keys=cover_keys,
         cover_asked=cover_asked,
         cover_level=cover_level,
+        options=reading.option_names or tuple(dict.fromkeys(_OPTION_NAME[k] for k in reading.options if k in _OPTION_NAME)),
     )
 
 

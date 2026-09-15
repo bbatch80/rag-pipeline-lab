@@ -29,6 +29,20 @@ def _order(html: str, *markers: str) -> list[int]:
 
 # ---------------------------------------------------------------- no database
 
+def test_provenance_line_under_each_chunk():
+    import copy
+
+    html = ui.render_payload(FIXTURE)  # logged before spec 1.2: says so, never guesses
+    assert "provenance not recorded" in html
+    p = copy.deepcopy(FIXTURE)
+    p["chunks"][0]["provenance"] = {"document_version": "2026 edition", "recipe": "unstructured-hi_res|1600/900/200|template",
+                                    "embedding_model": "text-embedding-3-small"}
+    html = ui.render_payload(p)
+    assert "provenance not recorded" not in html.split("</details>")[0]
+    assert "2026 edition" in html and "unstructured-hi_res|1600/900/200|template" in html and "text-embedding-3-small" in html
+    assert p["chunks"][0]["source"]["content_hash"][:8] in html
+
+
 def test_ok_renders_evidence_then_plan_line_then_footer_and_no_banner():
     html = ui.render_payload(FIXTURE)
     assert "banner" not in html

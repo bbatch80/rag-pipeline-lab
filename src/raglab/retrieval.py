@@ -339,6 +339,8 @@ class Candidate:
     record: dict = field(default_factory=dict)  # the record's fields (chunk metadata)
     doc_type: str = ""
     floor: bool = False  # admitted by the per-source floor, not the global pool
+    recipe: str = ""  # the processing recipe that produced the document (provenance)
+    embedding_model: str = ""  # the model that embedded this chunk (provenance)
 
 
 def _filters(route: Route, member_key: str | None = None,
@@ -608,7 +610,8 @@ def _hybrid(
                c.plan_code, c.year, c.acl_tag,
                c.metadata->'pages',
                f.vector_rank, f.text_rank, f.score,
-               d.content_hash, c.doc_type, c.index_text, c.metadata->'record'
+               d.content_hash, c.doc_type, c.index_text, c.metadata->'record',
+               d.recipe, c.embedding_model
         FROM fused f
         JOIN chunks c ON c.id = f.id
         JOIN documents d ON d.id = c.document_id
@@ -628,6 +631,7 @@ def _hybrid(
             pages=r[8] or [], vector_rank=r[9], text_rank=r[10],
             rrf_score=float(r[11]), content_hash=r[12], doc_type=r[13] or "",
             index_text=r[14] or "", record=r[15] or {},
+            recipe=r[16] or "", embedding_model=r[17] or "",
         )
         for r in rows
     ]

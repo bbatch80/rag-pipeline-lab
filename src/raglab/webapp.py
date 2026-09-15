@@ -212,7 +212,7 @@ def create_app(connect: Callable = db.connect, warehouse: context_services.Wareh
     # ---- the three context services (mirror the MCP tools one for one) ----
     @app.post("/query")
     def query(body: Query, ident: identity.Identity = Depends(current_identity)) -> dict:
-        """One question from a surface → the composed payload (spec 1.1.0).
+        """One question from a surface → the composed payload (spec 1.2.0).
         The platform plans the legs within the surface's module and runs
         every leg as the session identity."""
         return compose_for(ident, body.question, body.surface, body.member_id, body.case_id)

@@ -55,7 +55,7 @@ def test_run_query_stamps_timings_on_the_disclosure_row(db, monkeypatch):
     for stage in ("route", "embed", "search", "rerank", "payload", "disclose", "total"):
         assert stage in timings, stage
     assert timings["total"] >= timings["search"] + timings["rerank"]
-    assert "timings" in built and built["timings"]["total"] >= 0, "spec 1.1.0 carries per-stage timings (D5)"
+    assert "timings" in built and built["timings"]["total"] >= 0, "spec 1.2.0 carries per-stage timings (D5)"
 
 
 def test_summary_reports_latency_percentiles():

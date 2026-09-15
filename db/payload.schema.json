@@ -13,8 +13,8 @@
  "properties": {
   "spec_version": {
    "type": "string",
-   "pattern": "^1\\.[01]\\.0$",
-   "description": "1.0.0 (single probe) or 1.1.0 (adds doc_type on sources and the composed fields; all 1.0.0 fields unchanged)"
+   "pattern": "^1\\.[012]\\.0$",
+   "description": "1.0.0 (single probe), 1.1.0 (adds doc_type on sources and the composed fields), or 1.2.0 (adds provenance on every chunk); every earlier field unchanged"
   },
   "query": {
    "type": "string"
@@ -119,6 +119,32 @@
         "description": "For member records: the record system's required fields (case id, claim id, call id, dates, codes) — metadata, never extracted from text."
        },
        "doc_type": {
+        "type": [
+         "string",
+         "null"
+        ]
+       }
+      }
+     },
+     "provenance": {
+      "type": "object",
+      "description": "Reproducibility facts (spec 1.2.0): the document version label read from governed metadata, the processing recipe that produced the document, and the model that embedded the chunk. null recipe/model = ingested before provenance was recorded.",
+      "required": [
+       "document_version",
+       "recipe",
+       "embedding_model"
+      ],
+      "properties": {
+       "document_version": {
+        "type": "string"
+       },
+       "recipe": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "embedding_model": {
         "type": [
          "string",
          "null"

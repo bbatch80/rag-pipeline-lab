@@ -60,6 +60,18 @@ def test_gates_reject_degenerate_parse():
     assert failures[0].gate == "min_chunks"
 
 
+def test_recipe_recorded_on_ingest_and_backfilled_on_skip(db, tmp_path):
+    from raglab.ingest import processing_recipe
+
+    pdf = _write_pdf(tmp_path)
+    assert ingest_document(db, pdf, META, HealthyBackend()) == "ingested"
+    doc_id, recipe = db.execute("SELECT id, recipe FROM documents WHERE source_path LIKE '%doc.pdf'").fetchone()
+    assert recipe and recipe.startswith(HealthyBackend.name + "|"), recipe
+    db.execute("UPDATE documents SET recipe = NULL WHERE id = %s", (doc_id,))  # a pre-provenance corpus
+    assert ingest_document(db, pdf, META, HealthyBackend()) == "skipped"
+    assert db.execute("SELECT recipe FROM documents WHERE id = %s", (doc_id,)).fetchone()[0] == recipe
+
+
 def test_idempotency_new_skip_reingest(db, tmp_path):
     pdf = _write_pdf(tmp_path)
     assert ingest_document(db, pdf, META, HealthyBackend()) == "ingested"

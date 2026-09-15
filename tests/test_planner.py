@@ -81,7 +81,7 @@ def test_fast_path_matches_the_v1_probe_and_discloses_once(db, monkeypatch):
     assert composed["status"] == v1["status"] == "ok"
     assert {c["source"]["title"] for c in composed["chunks"]} == {c["source"]["title"] for c in v1["chunks"]}
     assert composed["plan"]["origin"] == "rules" and composed["plan"]["shape"] == "simple" and composed["missing"] == []
-    assert composed["spec_version"] == "1.1.0" and "timings" in composed
+    assert composed["spec_version"] == "1.2.0" and "timings" in composed
     assert db.execute("SELECT count(*) FROM disclosure_log").fetchone()[0] == before + 2  # one row per question, not per leg
 
 

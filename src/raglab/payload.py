@@ -9,6 +9,9 @@ Key properties:
   relays refusals; it does not have to be wise enough to invent them.
 - Every chunk states its ACL basis (why the caller was allowed to see it)
   and its document content_hash (lineage back to the exact source version).
+- Every chunk carries its provenance (1.2.0): the document version label,
+  the processing recipe, and the embedding model — what a hand-off team
+  needs to reproduce or revoke a payload later.
 """
 
 from datetime import datetime, timezone
@@ -17,7 +20,38 @@ from raglab.rerank import abstention_verdict
 from raglab.retrieval import Candidate
 from raglab.router import Route
 
-SPEC_VERSION = "1.1.0"  # additive over 1.0.0: doc_type on chunk sources; composed fields (Phase 3)
+SPEC_VERSION = "1.2.0"  # additive over 1.1.0: per-chunk provenance (document version, recipe, embedding model)
+
+
+def document_version(c: Candidate) -> str:
+    """The human label for WHICH version of a document a chunk came from,
+    read from governed metadata (never from text). The content_hash beside
+    it is the exact identity; this is what a person says out loud."""
+    rec = c.record or {}
+    if rec.get("version") is not None:
+        label = f"v{rec['version']}"
+        if rec.get("effective_from"):
+            label += f" from {rec['effective_from']}"
+        return label
+    for key, word in (("letter_id", "letter"), ("bulletin_id", "bulletin"), ("formulary_year", "plan year")):
+        if rec.get(key):
+            return f"{word} {rec[key]}"
+    for key in ("decided_date", "filed_date", "call_date"):
+        if rec.get(key):
+            return f"{key.replace('_', ' ')} {rec[key]}"
+    return f"{c.year} edition" if c.year else "unversioned"
+
+
+def provenance(c: Candidate) -> dict:
+    """The three facts that make a logged chunk reproducible later: which
+    document version, which processing recipe, which embedding model. Absent
+    values are None (a corpus ingested before provenance was recorded), never
+    guessed."""
+    return {
+        "document_version": document_version(c),
+        "recipe": c.recipe or None,
+        "embedding_model": c.embedding_model or None,
+    }
 
 
 def build(
@@ -75,6 +109,7 @@ def build(
                     "doc_type": c.doc_type or None,
                 },
                 "acl_basis": c.acl_tag,
+                "provenance": provenance(c),
                 "scores": {"rrf": round(c.rrf_score, 4),
                            "rerank": round(c.rerank_score or 0.0, 4)},
             }
@@ -96,7 +131,7 @@ def compose(
     router: dict | None = None,
     search: dict | None = None,
 ) -> dict:
-    """The composed payload (spec 1.1.0, Phase 3): one question, one plan, the
+    """The composed payload (spec 1.2.0, Phase 3): one question, one plan, the
     legs' results, one status. Status is worst-of-required — `ok` only if
     every required leg is `ok`; otherwise `insufficient_evidence` with
     `missing[]` naming the legs. No `partial` value: a surface derives

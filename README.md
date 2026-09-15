@@ -546,8 +546,12 @@ Both lanes surface through one contract and one thin server.
 ### The payload spec
 
 Every retrieval — CLI, evaluation, or MCP — returns the same versioned
-JSON payload (spec `1.1.0`, additive over `1.0.0`; normative schema at
-`db/payload.schema.json`, validated in CI). Key properties:
+JSON payload (spec `1.2.0`, additive over `1.1.0` and `1.0.0`; normative
+schema at `db/payload.schema.json`, validated in CI). The hand-off
+specification for a team taking the platform over — contract, sources and
+recipes, entitlement rules, reproducibility, acceptance — is
+`docs/HANDOFF.md`, and a test fails when it drifts from the code. Key
+properties:
 
 - `status` (`ok` | `insufficient_evidence` | `out_of_scope`) is decided
   upstream by the abstention threshold and scope gate — the consumer
@@ -556,7 +560,9 @@ JSON payload (spec `1.1.0`, additive over `1.0.0`; normative schema at
 - Each chunk is a self-contained citation unit: full text plus `source`
   (title, path, plan code, year, pages, section, document
   `content_hash`), its `acl_basis` (the ACL tier that entitled the caller
-  to it), and per-stage `scores`.
+  to it), its `provenance` (document version label, processing recipe,
+  embedding model — what reproduces or revokes it later), and per-stage
+  `scores`.
 - `payload_id` joins the payload to its disclosure record; the id travels
   inside the payload, so any logged copy traces back to the audit log.
 - Semver: consumers pin against `spec_version`; additive changes bump

@@ -16,5 +16,6 @@ for attempt in range(300):  # a first-start restore can take minutes
 else:
     raise SystemExit("database never became reachable")
 PY
+raglab seed-identity || echo "identity not seeded (the accounts stay as they were)"
 raglab dashboard || echo "dashboard not rendered (the Console will say so)"
 exec raglab serve --host 0.0.0.0 --port 8000

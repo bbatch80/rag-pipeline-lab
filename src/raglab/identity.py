@@ -28,14 +28,16 @@ GROUPS: dict[str, tuple[str, str | None, tuple[str, ...], str]] = {
     "admin":            ("admin",           "CLAIMS_EXAMINER", ("ask", "agent_assist", "appeals_workbench", "analyst_view", "console"), "Platform administrators"),
 }
 # username -> (display name, group)
+# Logins are roles, not people (user ruling 2026-09-15: no imaginary names).
 SEED_USERS: dict[str, tuple[str, str]] = {
-    "rep.dana":     ("Dana Okafor",   "call_center"),
-    "appeals.lee":  ("Morgan Lee",    "appeals"),
-    "benefits.sam": ("Sam Whitcomb",  "benefits"),
-    "cm.priya":     ("Priya Natarajan", "care_management"),
-    "actuary.jo":   ("Jo Brennan",    "analytics"),
-    "admin":        ("Platform Admin", "admin"),
+    "member_services": ("Member services rep", "call_center"),
+    "appeals":         ("Appeals analyst",     "appeals"),
+    "benefits":        ("Benefits specialist", "benefits"),
+    "care_team":       ("Care manager",        "care_management"),
+    "analyst":         ("Analyst / actuary",   "analytics"),
+    "admin":           ("Platform admin",      "admin"),
 }
+RETIRED_USERS = ("rep.dana", "appeals.lee", "benefits.sam", "cm.priya", "actuary.jo")  # kept for the disclosure log's history; logins disabled
 DEMO_PASSWORD_ENV = "RAGLAB_DEMO_PASSWORD"  # one shared demo password (Phase 4 ruling: prototype-grade)
 
 
@@ -86,6 +88,8 @@ def seed(conn: psycopg.Connection, password: str | None = None) -> dict:
         ).fetchone()
         conn.execute("DELETE FROM user_groups WHERE user_id = %s", (row[0],))
         conn.execute("INSERT INTO user_groups (user_id, group_name) VALUES (%s, %s)", (row[0], group))
+    # Retired names stay as rows (the disclosure log points at them) but can no longer log in.
+    conn.execute("UPDATE users SET password_hash = 'disabled' WHERE username = ANY(%s)", (list(RETIRED_USERS),))
     return {"groups": len(GROUPS), "users": len(SEED_USERS)}
 
 

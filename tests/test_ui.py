@@ -159,14 +159,14 @@ def _session(app, username):
 
 
 def test_portal_shows_the_granted_tiles_and_nothing_else(app):
-    client = _session(app, "rep.dana")
+    client = _session(app, "member_services")
     html = client.get("/").text
     assert 'href="/ask"' in html and 'href="/agent_assist"' in html
     assert 'href="/appeals_workbench"' not in html and 'href="/console"' not in html
-    assert "Dana Okafor" in html and "call_center" in html
+    assert "Member services rep" in html and "call_center" in html
     assert TestClient(app).get("/", follow_redirects=False).headers["location"] == "/login"
     assert client.get("/ask").status_code == 200
-    bad = TestClient(app).post("/ui/login", data={"username": "rep.dana", "password": "nope"})
+    bad = TestClient(app).post("/ui/login", data={"username": "member_services", "password": "nope"})
     assert bad.status_code == 401 and "wrong password" in bad.text
 
 
@@ -174,7 +174,7 @@ def test_portal_shows_the_granted_tiles_and_nothing_else(app):
 def test_two_window_flagship_in_ask(app, db):
     """Two sessions, the same question in Ask: two payload ids, and each
     page shows exactly the documents that role is entitled to."""
-    rep, cm = _session(app, "rep.dana"), _session(app, "cm.priya")
+    rep, cm = _session(app, "member_services"), _session(app, "care_team")
     rep_html = rep.post("/ui/ask", data={"question": "what do the secret facts say"}).text
     db.execute("RESET ROLE")
     cm_html = cm.post("/ui/ask", data={"question": "what do the secret facts say"}).text
@@ -287,7 +287,7 @@ def surfaces(db, monkeypatch):
 
 
 def test_agent_assist_loads_nothing_until_a_valid_known_member_is_typed(surfaces):
-    rep = _session(surfaces, "rep.dana")
+    rep = _session(surfaces, "member_services")
     page = rep.get("/agent_assist").text
     assert "Nothing is loaded until you open a member" in page and "headerrow" not in page and FAKE_MEMBER not in page
     bad = rep.post("/ui/agent_assist/open", data={"member_id": "M12345"}).text
@@ -306,7 +306,7 @@ def test_rep_s_agent_assist_shows_no_clinical_text_and_the_care_manager_s_does(s
     """The durable Phase 5 test: the same member, the same screen, the same
     question — the rep's page carries no clinical note text; the care
     manager's does, and carries none of the rep's call-note tier."""
-    rep, cm = _session(surfaces, "rep.dana"), _session(surfaces, "cm.priya")
+    rep, cm = _session(surfaces, "member_services"), _session(surfaces, "care_team")
     rep_html = rep.post("/ui/agent_assist/ask", data={"question": "what do the secret facts say", "member_id": FAKE_MEMBER}).text
     db.execute("RESET ROLE")
     cm_html = cm.post("/ui/agent_assist/ask", data={"question": "what do the secret facts say", "member_id": FAKE_MEMBER}).text
@@ -320,7 +320,7 @@ def test_rep_s_agent_assist_shows_no_clinical_text_and_the_care_manager_s_does(s
 
 
 def test_workbench_opens_a_case_and_starts_the_question_with_it(surfaces):
-    analyst = _session(surfaces, "appeals.lee")
+    analyst = _session(surfaces, "appeals")
     assert "Nothing is loaded until you open a case" in analyst.get("/appeals_workbench").text
     assert "not a valid case id" in analyst.post("/ui/appeals_workbench/open", data={"case_id": "APL-000000"}).text
     assert "on record" in analyst.post("/ui/appeals_workbench/open", data={"case_id": identifiers.case_id(8)}).text
@@ -335,12 +335,12 @@ def test_workbench_opens_a_case_and_starts_the_question_with_it(surfaces):
 
 
 def test_surfaces_are_granted_per_group(surfaces):
-    rep = _session(surfaces, "rep.dana")
+    rep = _session(surfaces, "member_services")
     assert rep.get("/appeals_workbench").status_code == 403
     assert rep.post("/ui/appeals_workbench/open", data={"case_id": KNOWN_CASE}).status_code == 403
-    analyst = _session(surfaces, "appeals.lee")
+    analyst = _session(surfaces, "appeals")
     assert analyst.get("/agent_assist").status_code == 403
-    sam = _session(surfaces, "benefits.sam")
+    sam = _session(surfaces, "benefits")
     assert sam.get("/agent_assist").status_code == 403 and sam.get("/ask").status_code == 200
 
 
@@ -371,7 +371,7 @@ def analyst_app(db, monkeypatch):
 
 
 def test_analyst_view_offers_the_menu_and_runs_as_the_warehouse_role(analyst_app):
-    jo = _session(analyst_app, "actuary.jo")
+    jo = _session(analyst_app, "analyst")
     page = jo.get("/analyst_view").text
     for q in ("cost_by_condition", "providers_by_specialty", "provider_network_status"):
         assert f'<option value="{q}">' in page
@@ -384,7 +384,7 @@ def test_analyst_view_offers_the_menu_and_runs_as_the_warehouse_role(analyst_app
     assert "chip-masked" not in out  # nothing identifying in an aggregate: nothing masked
     off_menu = jo.post("/ui/analyst_view/run", data={"query_name": "member_claims_summary", "member_id": FAKE_MEMBER})
     assert off_menu.status_code == 400
-    assert _session(analyst_app, "rep.dana").get("/analyst_view").status_code == 403
+    assert _session(analyst_app, "member_services").get("/analyst_view").status_code == 403
 
 
 @pytest.mark.clean_corpus
@@ -392,7 +392,7 @@ def test_console_health_audit_and_payload_page(surfaces, db, monkeypatch, tmp_pa
     from raglab import dashboard, pipeline
 
     monkeypatch.setitem(pipeline.DISCLOSURE_FAILURES, "count", 0)
-    rep = _session(surfaces, "rep.dana")
+    rep = _session(surfaces, "member_services")
     html = rep.post("/ui/ask", data={"question": "what do the secret facts say"}).text
     db.execute("RESET ROLE")
     pid = re.search(r"payload <code>([0-9a-f-]{36})</code>", html).group(1)
@@ -401,13 +401,13 @@ def test_console_health_audit_and_payload_page(surfaces, db, monkeypatch, tmp_pa
     admin = _session(surfaces, "admin")
     page = admin.get("/console").text
     assert "Platform Console" in page and "documents" in page and "gate baseline" in page and "/console/dashboard" in page
-    rows = admin.get("/ui/console/audit", params={"username": "rep.dana"}).text
-    assert "rep.dana" in rows and "member_services" in rows and pid[:8] in rows and "secret facts" in rows
+    rows = admin.get("/ui/console/audit", params={"username": "member_services"}).text
+    assert "member_services" in rows and "member_services" in rows and pid[:8] in rows and "secret facts" in rows
     assert "No disclosures match" in admin.get("/ui/console/audit", params={"username": "nobody"}).text
     jump = admin.get("/ui/console/audit", params={"payload_id": pid}, follow_redirects=False)
     assert jump.status_code == 303 and jump.headers["location"] == f"/console/payload/{pid}"
     detail = admin.get(f"/console/payload/{pid}").text
-    assert f"QUERY_TAG = {pid}" in detail and "rep.dana" in detail and 'class="evidence"' in detail and "doc-employee" in detail
+    assert f"QUERY_TAG = {pid}" in detail and "member_services" in detail and 'class="evidence"' in detail and "doc-employee" in detail
     assert admin.get("/console/payload/00000000-0000-0000-0000-000000000000").status_code == 404
     # the scorecard: the dashboard file as the last full run wrote it, or a pointer when none exists
     monkeypatch.setattr(dashboard, "OUT_PATH", tmp_path / "none.html")

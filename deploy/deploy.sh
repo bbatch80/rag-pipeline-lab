@@ -25,6 +25,20 @@ set_tag() {
   fi
 }
 
+# Every release image carries the reranker weights (~4.4 GB); fifteen of them
+# filled the host's disk and a deploy failed mid-pull (2026-09-15). Before
+# pulling a new tag, keep only the images still needed: the tags passed in
+# (the running one, so a failed smoke test can still roll back) — the
+# registry holds every release for anything older.
+prune_images() {
+  local keep=" $* "
+  { docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null || true; } | { grep -F 'rag-pipeline-lab:' || true; } | while read -r image; do
+    local t="${image##*:}"
+    case "$keep" in *" $t "*) ;; *) docker rmi -f "$image" >/dev/null 2>&1 || true ;; esac
+  done
+  docker image prune -f >/dev/null 2>&1 || true
+}
+
 case "${1:-}" in
   up)
     tag="${2:?tag}"
@@ -33,6 +47,7 @@ case "${1:-}" in
     echo "deploying ${tag} (previous: ${previous:-none})"
     echo "${previous:-}" > "$PREVIOUS"
     set_tag "$tag"
+    prune_images "$tag" "${previous:-}"
     if [ "${3:-}" != "--no-pull" ]; then "${COMPOSE[@]}" pull --quiet app db; fi
     "${COMPOSE[@]}" up -d --remove-orphans
     "${COMPOSE[@]}" ps --format '{{.Name}} {{.Status}}'
@@ -44,6 +59,10 @@ case "${1:-}" in
     set_tag "$previous"
     "${COMPOSE[@]}" up -d --remove-orphans
     "${COMPOSE[@]}" ps --format '{{.Name}} {{.Status}}'
+    ;;
+  prune)
+    prune_images "$(current_tag)" "$(cat "$PREVIOUS" 2>/dev/null || true)"
+    docker images --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep -F 'rag-pipeline-lab' || true
     ;;
   status)
     echo "TAG=$(current_tag)  previous=$(cat "$PREVIOUS" 2>/dev/null || echo none)"

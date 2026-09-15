@@ -158,13 +158,22 @@ def score_item(conn, item: dict) -> list[tuple]:
             {"unresolved": payload.get("unresolved_identifiers"), "status": payload.get("status")})
 
     # Reported retrieval metrics on the item's sources, then the declared checks.
-    for metric, value, detail in checks.source_metrics(item, payload):
-        add(metric, value, detail)
     declared = checks.declared_checks(item)
     warehouse_off = checks._warehouse_unavailable(payload)
+    # CI holds no population either: an item that opens a CASE cannot resolve it there
+    # (no case in the record context), so the case-file rule and the record filter never
+    # fire. Its document checks are unverifiable in CI, not failed (PR #73's CI gate).
+    context_off = warehouse_off and bool(item.get("case_id")) and not (payload.get("record_context") or {}).get("case_id")
+    for metric, value, detail in checks.source_metrics(item, payload):
+        if context_off:
+            add(WAREHOUSE_SKIPPED, 1.0, {"check": metric, "reason": "case context unavailable"})
+        else:
+            add(metric, value, detail)
     for metric, value, detail in checks.run_declared(item, payload, conn):
         field_name = metric[len(checks.CHECK_PREFIX):]
-        if warehouse_off and field_name in checks.WAREHOUSE_CHECKS:
+        if context_off:
+            add(WAREHOUSE_SKIPPED, 1.0, {"check": metric, "reason": "case context unavailable"})
+        elif warehouse_off and field_name in checks.WAREHOUSE_CHECKS:
             add(WAREHOUSE_SKIPPED, 1.0, {"check": metric, "reason": "warehouse unavailable"})
         else:
             add(metric, value, detail)

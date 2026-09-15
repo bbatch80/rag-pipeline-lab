@@ -139,3 +139,28 @@ def test_allow_wall_is_judged_on_the_documents_when_only_the_warehouse_is_missin
     assert not er._only_the_warehouse_is_missing({**ci_shaped, "missing": ["appeal_case", "documents"]})
     assert not er._only_the_warehouse_is_missing({**ci_shaped, "warehouse_results": [{"leg": "appeal_case", "status": "not_executed", "reason": "case_id required but not in context"}]})
     assert not er._only_the_warehouse_is_missing({**ci_shaped, "status": "ok"})
+
+
+def test_an_item_that_opens_a_case_is_unverifiable_where_the_case_cannot_resolve(monkeypatch):
+    """CI has no population: a case cannot resolve, so neither the record
+    filter nor the case-file rule fires. The item's document checks are
+    recorded as skipped there, never as failures (PR #73's CI gate)."""
+    from raglab import checks, eval_retrieval as er
+
+    item = {"id": "appeal-17", "category": "appeal", "persona": "appeals", "module": "appeals_workbench", "case_id": "APL-4935714",
+            "question": "What policy rules applied to this case?", "sources": [{"internal": "appeals/appeal_0018.md"}],
+            "expected_legs": ["appeal_case", "doc_probe:appeal"], "expect_status": "ok"}
+    ci_payload = {"status": "insufficient_evidence", "record_context": {}, "chunks": [], "sub_results": [], "missing": ["case"],
+                  "warehouse_results": [{"leg": "case", "query_name": "appeal_case", "status": "not_executed", "reason": "warehouse unavailable: KeyError"}],
+                  "plan": {"legs": [{"name": "case", "kind": "member_query", "query_name": "appeal_case"}], "enforced": []}, "router": {}}
+    monkeypatch.setattr(er, "_compose", lambda conn, it, q, persona=None: ci_payload)
+    monkeypatch.setattr(checks, "_warehouse_unavailable", lambda payload: True)
+    rows = er.score_item(None, item)
+    metrics = {m for m, _, _ in rows}
+    assert not any(m == "hit@5" or m.startswith("check_") for m in metrics), metrics   # nothing judged; health and latency are reported, not gated
+    assert any(d.get("reason") == "case context unavailable" for _, _, d in rows)
+    local_payload = {**ci_payload, "record_context": {"case_id": "APL-4935714"}}
+    monkeypatch.setattr(er, "_compose", lambda conn, it, q, persona=None: local_payload)
+    monkeypatch.setattr(checks, "_warehouse_unavailable", lambda payload: False)
+    rows = er.score_item(None, item)
+    assert any(m == "hit@5" for m, _, _ in rows)   # with the case in context the checks are judged as usual

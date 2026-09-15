@@ -15,14 +15,14 @@
     <ul>
       <li><a href="/" class="brand">rag<b>lab</b></a></li>
       {% if me %}
-      {% for surface in me.surfaces %}
+      {% for surface in surface_titles if surface in me.surfaces %}
       <li><a href="/{{ surface }}" {% if surface == current %}aria-current="page"{% endif %}>{{ surface_titles[surface] }}</a></li>
       {% endfor %}
       {% endif %}
     </ul>
     <ul>
       {% if me %}
-      <li class="who"><strong>{{ me.display_name }}</strong><small>{{ me.group }} · {{ me.persona }}{% if me.warehouse_role %} · {{ me.warehouse_role }}{% endif %}</small></li>
+      <li class="who"><strong>{{ me.display_name }}</strong>{% if me.warehouse_role %}<small>{{ me.warehouse_role }}</small>{% endif %}</li>
       <li><form method="post" action="/ui/logout"><button class="out" type="submit">Log out</button></form></li>
       {% else %}
       <li><a href="/login">Log in</a></li>

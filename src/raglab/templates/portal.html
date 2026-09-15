@@ -3,9 +3,8 @@
 {% block content %}
 <div class="portal-head"><h2>{{ me.display_name }}</h2><p>{{ group_descriptions[me.group] }} — the surfaces your role opens. Nothing is loaded until you ask.</p></div>
 <div class="doors tiles">
-  {% for surface in me.surfaces %}
+  {% for surface in surface_titles if surface in me.surfaces %}
   <a href="/{{ surface }}" class="tile door">
-    <span class="eyebrow">{% if me.modules[surface] == "*" %}composes over the whole menu{% elif me.modules[surface] %}composes under {{ me.modules[surface] | replace("_", " ") }}{% else %}reads only{% endif %}</span>
     <h3>{{ surface_titles[surface] }}</h3>
     <p>{{ surface_blurbs[surface] }}</p>
   </a>

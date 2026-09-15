@@ -493,26 +493,42 @@ def bind_record_from_rows(ctx: retrieval.Context, question: str, result: dict) -
     return ",".join(ids)
 
 
-def release_unbound_member_legs(plan: Plan, member_id: str | None) -> Plan:
-    """No member is open (Ask, or a surface before a key is entered): a leg
-    that needs one cannot run, and must not sink the legs that can. The leg
-    stays in the plan, reported as not executed with the reason, but is no
-    longer required. (A member's own question on Ask, 2026-09-14: the
-    brochure note answered it at 0.77 and 'missing: current_enrollment'
-    hid it.)"""
-    if member_id:
-        return plan
+_CONTEXT_SLOTS = ("member_id", "case_id", "claim_id")
+
+
+def release_unbound_legs(plan: Plan, ctx: "retrieval.Context", member_id: str | None) -> Plan:
+    """A leg whose slot the context cannot supply (no member open on Ask;
+    no case open on Agent Assist; no claim named) cannot run, and must not
+    sink the legs that can. It stays in the plan, still tries to run — a
+    row may bind the slot before its turn — and reports why it did not, but
+    it no longer decides the status. (A member's question on Ask hid the
+    brochure answer behind 'missing: current_enrollment'; 'does this member
+    have an appeal that was upheld?' hid the appeals rows behind a case
+    lookup with no case open, 2026-09-14/15.)"""
+    have = {"member_id": member_id or _member_id_of(ctx), "case_id": ctx.record.get("case_id"), "claim_id": ctx.record.get("claim_id")}
+    # An identifier the question NAMED but that resolved to nothing is not "no case open": the honest
+    # verdict is insufficient evidence, and the leg that would have read it stays required.
+    unresolved_kinds = {f"{str(u.get('kind', '')).lower()}_id" for u in (ctx.unresolved or []) if isinstance(u, dict)}
     notes = []
     for leg in plan.legs:
         if leg.kind == "doc_probe" or not leg.required:
             continue
         declared = snowlane.NAMED_QUERIES.get(leg.query_name, {}).get("params", {})
-        if "member_id" in leg.slots or ("member_id" in declared and "member_id" not in leg.params):
+        needs = set(leg.slots) & set(_CONTEXT_SLOTS)
+        if "member_id" in declared and "member_id" not in leg.params:
+            needs.add("member_id")
+        missing = [slot for slot in _CONTEXT_SLOTS if slot in needs and not have[slot]]
+        if missing and not (set(missing) & unresolved_kinds):
             leg.required = False
-            notes.append(f"no_member:{leg.query_name}")
+            notes.append(f"no_{missing[0][:-3]}:{leg.query_name}")
     if notes:
         plan.enforced = tuple(plan.enforced) + tuple(notes)
     return plan
+
+
+def release_unbound_member_legs(plan: Plan, member_id: str | None) -> Plan:
+    """Kept for callers that have no context: the member slot only."""
+    return release_unbound_legs(plan, retrieval.Context(), member_id)
 
 
 def fill_member_slot(plan: Plan) -> Plan:
@@ -625,8 +641,10 @@ def bind_slots(leg: Leg, ctx: retrieval.Context, member_id: str | None, route: r
         if slot not in values:
             raise PlanError(f"leg {leg.name}: unknown slot {slot!r}")
         if values[slot] is None:
-            raise PlanError(f"leg {leg.name}: {slot} required but not in context"
-                            + (" — no member is open; open the member on Agent Assist to answer this part" if slot == "member_id" else ""))
+            hint = {"member_id": " — no member is open; open the member on Agent Assist to answer this part",
+                    "case_id": " — no case is open; open the case on the Appeals Workbench to answer this part",
+                    "claim_id": " — no claim is named or bound"}.get(slot, "")
+            raise PlanError(f"leg {leg.name}: {slot} required but not in context{hint}")
         bound[slot] = values[slot]
     return bound
 
@@ -1111,7 +1129,7 @@ def compose(
     coverage = None
     search_note: dict = {}
     by_identity = 0  # chunks seated by the records or row-identity rules, summed over the document legs
-    plan = release_unbound_member_legs(plan, member_id or _member_id_of(ctx))
+    plan = release_unbound_legs(plan, ctx, member_id)
     for leg in sorted(plan.legs, key=lambda l: l.kind == "doc_probe"):  # rows first: a row can pin the record the document legs read
 
         if leg.kind == "doc_probe":

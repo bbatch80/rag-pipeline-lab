@@ -442,3 +442,40 @@ def test_brochure_vocabulary_sets_the_ranking_text_and_keeps_the_wording():
     fresh = planner.Leg(name="a", kind="doc_probe", text="Does the deductible reset when switching plans?", sources=("brochure",))
     untouched = planner.phrase_legs_in_brochure_vocabulary(planner.Plan(shape="simple", origin="model", legs=[fresh]), phrasing=lambda t: None)
     assert untouched.enforced == () and untouched.legs[0].ranking_text is None        # the call failed: the member's words rank
+
+
+def test_a_leg_needing_a_case_or_claim_that_is_not_open_is_released_too():
+    """'Does this member have an appeal that was upheld?' (2026-09-15, admin,
+    Annelle open): member_appeals answered; the planner's appeal_case leg had
+    no case to bind, was required, and hid the rows."""
+    from raglab import planner, retrieval
+
+    legs = [planner.Leg(name="appeals", kind="member_query", query_name="member_appeals", slots=("member_id",)),
+            planner.Leg(name="appeal_case_details", kind="member_query", query_name="appeal_case", slots=("case_id",))]
+    ctx = retrieval.Context(member_key="k", record={"member_id": "M360817373"})
+    pl = planner.release_unbound_legs(planner.Plan(shape="compound", origin="model", legs=legs), ctx, "M360817373")
+    assert [l.required for l in pl.legs] == [True, False] and pl.enforced == ("no_case:appeal_case",)
+    with_case = retrieval.Context(member_key="k", record={"member_id": "M360817373", "case_id": "APL-8095317"})
+    legs2 = [planner.Leg(name="appeal_case_details", kind="member_query", query_name="appeal_case", slots=("case_id",))]
+    assert planner.release_unbound_legs(planner.Plan(shape="simple", origin="model", legs=legs2), with_case, "M360817373").enforced == ()
+    claim = [planner.Leg(name="adj", kind="member_query", query_name="claim_adjudication", slots=("claim_id",))]
+    assert planner.release_unbound_legs(planner.Plan(shape="simple", origin="model", legs=claim), ctx, "M360817373").enforced == ("no_claim:claim_adjudication",)
+
+
+def test_an_unresolved_identifier_is_not_released_and_an_empty_payload_is_never_ok():
+    """unanswerable-06: 'What did the reviewer decide on case APL-0000000?' —
+    the case was NAMED and resolved to nothing; releasing the leg made an
+    empty payload read ok. Named-but-unresolved keeps the leg required, and
+    a payload where no leg answered is insufficient regardless."""
+    from raglab import payload as payload_mod
+    from raglab import planner, retrieval
+
+    leg = planner.Leg(name="appeal_case", kind="member_query", query_name="appeal_case", slots=("case_id",))
+    ctx = retrieval.Context(unresolved=[{"kind": "case", "value": "APL-0000000"}])
+    pl = planner.release_unbound_legs(planner.Plan(shape="simple", origin="model", legs=[leg]), ctx, None)
+    assert pl.legs[0].required is True and pl.enforced == ()
+    released = planner.Plan(shape="simple", origin="model", legs=[planner.Leg(name="appeal_case", kind="member_query", query_name="appeal_case", slots=("case_id",), required=False)])
+    composed = payload_mod.compose("q", released.to_dict(), sub_results=[],
+                                   warehouse_results=[{"leg": "appeal_case", "query_name": "appeal_case", "status": "not_executed", "reason": "no case is open"}],
+                                   chunks=[], subject=None, unresolved=[], as_of_defaulted=False)
+    assert composed["status"] == "insufficient_evidence" and composed["missing"] == ["appeal_case"]

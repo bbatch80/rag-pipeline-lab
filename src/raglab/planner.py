@@ -505,6 +505,32 @@ def _named_kinds(question: str) -> set[str]:
     return kinds
 
 
+def ensure_case_file_legs(plan: Plan, ctx: "retrieval.Context", question: str, available: dict) -> Plan:
+    """The case-file rule (2026-09-15): with a case open, the case's own
+    records are always read, and the clinical policy the case cites is read
+    at the version in force — as best-effort document legs the model may
+    have left out. Context already filters both to this case, so nothing
+    from another file can enter. ("What policy rules applied to this case?"
+    answered from the case row alone while the rationale chunk named the
+    brochure sections; three golden appeal items fail the same way.)"""
+    if not ctx.record.get("case_id") or plan.origin == "caller":
+        return plan
+    sources = set(available.get("sources", ()))
+    hinted = {src for leg in plan.legs if leg.kind == "doc_probe" for src in leg.sources}
+    unhinted = any(leg.kind == "doc_probe" and not leg.sources for leg in plan.legs)
+    notes = []
+    if "appeal" in sources and "appeal" not in hinted and not unhinted and len(plan.legs) < MAX_LEGS:
+        plan.legs.append(Leg(name="case file", kind="doc_probe", text=question, sources=("appeal",), required=False))
+        notes.append("case_file")
+    if ctx.record.get("policy_id") and "clinical_policy" in sources and "clinical_policy" not in hinted and len(plan.legs) < MAX_LEGS:
+        plan.legs.append(Leg(name="policy applied", kind="doc_probe", text=question, sources=("clinical_policy",), required=False))
+        notes.append("policy_applied")
+    if notes:
+        plan.shape = "compound" if len(plan.legs) > 1 else "simple"
+        plan.enforced = tuple(plan.enforced) + tuple(notes)
+    return plan
+
+
 def release_unbound_legs(plan: Plan, ctx: "retrieval.Context", member_id: str | None, question: str = "") -> Plan:
     """A leg whose slot the context cannot supply (no member open on Ask;
     no case open on Agent Assist; no claim named) cannot run, and must not
@@ -1151,6 +1177,7 @@ def compose(
     search_note: dict = {}
     by_identity = 0  # chunks seated by the records or row-identity rules, summed over the document legs
     plan = release_unbound_legs(plan, ctx, member_id, question)
+    plan = ensure_case_file_legs(plan, ctx, question, available)
     for leg in sorted(plan.legs, key=lambda l: l.kind == "doc_probe"):  # rows first: a row can pin the record the document legs read
 
         if leg.kind == "doc_probe":

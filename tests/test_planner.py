@@ -499,3 +499,27 @@ def test_a_parameter_the_catalog_does_not_accept_is_dropped_not_fatal():
     assert pl.legs[0].params == {} and pl.legs[0].slots == ("member_id",) and pl.enforced == ("dropped_param:member_enrollment.as_of",)
     assert pl.legs[1].slots == ("case_id",)
     planner.validate(pl, "What plan was this member on when they filed the appeal?", menu)  # no longer raises
+
+
+def test_the_case_file_rule_reads_the_case_and_its_policy_when_a_case_is_open():
+    """'What policy rules applied to this case?' (Workbench, 2026-09-15): the
+    model planned the case row and no document leg; the rationale chunk
+    naming the brochure sections never entered the payload."""
+    from raglab import planner, retrieval
+
+    menu = {"sources": ("appeal", "call_note", "clinical_note", "brochure", "clinical_policy"), "named_queries": ("appeal_case",)}
+    q = "What policy rules applied to this case?"
+    row_only = planner.Plan(shape="simple", origin="model", legs=[planner.Leg(name="case", kind="member_query", query_name="appeal_case", slots=("case_id",))])
+    out = planner.ensure_case_file_legs(row_only, retrieval.Context(record={"case_id": "APL-4935714"}), q, menu)
+    assert [(l.kind, l.sources, l.required) for l in out.legs][1:] == [("doc_probe", ("appeal",), False)] and out.enforced == ("case_file",)
+    with_policy = planner.Plan(shape="simple", origin="model", legs=[planner.Leg(name="case", kind="member_query", query_name="appeal_case", slots=("case_id",))])
+    out = planner.ensure_case_file_legs(with_policy, retrieval.Context(record={"case_id": "APL-1", "policy_id": "CP-0010"}), q, menu)
+    assert [l.sources for l in out.legs][1:] == [("appeal",), ("clinical_policy",)] and out.enforced == ("case_file", "policy_applied")
+    already = planner.Plan(shape="simple", origin="model", legs=[planner.Leg(name="d", kind="doc_probe", text=q, sources=("appeal",))])
+    assert planner.ensure_case_file_legs(already, retrieval.Context(record={"case_id": "APL-1"}), q, menu).enforced == ()      # the model read the file itself
+    unhinted = planner.Plan(shape="simple", origin="model", legs=[planner.Leg(name="d", kind="doc_probe", text=q, sources=())])
+    assert planner.ensure_case_file_legs(unhinted, retrieval.Context(record={"case_id": "APL-1"}), q, menu).enforced == ()     # an unhinted leg searches the file already
+    no_case = planner.Plan(shape="simple", origin="model", legs=[planner.Leg(name="c", kind="member_query", query_name="member_calls", slots=("member_id",))])
+    assert planner.ensure_case_file_legs(no_case, retrieval.Context(record={"member_id": "M1"}), q, menu).enforced == ()       # no case open: nothing added
+    ask_menu = {"sources": ("brochure",), "named_queries": ()}
+    assert planner.ensure_case_file_legs(planner.Plan(shape="simple", origin="model", legs=[]), retrieval.Context(record={"case_id": "APL-1"}), q, ask_menu).enforced == ()  # not on the menu

@@ -111,7 +111,8 @@ h2.sec small { display: block; font-weight: 400; letter-spacing: 0; text-transfo
 /* ---- warehouse rows ---- */
 .rows { padding: .75rem 1rem; margin-bottom: .6rem; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
 .rows header { display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline; margin-bottom: .25rem; }
-.rows .scroll { overflow-x: auto; }
+.scroll, .rows .scroll { overflow-x: auto; max-width: 100%; }
+main.container { overflow-x: hidden; }
 .rows table { font-size: .85rem; margin: 0; font-variant-numeric: tabular-nums; }
 .rows th.masked, .rows td.masked { color: var(--crit); }
 .rows .null { color: var(--muted); font-style: italic; }
@@ -129,7 +130,9 @@ h2.sec small { display: block; font-weight: 400; letter-spacing: 0; text-transfo
 .payloadfoot code { font-family: var(--mono); font-size: .74rem; color: var(--steel); background: none; padding: 0; }
 
 /* ---- console ---- */
-.cards article { padding: .75rem 1rem; margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 8px; box-shadow: none; overflow-wrap: anywhere; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: .8rem; margin-bottom: 1.2rem; }
+.cards article { padding: .75rem 1rem; margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 8px; box-shadow: none; overflow-wrap: anywhere; min-width: 0; }
+.cards article small { display: block; margin-top: .3rem; color: var(--muted); }
 .auditrows td.docs .more { color: var(--steel); white-space: nowrap; }
 .cards article header { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: var(--steel); font-weight: 600; padding: 0; margin-bottom: .3rem; background: none; border: 0; }
 .cards ul { margin: 0; padding-left: 1rem; }

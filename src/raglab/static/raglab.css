@@ -184,3 +184,26 @@ iframe.dashboard { width: 100%; height: 70vh; border: 1px solid var(--line); bor
 .handoff .tool header { padding: .4rem .8rem; }
 .handoff .tool pre.doc { white-space: pre-wrap; font-size: .8rem; line-height: 1.45; margin: 0; padding: .6rem .8rem; background: var(--code); color: var(--ink); }
 .handoff details.example summary { cursor: pointer; font-weight: 600; }
+
+/* /codebase — how the codebase is connected (public) */
+.codebase { max-width: 46rem; }
+.codebase hgroup p { font-size: 1.02rem; color: var(--ink); }
+.codebase h3 { margin-top: 1.9rem; }
+.codebase h3 .kicker { display: block; font-family: var(--pico-font-family-sans-serif, inherit); font-size: .7rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--steel); margin-bottom: .15rem; }
+.codebase p { max-width: 66ch; }
+.codebase code { white-space: nowrap; }
+.codebase .callout { border-left: 3px solid var(--gold); padding: .15rem 0 .15rem .9rem; color: var(--muted); font-style: italic; }
+.codebase ol.flow { counter-reset: step; list-style: none; padding: 0; margin: 0 0 1rem; }
+.codebase ol.flow li { counter-increment: step; position: relative; padding: .5rem 0 .5rem 2.5rem; border-top: 1px solid var(--line); max-width: 66ch; }
+.codebase ol.flow li:last-child { border-bottom: 1px solid var(--line); }
+.codebase ol.flow li::before { content: counter(step); position: absolute; left: 0; top: .55rem; width: 1.6rem; height: 1.6rem; border-radius: 50%; background: var(--navy); color: #fff; font-family: var(--mono); font-size: .78rem; display: grid; place-items: center; }
+.codebase ol.flow li b { color: var(--navy); }
+.codebase .lookup { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; margin: .8rem 0 1rem; }
+.codebase .lookup div { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: .75rem .9rem; }
+.codebase .lookup code { display: inline-block; margin-bottom: .25rem; }
+.codebase .lookup span { display: block; color: var(--muted); font-size: .9rem; }
+.howlink-block { margin: 2rem 0 0; }
+.logincard + .howlink-block { max-width: 30rem; margin-left: auto; margin-right: auto; text-align: center; }
+.howlink { display: inline-block; font-size: 1.05rem; font-weight: 600; color: var(--navy); text-decoration: none; border: 1px solid var(--line); border-radius: 8px; padding: .6rem 1.1rem; background: var(--card); }
+.howlink:hover { border-color: var(--gold); }
+@media (max-width: 40rem) { .codebase .lookup { grid-template-columns: 1fr; } }

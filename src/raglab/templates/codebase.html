@@ -1,0 +1,42 @@
+{% extends "layout.html" %}
+{% block title %}How the codebase is connected{% endblock %}
+{% block content %}
+<article class="codebase">
+<hgroup><h2>How the codebase is connected</h2><p>One Python package, <code>raglab</code>, about 12,000 lines in 45 modules, with 58 test files beside it. Everything is reached through one command-line tool, <code>raglab</code>, and one web app. Think of it as three flows plus a governance layer.</p></hgroup>
+
+<h3><span class="kicker">Flow 1</span>A document goes in</h3>
+<p><code>ingest.py</code> is the front door. For each source file it computes a fingerprint (the bytes plus the processing recipe) and skips anything unchanged. New or changed files go through <code>parsing/</code> (the PDF and markdown parsers, with <code>parsecache.py</code> remembering parses), then <code>chunking.py</code> (section-aware splitting with a size cap), then quality gates (a degenerate parse is quarantined, never indexed), then <code>deid.py</code> for PHI sources (pseudonymize before anything is stored), then <code>indexcopy.py</code>, which builds the search copy of each chunk: the text the ranker reads, with a context prefix and, for records, a header of the record's keys.</p>
+<p><code>sources.py</code> is the registry that says how each of the eleven sources behaves. <code>embed.py</code> turns chunks into vectors and <code>raglab index</code> builds the HNSW and BM25 indexes. The <code>synth/</code> package generates the internal corpus and member records from the Synthea population; <code>letters.py</code>, <code>opm.py</code>, and <code>roster.py</code> fetch or load the real external sources.</p>
+
+<h3><span class="kicker">Flow 2</span>A question comes in</h3>
+<ol class="flow">
+  <li><b>Identity</b> (<code>identity.py</code>, <code>webapp.py</code>): the session resolves to a document persona and a warehouse role. Identity is never a parameter a model can set.</li>
+  <li><b>Context</b> (<code>retrieval.py</code>, <code>identifiers.py</code>, <code>recognizers.py</code>): identifiers in the question or the surface (member, claim, case) are recognized by shape and check digit, looked up, and turned into filters. They are context, not search words.</li>
+  <li><b>Route</b> (<code>router.py</code>): code reads the question for plan years, plan codes, an as-of date, and scope, and applies the coverage rule (a program named without a plan means search every plan beneath it).</li>
+  <li><b>Plan</b> (<code>planner.py</code>, the biggest module): one call to a small model proposes the legs (document probes and named warehouse queries, at most three), and the code validates and repairs the plan with structural rules. Model plans, code governs.</li>
+  <li><b>Search</b> (<code>retrieval.py</code>): per-source hybrid search, vector plus BM25, fused by rank, under Postgres row-level security so an unauthorized chunk is never a candidate.</li>
+  <li><b>Rerank</b> (<code>rerank.py</code>): a cross-encoder scores every candidate against the question; the best score against a per-source threshold decides abstention.</li>
+  <li><b>Warehouse</b> (<code>snowlane.py</code>): named, parameterized Snowflake queries run as the caller's warehouse role; no freeform SQL.</li>
+  <li><b>Payload</b> (<code>payload.py</code>, <code>context_services.py</code>): one versioned JSON payload with status, chunks, provenance, and the plan, validated against the schema.</li>
+  <li><b>Disclose</b> (<code>pipeline.py</code>): the payload is written to the disclosure log before it's delivered; if the write fails, nothing is delivered.</li>
+</ol>
+<p><code>webapp.py</code> exposes this as JSON routes, <code>ui.py</code> and <code>templates/</code> render it as the five surfaces, <code>mcp_server.py</code> exposes it as three MCP tools. All three call the same functions.</p>
+
+<h3><span class="kicker">Flow 3</span>Proving it works</h3>
+<p><code>eval_retrieval.py</code> runs the golden set through the real pipeline per persona; <code>checks.py</code> scores each item by its declared shape (pages, values, rows, refusal); <code>taxonomy.py</code> groups items by the kind of work they ask for; the ratchet compares against <code>eval/baseline.json</code>.</p>
+<p><code>benchmark.py</code> measures index recall, <code>recall-rls</code> recall per persona, <code>drift.py</code> embedding drift, <code>ablation.py</code> the funnel with stages removed, <code>rerankbakeoff.py</code> and <code>tablebakeoff.py</code> the model and parser comparisons. <code>dashboard.py</code> renders the scorecard, <code>console.py</code> the health and audit views, <code>handoff.py</code> the specification page. <code>smoke.py</code> checks the live site after a deploy.</p>
+
+<h3><span class="kicker">Throughout</span>The governance layer</h3>
+<p>It runs through all three flows: RLS policies and migrations in <code>db/</code>, <code>deid.py</code> with its owner-only vault, <code>identity.py</code>, and the disclosure log.</p>
+
+<h3><span class="kicker">Where to look first</span>Four files</h3>
+<p>The answer to “where does X happen” is nearly always one of these.</p>
+<div class="lookup">
+  <div><code>planner.py</code><span>what the platform decides to look at</span></div>
+  <div><code>retrieval.py</code><span>what it finds</span></div>
+  <div><code>rerank.py</code><span>what it keeps</span></div>
+  <div><code>payload.py</code><span>what it hands over</span></div>
+</div>
+<p class="note codebase-foot">Module names as of September 2026. The source is public: <a href="https://github.com/bbatch80/rag-pipeline-lab">github.com/bbatch80/rag-pipeline-lab</a>.</p>
+</article>
+{% endblock %}

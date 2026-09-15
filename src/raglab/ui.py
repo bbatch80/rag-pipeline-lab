@@ -157,6 +157,11 @@ def mount(app: FastAPI) -> None:
             return RedirectResponse("/login", status_code=303)
         return _page("portal.html", request, me)
 
+    @app.get("/codebase", response_class=HTMLResponse)
+    def codebase_page(request: Request):
+        """How the codebase is connected — public, for a reader who has not logged in."""
+        return _page("codebase.html", request, me_or_none(request), current="codebase")
+
     @app.get("/login", response_class=HTMLResponse)
     def login_page(request: Request):
         accounts = {u: display for u, (display, group) in identity.SEED_USERS.items()}

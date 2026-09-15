@@ -484,3 +484,18 @@ def test_an_unresolved_identifier_is_not_released_and_an_empty_payload_is_never_
                                    warehouse_results=[{"leg": "appeal_case", "query_name": "appeal_case", "status": "not_executed", "reason": "no case is open"}],
                                    chunks=[], subject=None, unresolved=[], as_of_defaulted=False)
     assert composed["status"] == "insufficient_evidence" and composed["missing"] == ["appeal_case"]
+
+
+def test_a_parameter_the_catalog_does_not_accept_is_dropped_not_fatal():
+    """'What plan was this member on when they filed the appeal?' (Workbench,
+    2026-09-15): the model gave member_enrollment an as_of parameter; the
+    catalog has none; validation discarded the whole plan for a rules plan."""
+    from raglab import planner
+
+    menu = {"sources": ("brochure",), "named_queries": ("member_enrollment", "appeal_case")}
+    legs = [planner.Leg(name="enrollment at filing", kind="member_query", query_name="member_enrollment", slots=("member_id",), params={"as_of": "2025-12-23"}),
+            planner.Leg(name="case", kind="member_query", query_name="appeal_case", slots=("case_id",))]
+    pl = planner.repair_query_names(planner.Plan(shape="compound", origin="model", legs=legs), menu)
+    assert pl.legs[0].params == {} and pl.legs[0].slots == ("member_id",) and pl.enforced == ("dropped_param:member_enrollment.as_of",)
+    assert pl.legs[1].slots == ("case_id",)
+    planner.validate(pl, "What plan was this member on when they filed the appeal?", menu)  # no longer raises

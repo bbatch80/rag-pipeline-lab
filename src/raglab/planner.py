@@ -568,7 +568,18 @@ def repair_query_names(plan: Plan, available: dict) -> Plan:
     menu = list(available.get("named_queries", ()))
     kept, notes = [], []
     for leg in plan.legs:
-        if leg.kind == "doc_probe" or leg.query_name in menu:
+        if leg.kind == "doc_probe":
+            kept.append(leg)
+            continue
+        # A parameter the catalog does not accept ("as_of" on member_enrollment) loses only itself,
+        # not the plan: the query still runs and the answer model sees every row.
+        declared = set(snowlane.NAMED_QUERIES.get(leg.query_name, {}).get("params", {}))
+        if leg.query_name in menu and declared:
+            for bad in [k for k in list(leg.params) if k not in declared] + [sl for sl in leg.slots if sl not in declared]:
+                notes.append(f"dropped_param:{leg.query_name}.{bad}")
+            leg.params = {k: v for k, v in leg.params.items() if k in declared}
+            leg.slots = tuple(sl for sl in leg.slots if sl in declared)
+        if leg.query_name in menu:
             kept.append(leg)
             continue
         close = difflib.get_close_matches(leg.query_name or "", menu, n=1, cutoff=0.6)

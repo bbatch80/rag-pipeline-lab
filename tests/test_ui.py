@@ -43,7 +43,8 @@ def test_provenance_line_under_each_chunk():
     assert p["chunks"][0]["source"]["content_hash"][:8] in html
 
 
-def test_codebase_page_is_public_and_linked(client):
+def test_codebase_page_is_public_and_linked(app):
+    client = TestClient(app)  # no login
     page = client.get("/codebase")
     assert page.status_code == 200, "readable without a login"
     for name in ("planner.py", "retrieval.py", "rerank.py", "payload.py", "How the codebase is connected"):

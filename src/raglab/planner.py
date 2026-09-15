@@ -496,7 +496,16 @@ def bind_record_from_rows(ctx: retrieval.Context, question: str, result: dict) -
 _CONTEXT_SLOTS = ("member_id", "case_id", "claim_id")
 
 
-def release_unbound_legs(plan: Plan, ctx: "retrieval.Context", member_id: str | None) -> Plan:
+def _named_kinds(question: str) -> set[str]:
+    """Slot kinds the question names by identifier (CLM-… → claim_id, APL-… → case_id, M… → member_id)."""
+    kinds = set()
+    for m in _ID_TOKEN.finditer(question or ""):
+        tok = _canon(m.group(0))
+        kinds.add("claim_id" if tok.startswith("CLM") else "case_id" if tok.startswith("APL") else "member_id")
+    return kinds
+
+
+def release_unbound_legs(plan: Plan, ctx: "retrieval.Context", member_id: str | None, question: str = "") -> Plan:
     """A leg whose slot the context cannot supply (no member open on Ask;
     no case open on Agent Assist; no claim named) cannot run, and must not
     sink the legs that can. It stays in the plan, still tries to run — a
@@ -509,6 +518,7 @@ def release_unbound_legs(plan: Plan, ctx: "retrieval.Context", member_id: str | 
     # An identifier the question NAMED but that resolved to nothing is not "no case open": the honest
     # verdict is insufficient evidence, and the leg that would have read it stays required.
     unresolved_kinds = {f"{str(u.get('kind', '')).lower()}_id" for u in (ctx.unresolved or []) if isinstance(u, dict)}
+    unresolved_kinds |= _named_kinds(question)  # named in the question at all: the leg was asked for, whether or not it resolves
     notes = []
     for leg in plan.legs:
         if leg.kind == "doc_probe" or not leg.required:
@@ -1129,7 +1139,7 @@ def compose(
     coverage = None
     search_note: dict = {}
     by_identity = 0  # chunks seated by the records or row-identity rules, summed over the document legs
-    plan = release_unbound_legs(plan, ctx, member_id)
+    plan = release_unbound_legs(plan, ctx, member_id, question)
     for leg in sorted(plan.legs, key=lambda l: l.kind == "doc_probe"):  # rows first: a row can pin the record the document legs read
 
         if leg.kind == "doc_probe":

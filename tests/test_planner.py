@@ -474,6 +474,11 @@ def test_an_unresolved_identifier_is_not_released_and_an_empty_payload_is_never_
     ctx = retrieval.Context(unresolved=[{"kind": "case", "value": "APL-0000000"}])
     pl = planner.release_unbound_legs(planner.Plan(shape="simple", origin="model", legs=[leg]), ctx, None)
     assert pl.legs[0].required is True and pl.enforced == ()
+    # named in the question is enough, even where the resolver could not check it (CI has no population)
+    leg2 = planner.Leg(name="adj", kind="member_query", query_name="claim_adjudication", slots=("claim_id",))
+    pl2 = planner.release_unbound_legs(planner.Plan(shape="simple", origin="model", legs=[leg2]), retrieval.Context(), None,
+                                       "what do the secret facts say about claim CLM-1363781509")
+    assert pl2.legs[0].required is True and pl2.enforced == ()
     released = planner.Plan(shape="simple", origin="model", legs=[planner.Leg(name="appeal_case", kind="member_query", query_name="appeal_case", slots=("case_id",), required=False)])
     composed = payload_mod.compose("q", released.to_dict(), sub_results=[],
                                    warehouse_results=[{"leg": "appeal_case", "query_name": "appeal_case", "status": "not_executed", "reason": "no case is open"}],

@@ -259,12 +259,6 @@ def _capability_html(conn: psycopg.Connection) -> str:
         f"{_rate_table_html(group_rows)}</table>\n"
         '<p class="note">The CI gate ratchets every category and group against the stored baseline '
         "(eval/baseline.json) and every guardrail item individually.</p>\n"
-        "\n<h2>Open defects</h2>\n"
-        f'<ul class="defects">{defect_items}</ul>\n'
-        '<p class="note">Each defect is pinned to the category it blocks; a row\'s pass rate can be '
-        "100% while a defect found outside the golden set stays open against it.</p>\n"
-        "\n<h2>Real questions (blind set, first-run totals)</h2>\n"
-        f'<p class="note">{blind_html}</p>\n'
     )
 
 
@@ -508,22 +502,11 @@ set. {stamp}</p>
 <p class="note">Pass = every expectation the item declares holds in the composed payload. The golden set grows as live questions become items (147 at the cutover, {golden_size} now), so a new failing item lowers the rate before its fix raises it; the denominator is on every point.</p>
 {capability}
 
-<h2>Retrieval quality over time</h2>
-<div class="chart-box">
-  <div class="legend"><span class="k" style="background:var(--teal)"></span>hit@5
-  <span class="k" style="background:var(--indigo)"></span>source_coverage
-  <span class="k" style="background:var(--amber)"></span>baseline hit@5 ({base_hit if base_hit is not None else 'none'})
-  &nbsp;·&nbsp; hover a point for the run's config</div>
-  {_trend_svg(trend, base_hit if base_hit is not None else 0.85)}
-</div>
-
 <p class="note">Latency per stage over the golden set (ms, p50 / p95):
 {' · '.join(f"{s} {p50:.0f} / {p95:.0f}" for s, (p50, p95) in sorted(latency.items())) or 'no latency data yet'}
 — measured on the machine that ran the eval; the Phase 6 VM is the target.</p>
-
 <p class="note">Vector recall under row-level security, per persona (latest measurement, recall@k vs exact scan as the same persona):
 {' · '.join(f"{c} sees {v}/{t}: mean {float(m):.3f}, min {float(mn):.3f}, underfilled {int(float(u))}" for c, m, mn, u, v, t in rls) or 'not measured yet'}</p>
-
 <h2>Latest run — by expected source</h2>
 <table><tr><th>source</th><th colspan="2">hit@5</th><th>precision@5</th>
 <th>coverage</th><th>item pass</th></tr>
@@ -534,10 +517,6 @@ source cannot degrade an old one without a number moving here.</p>
 <h2>PHI de-identification (latest measured run{deid_when})</h2>
 <table><tr><th>entity type</th><th colspan="2">detection recall</th></tr>
 {deid_rows or '<tr><td colspan=3>no deid runs yet</td></tr>'}</table>
-
-<h2>Generation — cross-family judged</h2>
-<table><tr><th>generator</th><th>judge</th><th>metric</th><th>mean</th><th>n</th></tr>
-{gen_rows or '<tr><td colspan=5>no generation runs yet</td></tr>'}</table>
 
 <details><summary>All runs (ledger)</summary>
 <table><tr><th>run</th><th>started</th><th>kind</th><th>config</th><th>sha</th>

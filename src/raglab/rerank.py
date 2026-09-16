@@ -35,7 +35,7 @@ RERANKERS = {
     # every model); answered prose items score >= 0.899 -> the midpoint 0.7.
     # Record bars unchanged (record-lane items behaved identically to bge-base).
     "qwen3-0.6b": {"model": "Qwen/Qwen3-Reranker-0.6B", "kind": "qwen3", "threshold": 0.7,
-                   "thresholds": {"call_note": 0.1, "appeal": 0.1, "clinical_note": 0.1}, "size_gb": 1.2},
+                   "thresholds": {"call_note": 0.1, "appeal": 0.1, "clinical_note": 0.1}},  # ships
     "bge-base": {
         "model": "BAAI/bge-reranker-base",  # 2023, 278M
         "kind": "cross-encoder",
@@ -54,7 +54,10 @@ RERANKERS = {
         "thresholds": {"call_note": 0.1, "appeal": 0.1, "clinical_note": 0.1},
     },
 }
-RERANKER = os.environ.get("RAGLAB_RERANKER", "bge-base")
+# Qwen3 ships (2026-09-16: full golden set 121/163 vs bge-base 119, member
+# wording read as meaning); bge-base stays in the image as the one-line
+# fallback: RAGLAB_RERANKER=bge-base and a restart (deploy.sh reranker).
+RERANKER = os.environ.get("RAGLAB_RERANKER", "qwen3-0.6b")
 MODEL_NAME = RERANKERS[RERANKER]["model"]
 ABSTAIN_THRESHOLD = RERANKERS[RERANKER]["threshold"]
 ABSTAIN_BY_SOURCE = RERANKERS[RERANKER].get("thresholds", {})
@@ -240,7 +243,10 @@ class _Qwen3Reranker:
         return scores
 
     def _probs(self, model, enc) -> list[float]:
-        with self.torch.no_grad():
+        # On a CPU with AMX (the VM) bf16 matmuls are several times faster; the
+        # NaN guard above rescores any overflow in fp32. RAGLAB_RERANK_DTYPE=bf16.
+        cpu_bf16 = self.device == "cpu" and RERANK_DTYPE == "bf16"
+        with self.torch.no_grad(), self.torch.autocast("cpu", dtype=self.torch.bfloat16, enabled=cpu_bf16):
             logits = model(**enc).logits[:, -1, :].float()
             two = self.torch.stack([logits[:, self.no], logits[:, self.yes]], dim=1)
             return self.torch.nn.functional.log_softmax(two, dim=1)[:, 1].exp().tolist()

@@ -71,4 +71,4 @@ def test_record_sources_share_the_record_bar():
     prose bar (clinical notes were the exception until persona_negative-07)."""
     for doc_type in ("call_note", "appeal", "clinical_note"):
         assert rerank.threshold_for(doc_type) == 0.1, doc_type
-    assert rerank.threshold_for("brochure") == 0.5
+    assert rerank.threshold_for("brochure") == rerank.ABSTAIN_THRESHOLD

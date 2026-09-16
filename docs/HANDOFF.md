@@ -80,7 +80,10 @@ by fingerprint), `raglab embed` (embeds where `embedding IS NULL`;
 resumable; records `embedding_model`), `raglab index` (vacuum, then the
 HNSW and per-source BM25 indexes). A change to the *derived* search copy
 only — `raglab rebuild-search-copy` — never re-de-identifies. Embedding
-model: `raglab.embed.MODEL`. Search-time parameters: `raglab.retrieval`
+model: `raglab.embed.MODEL`. Reranker: `raglab.rerank.RERANKERS` — Qwen3-Reranker-0.6B
+ships with its own abstention bar; bge-reranker-base rides in the same image as the
+fallback, switched with `RAGLAB_RERANKER` and a restart (`deploy/deploy.sh reranker <name>`),
+never a rebuild. Search-time parameters: `raglab.retrieval`
 (`EF_SEARCH`, `MAX_SCAN_TUPLES`, fusion and pool sizes). Schema changes
 are numbered migrations in `db/migrations/`, applied once each by
 `raglab migrate`, which the deployed container runs at every start.

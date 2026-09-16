@@ -6,6 +6,7 @@
 #   deploy.sh up <tag> [--no-pull]   pull the images for <tag>, restart, remember the previous tag
 #                                    (--no-pull: a rehearsal on images built locally)
 #   deploy.sh rollback     restart on the previous tag (after a failed smoke test)
+#   deploy.sh reranker <qwen3-0.6b|bge-base>   switch the reranker (env + restart; no pull, no rebuild)
 #   deploy.sh status       what is running
 set -euo pipefail
 
@@ -15,6 +16,16 @@ PREVIOUS="$ROOT/deploy/.previous-tag"
 COMPOSE=(docker compose -f "$ROOT/deploy/compose.yml" --env-file "$ENV_FILE")
 
 current_tag() { grep -E '^TAG=' "$ENV_FILE" | head -1 | cut -d= -f2 | tr -d '[:space:]'; }
+current_reranker() { { grep -E '^RAGLAB_RERANKER=' "$ENV_FILE" 2>/dev/null || echo "RAGLAB_RERANKER=qwen3-0.6b"; } | head -1 | cut -d= -f2 | tr -d '[:space:]'; }
+
+set_env() {  # set_env KEY value — one line in the env file, added or replaced
+  local key="$1" value="$2"
+  if grep -qE "^${key}=" "$ENV_FILE"; then
+    sed -i.bak -E "s|^${key}=.*|${key}=${value}|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+  else
+    echo "${key}=${value}" >> "$ENV_FILE"
+  fi
+}
 
 set_tag() {
   local tag="$1"
@@ -64,10 +75,19 @@ case "${1:-}" in
     prune_images "$(current_tag)" "$(cat "$PREVIOUS" 2>/dev/null || true)"
     docker images --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep -F 'rag-pipeline-lab' || true
     ;;
+  reranker)
+    name="${2:?qwen3-0.6b|bge-base}"
+    case "$name" in qwen3-0.6b|bge-base) ;; *) echo "unknown reranker '${name}' (qwen3-0.6b | bge-base)"; exit 2 ;; esac
+    [ -f "$ENV_FILE" ] || { echo "no $ENV_FILE on this host"; exit 2; }
+    echo "reranker: $(current_reranker) -> ${name} (both models are in the image; restarting the app)"
+    set_env RAGLAB_RERANKER "$name"
+    "${COMPOSE[@]}" up -d --no-deps app
+    "${COMPOSE[@]}" ps --format '{{.Name}} {{.Status}}'
+    ;;
   status)
-    echo "TAG=$(current_tag)  previous=$(cat "$PREVIOUS" 2>/dev/null || echo none)"
+    echo "TAG=$(current_tag)  previous=$(cat "$PREVIOUS" 2>/dev/null || echo none)  reranker=$(current_reranker)"
     "${COMPOSE[@]}" ps --format '{{.Name}} {{.Status}}'
     ;;
   *)
-    echo "usage: deploy.sh up <tag> | rollback | status"; exit 2 ;;
+    echo "usage: deploy.sh up <tag> | rollback | reranker <qwen3-0.6b|bge-base> | prune | status"; exit 2 ;;
 esac

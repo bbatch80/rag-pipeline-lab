@@ -3,18 +3,23 @@
 from raglab import rerank
 
 
-def test_single_pinned_reranker():
-    """bge-base ships; every other entry is a bake-off candidate (carries
-    `size_gb`, loaded only by `raglab rerank-bakeoff`)."""
-    assert rerank.RERANKER == "bge-base"
-    assert "size_gb" not in rerank.RERANKERS["bge-base"]
-    assert all("size_gb" in spec for key, spec in rerank.RERANKERS.items() if key != "bge-base")
-    assert rerank.MODEL_NAME == "BAAI/bge-reranker-base"
-    assert rerank.ABSTAIN_THRESHOLD == rerank.RERANKERS["bge-base"]["threshold"] == 0.5
+SHIPPED = ("qwen3-0.6b", "bge-base")  # the reranker, and the one-line fallback; both ride in the image
+
+
+def test_shipped_reranker_and_its_fallback():
+    """Qwen3 ships with the bar derived from its own scores; bge-base stays as
+    the fallback (RAGLAB_RERANKER=bge-base, no rebuild); every other entry is
+    a bake-off candidate (carries `size_gb`, loaded only by `raglab rerank-bakeoff`)."""
+    assert rerank.RERANKER == "qwen3-0.6b"
+    assert all("size_gb" not in rerank.RERANKERS[k] for k in SHIPPED)
+    assert all("size_gb" in spec for key, spec in rerank.RERANKERS.items() if key not in SHIPPED)
+    assert rerank.MODEL_NAME == "Qwen/Qwen3-Reranker-0.6B"
+    assert rerank.ABSTAIN_THRESHOLD == rerank.RERANKERS["qwen3-0.6b"]["threshold"] == 0.7
+    assert rerank.RERANKERS["bge-base"]["threshold"] == 0.5  # each model carries its own bar
 
 
 def test_abstention_is_per_source():
-    """A record clears its own (lower) threshold; prose keeps 0.5; nothing
+    """A record clears its own (lower) threshold; prose keeps the shipped bar; nothing
     clearing anything abstains."""
     from raglab.retrieval import Candidate
 
@@ -25,9 +30,10 @@ def test_abstention_is_per_source():
         c.rerank_score = score
         return c
 
-    assert rerank.threshold_for("call_note") == 0.1 and rerank.threshold_for("brochure") == 0.5
-    assert rerank.abstention_verdict([cand("brochure", 0.3), cand("call_note", 0.12)]) == (False, 0.3)
-    assert rerank.abstention_verdict([cand("brochure", 0.3), cand("call_note", 0.05)]) == (True, 0.3)
+    bar = rerank.ABSTAIN_THRESHOLD
+    assert rerank.threshold_for("call_note") == 0.1 and rerank.threshold_for("brochure") == bar
+    assert rerank.abstention_verdict([cand("brochure", bar - 0.2), cand("call_note", 0.12)]) == (False, bar - 0.2)
+    assert rerank.abstention_verdict([cand("brochure", bar - 0.2), cand("call_note", 0.05)]) == (True, bar - 0.2)
     assert rerank.abstention_verdict([cand("call_note", 0.6)]) == (False, 0.6)
     assert rerank.abstention_verdict([]) == (True, 0.0)
 

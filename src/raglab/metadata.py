@@ -61,6 +61,33 @@ def derive_document_meta(cell: CorpusCell) -> DocumentMeta:
     )
 
 
+# Option names distinctive enough to tag from a bare mention in a heading;
+# the common words (High, Standard) need "Option(s)" beside them.
+_DISTINCTIVE_OPTIONS = {"Elevate", "Elevate Plus", "HDHP"}
+
+
+def section_options(section: str, plan_options: tuple[str, ...] | list[str]) -> list[str]:
+    """Which of a document's options its section heading names — the
+    option-level metadata the router filters on when a question names an
+    option (Elevate vs Elevate Plus, High vs Standard). Derived from the
+    heading, never from the text; empty = the heading names none (shared
+    or unknown), and a single-option document is never tagged."""
+    if len(plan_options) < 2 or not section:
+        return []
+    import re
+
+    heading = section
+    found = []
+    for name in plan_options:
+        pattern = re.escape(name) + (r"\b(?!\s+Plus\b)" if name == "Elevate" else r"\b")
+        if not re.search(r"\b" + pattern, heading, re.IGNORECASE):
+            continue
+        if name not in _DISTINCTIVE_OPTIONS and not re.search(r"\boptions?\b", heading, re.IGNORECASE):
+            continue
+        found.append(name)
+    return found
+
+
 def chunk_jsonb(doc: DocumentMeta, chunk: Chunk) -> dict:
     """The JSONB payload: descriptive fields. Load-bearing fields
     (year, plan_code, acl_tag, doc_type) ride as typed columns instead."""
@@ -68,6 +95,7 @@ def chunk_jsonb(doc: DocumentMeta, chunk: Chunk) -> dict:
         "carrier": doc.carrier,
         "program": doc.program,
         "plan_options": list(doc.plan_options),
+        **({"section_options": section_options(chunk.section, doc.plan_options)} if len(doc.plan_options) >= 2 else {}),
         "effective_date": doc.effective_date,
         "section": chunk.section,
         "pages": list(chunk.pages),

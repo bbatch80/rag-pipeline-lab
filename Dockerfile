@@ -1,6 +1,6 @@
 # The app image: the API and the surfaces over the pipeline's query side.
 # Serve-only dependencies (no parsers, no de-identification models), the
-# reranker weights baked in at a pinned revision — no runtime downloads.
+# both rerankers' weights baked in at pinned revisions — no runtime downloads.
 # Built by the release workflow on a tag and published to GHCR; the same
 # image runs on the VM and, for the smoke test, on the Mac.
 
@@ -26,6 +26,17 @@ RUN HF_HUB_OFFLINE=0 /app/.venv/bin/python -c \
     && echo -n "${RERANKER_REVISION}" > "/opt/hf/hub/models--$(echo ${RERANKER_MODEL} | sed 's|/|--|g')/refs/main"
 # one weight format, no ONNX/bin copies; refs/main pinned so a load by name resolves offline
 
+# The shipped reranker (Qwen3, a yes/no judge) at the revision the baseline was
+# measured with. Both models ride in the image so the switch between them is
+# RAGLAB_RERANKER and a restart, never a rebuild (deploy.sh reranker <name>).
+ARG QWEN_MODEL=Qwen/Qwen3-Reranker-0.6B
+ARG QWEN_REVISION=e61197ed45024b0ed8a2d74b80b4d909f1255473
+RUN HF_HUB_OFFLINE=0 /app/.venv/bin/python -c \
+    "from huggingface_hub import snapshot_download; snapshot_download('${QWEN_MODEL}', revision='${QWEN_REVISION}', \
+     allow_patterns=['*.json', 'model.safetensors', 'tokenizer*', 'merges.txt', 'vocab.json', 'chat_template.jinja'])" \
+    && mkdir -p "/opt/hf/hub/models--$(echo ${QWEN_MODEL} | sed 's|/|--|g')/refs" \
+    && echo -n "${QWEN_REVISION}" > "/opt/hf/hub/models--$(echo ${QWEN_MODEL} | sed 's|/|--|g')/refs/main"
+
 # The package, the golden set and baseline the Console reports, the payload schema.
 COPY src ./src
 COPY eval/golden.jsonl eval/baseline.json ./eval/
@@ -35,7 +46,7 @@ COPY README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-default-groups --group rerank
 
-ENV PATH="/app/.venv/bin:$PATH" RAGLAB_RERANKER=bge-base
+ENV PATH="/app/.venv/bin:$PATH" RAGLAB_RERANKER=qwen3-0.6b
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
     CMD python -c "import httpx, sys; sys.exit(0 if httpx.get('http://127.0.0.1:8000/login').status_code == 200 else 1)"

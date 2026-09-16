@@ -44,7 +44,7 @@ services:
       SNOWFLAKE_PASSWORD: ${SNOWFLAKE_PASSWORD:-}
       RAGLAB_DEMO_PASSWORD: ${RAGLAB_DEMO_PASSWORD:?demo login password}
       RAGLAB_SESSION_SECRET: ${RAGLAB_SESSION_SECRET:?session signing secret}
-      RAGLAB_RERANKER: bge-base
+      RAGLAB_RERANKER: ${RAGLAB_RERANKER:-qwen3-0.6b}   # bge-base = the fallback; `deploy.sh reranker <name>` flips it
       RAGLAB_RERANK_DTYPE: ${RAGLAB_RERANK_DTYPE:-fp32}   # bf16 on a CPU with AMX (the VM)
       RAGLAB_WARM_RERANKER: "on"
       RAGLAB_PLAN_CACHE: "on"

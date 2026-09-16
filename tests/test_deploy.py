@@ -84,6 +84,7 @@ def test_app_image_recipe_is_serve_only_with_weights_baked_in():
     dockerfile = (ROOT / "Dockerfile").read_text()
     assert "--no-default-groups --group rerank" in dockerfile          # no parsers, no de-id models
     assert "snapshot_download" in dockerfile and "RERANKER_REVISION=" in dockerfile
+    assert "QWEN_REVISION=" in dockerfile and "RAGLAB_RERANKER=qwen3-0.6b" in dockerfile  # both rerankers ride; Qwen ships
     assert "HF_HUB_OFFLINE=1" in dockerfile                             # never a runtime download
     assert "eval/golden.jsonl eval/baseline.json" in dockerfile         # the Console's numbers
     ignore = (ROOT / ".dockerignore").read_text().split()
@@ -119,7 +120,7 @@ def test_deploy_script_parses_and_documents_its_verbs():
     script = ROOT / "deploy" / "deploy.sh"
     assert subprocess.run(["bash", "-n", str(script)], capture_output=True).returncode == 0
     text = script.read_text()
-    for verb in ('  up)', '  rollback)', '  status)'):
+    for verb in ('  up)', '  rollback)', '  reranker)', '  status)'):
         assert verb in text
     assert ".previous-tag" in text and "--no-pull" in text
 
@@ -156,6 +157,17 @@ def test_deploy_script_up_and_rollback_switch_the_tag(tmp_path):
     assert run("up", "v2.0.2", "--no-pull").returncode == 0
     assert "pull" not in (tmp_path / "docker.log").read_text()
     assert run("nonsense").returncode == 2
+    # The reranker switch: one env line and an app restart, no pull, no rebuild.
+    (tmp_path / "docker.log").write_text("")
+    assert run("reranker", "bge-base").returncode == 0
+    assert "RAGLAB_RERANKER=bge-base" in (root / "deploy" / ".env").read_text()
+    log = (tmp_path / "docker.log").read_text()
+    assert "up -d --no-deps app" in log and "pull" not in log
+    assert run("reranker", "qwen3-0.6b").returncode == 0
+    assert "RAGLAB_RERANKER=qwen3-0.6b" in (root / "deploy" / ".env").read_text()
+    assert (root / "deploy" / ".env").read_text().count("RAGLAB_RERANKER=") == 1  # replaced, not appended twice
+    assert run("reranker", "gpt-4").returncode == 2
+    assert "reranker=qwen3-0.6b" in run("status").stdout
 
 
 def test_smoke_waits_for_a_site_that_comes_up_late(monkeypatch):

@@ -82,7 +82,7 @@ hybrid search **per source** (pgvector + one BM25 index per source via
 pg_textsearch, each with its own statistics; RRF k=60, rank-only, in SQL; the
 lexical list weighted ×2 for identifier-shaped questions; each source fuses to
 its own top-50 so a large source cannot crowd a small one out before
-reranking) → cross-encoder reranker (BAAI/bge-reranker-base, local). Change
+reranking) → reranker (Qwen3-Reranker-0.6B, a yes/no judge, local; BAAI/bge-reranker-base rides in the image as the one-line fallback). Change
 questions are searched per plan year: the latest year with the question as
 asked, prior years with a year-neutral form of it, and each year's candidates
 are reranked against that year's query.
@@ -703,7 +703,7 @@ on a laptop for the smoke test; only `deploy/.env` differs.
 
 The **app image** (`Dockerfile`) is serve-only: the pipeline's query side
 and the web layer, CPU-only torch from the lock's Linux index fork, no
-parsers or de-identification models, and the reranker weights baked in at
+parsers or de-identification models, and both rerankers' weights baked in at
 a pinned revision with `HF_HUB_OFFLINE=1` — a container never downloads
 anything. 2.6 GB. The **snapshot** (`raglab snapshot`) is a `pg_dump` of
 the live database — corpus, embeddings, identity accounts, the evaluation

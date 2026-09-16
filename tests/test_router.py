@@ -61,6 +61,7 @@ def test_route_is_deterministic():
         reasons=route(q).reasons,
         change=True,
         cover_field="plan_code", cover_keys=("71-014", "71-026"), cover_asked="HDHP", cover_level="option",
+        options=("HDHP",),
     )
 
 

@@ -35,7 +35,7 @@ def wait_for_site(client: httpx.Client, wait: float) -> float:
 
 
 def run(base_url: str, username: str = "admin", password: str | None = None, question_id: str = DEFAULT_QUESTION_ID,
-        timeout: float = 120.0, verify: bool | str = True, wait: float = 0.0) -> dict:
+        timeout: float = 900.0, verify: bool | str = True, wait: float = 0.0) -> dict:
     """Returns the findings; raises RuntimeError with the failing step.
     `wait` > 0 polls for the site first (a fresh deploy)."""
     password = password or os.environ.get("RAGLAB_DEMO_PASSWORD") or "raglab-demo"

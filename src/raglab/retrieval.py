@@ -373,6 +373,16 @@ def _filters(route: Route, member_key: str | None = None,
             "AND (c.metadata->'record'->>'effective_to' IS NULL OR c.metadata->'record'->>'effective_to' > %s)))"
         )
         params += [list(versioned), *pinned, as_of, as_of]
+    if route.options:
+        # Option precedence: a chunk whose heading names a different option of
+        # the same brochure is the near-duplicate distractor (Elevate Plus mail
+        # order for an Elevate question). Headings naming none, or the asked
+        # option, stay; other sources are untouched. A hard filter, never a boost.
+        clauses.append(
+            "(c.doc_type <> 'brochure' OR c.metadata->'section_options' IS NULL "
+            "OR c.metadata->'section_options' = '[]'::jsonb OR c.metadata->'section_options' ?| %s)"
+        )
+        params.append(list(route.options))
     if route.years:
         # An edition filter: event sources (a call has a date, not an
         # edition) pass regardless of year.

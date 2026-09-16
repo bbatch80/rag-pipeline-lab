@@ -173,6 +173,24 @@ def index_copy(text: str, source) -> str:
     return indexcopy.normalize(text, source)
 
 
+def _refresh_section_options(conn: psycopg.Connection, doc_id: int, meta: DocumentMeta) -> int:
+    """Metadata-only: recompute each chunk's section_options from its heading
+    and write the ones that differ. Never touches the recipe, so no document
+    goes stale; the ingest skip path runs it on every unchanged document."""
+    from raglab.metadata import section_options
+
+    changed = 0
+    rows = conn.execute("SELECT id, metadata->>'section', metadata->'section_options' FROM chunks WHERE document_id = %s",
+                        (doc_id,)).fetchall()
+    for chunk_id, section, current in rows:
+        wanted = section_options(section or "", meta.plan_options)
+        if current != wanted:
+            conn.execute("UPDATE chunks SET metadata = metadata || jsonb_build_object('section_options', %s::jsonb) WHERE id = %s",
+                         (json.dumps(wanted), chunk_id))
+            changed += 1
+    return changed
+
+
 def content_hash(path: Path, recipe: str = "") -> str:
     """Fingerprint = source bytes + processing recipe. A doc is stale if
     either its file or how we process it changed."""
@@ -223,6 +241,8 @@ def ingest_document(
                 "UPDATE chunks SET member_key = %s WHERE document_id = %s AND member_key IS DISTINCT FROM %s",
                 (meta.member_key, row[0], meta.member_key),
             )
+        if len(meta.plan_options) >= 2:  # option-level tags derive from headings; refresh without re-ingesting
+            _refresh_section_options(conn, row[0], meta)
         if meta.record:  # the record's fields ride as chunk metadata; refresh without re-ingesting
             conn.execute(
                 "UPDATE chunks SET metadata = metadata || jsonb_build_object('record', %s::jsonb) "

@@ -1094,7 +1094,8 @@ def rerank_bakeoff_run_cmd(keys, reidentify):
             for line in rerankbakeoff.report(conn, runs).splitlines():
                 receipt.add("gate", line)
     except Exception as exc:
-        receipt.fail(f"{type(exc).__name__}: {exc}")
+        cause = f" (cause: {type(exc.__cause__).__name__}: {exc.__cause__})" if exc.__cause__ else ""
+        receipt.fail(f"{type(exc).__name__}: {exc}{cause}")
     receipt.finish()
 
 
@@ -1570,3 +1571,7 @@ def restore_cmd(file: Path, yes: bool):
         detail = getattr(exc, "stderr", b"") or b""
         receipt.fail(f"{type(exc).__name__}: {detail.decode().strip() or exc}")
     receipt.finish()
+
+
+if __name__ == "__main__":  # the bake-off harness runs the gate as `python -m raglab.cli`
+    main()

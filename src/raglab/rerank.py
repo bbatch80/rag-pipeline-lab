@@ -247,7 +247,11 @@ class _Qwen3Reranker:
         # NaN guard above rescores any overflow in fp32. RAGLAB_RERANK_DTYPE=bf16.
         cpu_bf16 = self.device == "cpu" and RERANK_DTYPE == "bf16"
         with self.torch.no_grad(), self.torch.autocast("cpu", dtype=self.torch.bfloat16, enabled=cpu_bf16):
-            logits = model(**enc).logits[:, -1, :].float()
+            # Only the last position's logits are read; asking for every
+            # position materializes batch × sequence × 151k-vocab floats —
+            # gigabytes per batch. That grew the app to 15.5 GB and the
+            # kernel killed it on the VM (2026-09-16).
+            logits = model(**enc, logits_to_keep=1).logits[:, -1, :].float()
             two = self.torch.stack([logits[:, self.no], logits[:, self.yes]], dim=1)
             return self.torch.nn.functional.log_softmax(two, dim=1)[:, 1].exp().tolist()
 

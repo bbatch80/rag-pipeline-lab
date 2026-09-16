@@ -123,3 +123,29 @@ def test_cover_all_dedupes_plans_without_guaranteeing_seats(monkeypatch):
     guaranteed = rr.rerank("q", list(pool), top_n=5, stratify_years=(2026,), stratify_plans=plans, plan_seats=True)
     plans_seated = {c.plan_code for c in guaranteed} - {None}
     assert len(plans_seated) >= 4 and any(c.doc_type == "bulletin" for c in guaranteed)  # the program/option rule still seats the lanes (5 seats: 4 lanes + the bulletin that outscores them)
+
+
+def test_model_loads_once_under_concurrent_first_use(monkeypatch):
+    """The warm-up thread and the first request may call for the model at the
+    same moment; only one load happens and both get the same object (the
+    v2.0.21 smoke failed on two concurrent loads of transformers' lazy modules)."""
+    import threading
+    import time
+
+    calls = []
+
+    def slow_load(key):
+        calls.append(key)
+        time.sleep(0.2)
+        return object()
+
+    monkeypatch.setattr(rerank, "_model", None)
+    monkeypatch.setattr(rerank, "load_reranker", slow_load)
+    got = []
+    threads = [threading.Thread(target=lambda: got.append(rerank._get_model())) for _ in range(4)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert len(calls) == 1 and len({id(m) for m in got}) == 1
+    monkeypatch.setattr(rerank, "_model", None)

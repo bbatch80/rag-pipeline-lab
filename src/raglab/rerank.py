@@ -254,10 +254,12 @@ class _Qwen3Reranker:
     def _fp32(self):
         """A full-precision copy, loaded on the first NaN and kept."""
         if getattr(self, "_model32", None) is None:
-            from transformers import AutoModelForCausalLM
+            with _load_lock:
+                if getattr(self, "_model32", None) is None:
+                    from transformers import AutoModelForCausalLM
 
-            self._model32 = AutoModelForCausalLM.from_pretrained(
-                self.model.config._name_or_path, local_files_only=True, dtype=self.torch.float32).eval().to(self.device)
+                    self._model32 = AutoModelForCausalLM.from_pretrained(
+                        self.model.config._name_or_path, local_files_only=True, dtype=self.torch.float32).eval().to(self.device)
         return self._model32
 
 
@@ -271,10 +273,20 @@ def load_reranker(key: str):
     return CrossEncoder(spec["model"], local_files_only=True, trust_remote_code=True)
 
 
+_load_lock = threading.Lock()  # one loader at a time: the warm-up thread and the first request
+
+
 def _get_model():
+    """The shipped reranker, loaded once. The deployed app warms it on a
+    thread at startup while requests may already be arriving; two threads
+    importing transformers' lazy modules at the same moment left one with a
+    half-initialized module (ImportError: cannot import name
+    'AutoModelForCausalLM' — the v2.0.21 smoke failure, 2026-09-16)."""
     global _model
     if _model is None:
-        _model = load_reranker(RERANKER)
+        with _load_lock:
+            if _model is None:
+                _model = load_reranker(RERANKER)
     return _model
 
 

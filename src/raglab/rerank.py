@@ -210,7 +210,7 @@ class _Qwen3Reranker:
     # is minimal — each pair's score does not depend on what it was batched with.
     MAX_LEN = 1024
 
-    def predict(self, pairs, batch_size: int = 16):
+    def predict(self, pairs, batch_size: int = 8):
         texts = [self._PREFIX + f"<Instruct>: {self._INSTRUCT}\n<Query>: {q}\n<Document>: {d}" + self._SUFFIX
                  for q, d in pairs]
         order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
@@ -228,6 +228,11 @@ class _Qwen3Reranker:
                     probs[k] = s
             for j, s in zip(idx, probs, strict=True):
                 scores[j] = float(s)
+            if self.device == "mps":
+                # The MPS allocator caches every batch shape it has seen and never
+                # returns it; over thousands of variably padded batches that grew to
+                # the whole machine (15 GB, swapping) and stalled the bake-off.
+                self.torch.mps.empty_cache()
         return scores
 
     def _probs(self, model, enc) -> list[float]:

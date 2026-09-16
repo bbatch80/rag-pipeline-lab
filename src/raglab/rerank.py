@@ -30,7 +30,11 @@ RERANKERS = {
                   "thresholds": {"call_note": 0.1, "appeal": 0.1, "clinical_note": 0.1}, "size_gb": 2.2},
     "mxbai-large-v2": {"model": "mixedbread-ai/mxbai-rerank-large-v2", "kind": "cross-encoder", "threshold": 0.5,
                        "thresholds": {"call_note": 0.1, "appeal": 0.1, "clinical_note": 0.1}, "size_gb": 3.0},
-    "qwen3-0.6b": {"model": "Qwen/Qwen3-Reranker-0.6B", "kind": "qwen3", "threshold": 0.5,
+    # Derived 2026-09-16 from run 879 (full golden set): expected refusals score
+    # 0.516 / 0.500 / 0.0 / 0.0 (plus one false-answer kind at 0.99 that fools
+    # every model); answered prose items score >= 0.899 -> the midpoint 0.7.
+    # Record bars unchanged (record-lane items behaved identically to bge-base).
+    "qwen3-0.6b": {"model": "Qwen/Qwen3-Reranker-0.6B", "kind": "qwen3", "threshold": 0.7,
                    "thresholds": {"call_note": 0.1, "appeal": 0.1, "clinical_note": 0.1}, "size_gb": 1.2},
     "bge-base": {
         "model": "BAAI/bge-reranker-base",  # 2023, 278M

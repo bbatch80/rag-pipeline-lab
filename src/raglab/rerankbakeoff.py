@@ -19,7 +19,7 @@ TARGETS = (
     ("factual-05", "rebuild"), ("call_note-04", "rebuild"), ("call_note-03", "rebuild"),
     ("clinical_policy-02", "rebuild"), ("clinical_policy-03", "rebuild"), ("table-04", "rebuild"),
     ("internal_table-02", "rebuild"), ("unanswerable-02", "rebuild"), ("unanswerable-03", "rebuild"), ("unanswerable-05", "rebuild"), ("persona_negative-02", "rebuild"), ("persona_negative-05", "rebuild"), ("persona_negative-06", "rebuild"),
-    ("C12", "golden"), ("F1", "golden"), ("F6", "golden"), ("factual-19", "golden"),
+    ("C12", "golden"), ("F1", "golden"), ("F6", "golden"), ("factual-19", "golden"), ("factual-20", "golden"),
 )
 
 import json

@@ -53,7 +53,9 @@ def test_data_page_is_public_and_linked_above_how_it_works(app):
     from raglab import identity as _i
     portal.post("/ui/login", data={"username": "admin", "password": PASSWORD}, follow_redirects=False)
     html = portal.get("/").text
-    assert html.index('href="/data"') < html.index('href="/codebase"') < html.index('href="/payload"'), "data, then How it works, then the payload"
+    assert html.index('href="/data"') < html.index('href="/codebase"') < html.index('href="/payload"') < html.index('href="/future"'), "data, how it works, the payload, then future additions"
+    future = client.get("/future")
+    assert future.status_code == 200 and "Dental plan brochures" in future.text and "A GPU for the reranker" in future.text
     page = client.get("/payload")
     assert page.status_code == 200 and "spec_version" in page.text and "provenance" in page.text  # the JSON is HTML-escaped in the page
 

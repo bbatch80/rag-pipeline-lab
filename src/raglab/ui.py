@@ -167,6 +167,11 @@ def mount(app: FastAPI) -> None:
         """What every answer is drawn from — public, for a reader who has not logged in."""
         return _page("data.html", request, me_or_none(request), current="data")
 
+    @app.get("/how", response_class=HTMLResponse)
+    def how_page(request: Request):
+        """How it works, on one screen — public."""
+        return _page("how.html", request, me_or_none(request), current="how")
+
     @app.get("/codebase", response_class=HTMLResponse)
     def codebase_page(request: Request):
         """How the codebase is connected — public, for a reader who has not logged in."""

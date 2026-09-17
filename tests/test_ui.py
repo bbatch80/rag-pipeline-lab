@@ -53,7 +53,9 @@ def test_data_page_is_public_and_linked_above_how_it_works(app):
     from raglab import identity as _i
     portal.post("/ui/login", data={"username": "admin", "password": PASSWORD}, follow_redirects=False)
     html = portal.get("/").text
-    assert html.index('href="/data"') < html.index('href="/codebase"') < html.index('href="/payload"') < html.index('href="/future"'), "data, how it works, the payload, then future additions"
+    assert html.index('href="/data"') < html.index('href="/how"') < html.index('href="/codebase"') < html.index('href="/payload"') < html.index('href="/future"'), "data, the one-screen how, the full codebase map, the payload, then future additions"
+    how = client.get("/how")
+    assert how.status_code == 200 and "Disclose" in how.text and 'href="/codebase"' in how.text  # the one-screen version links the full map
     future = client.get("/future")
     assert future.status_code == 200 and "Dental plan brochures" in future.text and "A GPU for the reranker" in future.text
     page = client.get("/payload")

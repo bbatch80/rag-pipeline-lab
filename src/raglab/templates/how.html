@@ -1,0 +1,46 @@
+{% extends "layout.html" %}
+{% block title %}How it works{% endblock %}
+{% block content %}
+<article class="howpage">
+<hgroup><h2>How it works</h2></hgroup>
+
+<section class="howflow">
+  <h3><span class="kicker">Flow 1</span>An unstructured source goes in</h3>
+  <ol class="steps steps-doc">
+    <li><b>Fetch</b><span>real PDFs from OPM; synthetic records generated</span></li>
+    <li><b>Parse</b><span>layout model reads titles, text, tables, pages</span></li>
+    <li><b>Chunk</b><span>by heading; tables kept whole</span></li>
+    <li><b>Gate</b><span>a bad parse is quarantined, never indexed</span></li>
+    <li><b>De-identify</b><span>PHI pseudonymized before anything is stored</span></li>
+    <li><b>Embed &amp; index</b><span>vectors, keywords, metadata on every chunk</span></li>
+  </ol>
+</section>
+
+<section class="howflow">
+  <h3><span class="kicker">Flow 2</span>A question comes in</h3>
+  <ol class="steps steps-q">
+    <li><b>Identity</b><span>role resolved at the edge, never from the question</span></li>
+    <li><b>Context</b><span>member, claim, case ids become filters</span></li>
+    <li><b>Route</b><span>years, plans, options, as-of date</span></li>
+    <li><b>Plan</b><span>the model proposes legs; the code governs them</span></li>
+    <li><b>Search</b><span>vector + keyword, under row-level security</span></li>
+    <li><b>Rerank</b><span>a judge scores every candidate; abstains below the bar</span></li>
+    <li><b>Warehouse</b><span>named Snowflake queries as your role</span></li>
+    <li><b>Payload</b><span>one versioned contract: status, evidence, provenance</span></li>
+    <li><b>Disclose</b><span>logged before it is delivered, or not delivered</span></li>
+  </ol>
+</section>
+
+<section class="howflow">
+  <h3><span class="kicker">Flow 3</span>Proving it works</h3>
+  <ol class="steps steps-proof">
+    <li><b>Golden set</b><span>163 questions with the evidence each must return</span></li>
+    <li><b>The gate</b><span>every pull request ratchets against the baseline</span></li>
+    <li><b>Per role</b><span>recall measured under each role's entitlements</span></li>
+    <li><b>Dashboard</b><span>the scorecard every full run rewrites</span></li>
+  </ol>
+</section>
+
+<p class="howfoot">Governance runs through all three: row-level security and Snowflake policies, de-identification with an owner-only vault, identity resolved at the edge, and the disclosure log. <a href="/codebase">The full map, module by module &rarr;</a></p>
+</article>
+{% endblock %}

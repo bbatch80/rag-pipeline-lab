@@ -232,3 +232,21 @@ ol.future { counter-reset: item; list-style: none; padding: 0; margin: 1rem 0 0;
 ol.future li { counter-increment: item; position: relative; padding: .6rem 0 .6rem 2.4rem; border-top: 1px solid var(--line); font-size: 1rem; }
 ol.future li:last-child { border-bottom: 1px solid var(--line); }
 ol.future li::before { content: counter(item); position: absolute; left: 0; top: .6rem; width: 1.6rem; height: 1.6rem; border-radius: 50%; background: var(--navy); color: #fff; font-family: var(--mono); font-size: .78rem; display: grid; place-items: center; }
+
+/* /how — one screen to talk over (public) */
+.howpage { max-width: 80rem; }
+.howpage hgroup p { color: var(--muted); }
+.howflow { margin-top: 1.1rem; }
+.howflow h3 { font-size: 1.05rem; margin: 0 0 .5rem; }
+.howflow h3 .kicker { display: inline-block; font-family: var(--pico-font-family-sans-serif, inherit); font-size: .68rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--steel); margin-right: .6rem; }
+ol.steps { counter-reset: s; list-style: none; padding: 0; margin: 0; display: grid; gap: .5rem; }
+ol.steps-doc { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+ol.steps-q { grid-template-columns: repeat(9, minmax(0, 1fr)); }
+ol.steps-proof { grid-template-columns: repeat(4, minmax(0, 1fr)); max-width: 60rem; }
+ol.steps li { counter-increment: s; position: relative; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: .7rem .75rem .7rem .75rem; min-height: 6.2rem; }
+ol.steps li::before { content: counter(s); display: block; font-family: var(--mono); font-size: .72rem; color: var(--steel); margin-bottom: .25rem; }
+ol.steps-q li::before { color: var(--gold); font-weight: 600; }
+ol.steps li b { display: block; font-family: var(--serif, Georgia, serif); font-size: 1.02rem; color: var(--navy); margin-bottom: .2rem; }
+ol.steps li span { display: block; font-size: .8rem; line-height: 1.35; color: var(--muted); }
+.howfoot { margin-top: 1.4rem; max-width: 80ch; font-size: .95rem; }
+@media (max-width: 70rem) { ol.steps-q { grid-template-columns: repeat(3, minmax(0, 1fr)); } ol.steps-doc { grid-template-columns: repeat(3, minmax(0, 1fr)); } ol.steps-proof { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

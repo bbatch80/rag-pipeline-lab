@@ -157,6 +157,11 @@ def mount(app: FastAPI) -> None:
             return RedirectResponse("/login", status_code=303)
         return _page("portal.html", request, me)
 
+    @app.get("/future", response_class=HTMLResponse)
+    def future_page(request: Request):
+        """What comes next — public."""
+        return _page("future.html", request, me_or_none(request), current="future")
+
     @app.get("/data", response_class=HTMLResponse)
     def data_page(request: Request):
         """What every answer is drawn from — public, for a reader who has not logged in."""

@@ -224,3 +224,11 @@ iframe.dashboard { width: 100%; height: 70vh; border: 1px solid var(--line); bor
 @media (max-width: 60rem) { .payloadgrid { grid-template-columns: 1fr; } }
 
 iframe.dashboard-page { height: calc(100vh - 7.5rem); border: 1px solid var(--line); }
+
+/* /future — what comes next (public) */
+.futurepage { max-width: 46rem; }
+.futurepage hgroup p { color: var(--muted); }
+ol.future { counter-reset: item; list-style: none; padding: 0; margin: 1rem 0 0; max-width: 40rem; }
+ol.future li { counter-increment: item; position: relative; padding: .6rem 0 .6rem 2.4rem; border-top: 1px solid var(--line); font-size: 1rem; }
+ol.future li:last-child { border-bottom: 1px solid var(--line); }
+ol.future li::before { content: counter(item); position: absolute; left: 0; top: .6rem; width: 1.6rem; height: 1.6rem; border-radius: 50%; background: var(--navy); color: #fff; font-family: var(--mono); font-size: .78rem; display: grid; place-items: center; }

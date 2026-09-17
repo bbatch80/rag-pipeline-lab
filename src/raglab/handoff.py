@@ -1,63 +1,13 @@
-"""The hand-off specification as a page: generated from the schema, the MCP
-server, the source registry, and the identity groups at request time, so it
-cannot drift from the code. The prose around the generated parts lives in
-docs/HANDOFF.md; markers there say where each generated table goes."""
+"""Example payloads for the payload page: built by the current code, so what
+the page shows is always the shape the code emits."""
 
 from __future__ import annotations
 
-import asyncio
-import inspect
-import json
-import re
-from functools import lru_cache
-from pathlib import Path
-
-import markdown
-import psycopg
-
-from raglab import config, identity, payload
+from raglab import config, payload
 from raglab.retrieval import Candidate
 from raglab.router import Route
 
 SCHEMA_PATH = config.REPO_ROOT / "db" / "payload.schema.json"
-DOC_PATH = config.REPO_ROOT / "docs" / "HANDOFF.md"
-MARKER = re.compile(r"<!-- generated: ([a-z_]+) -->")
-GENERATED = ("payload_fields", "example_payload", "mcp_tools", "sources", "groups")
-
-
-def schema() -> dict:
-    return json.loads(SCHEMA_PATH.read_text())
-
-
-def _type_of(node: dict) -> str:
-    if "enum" in node:
-        return "one of " + ", ".join(str(v) for v in node["enum"])
-    if "const" in node:
-        return repr(node["const"])
-    t = node.get("type", "any")
-    if isinstance(t, list):
-        return " | ".join(t)
-    if t == "array":
-        items = node.get("items")
-        return f"array of {_type_of(items)}" if isinstance(items, dict) else "array"
-    return t
-
-
-def fields(node: dict | None = None, path: str = "") -> list[dict]:
-    """Every property in the schema, depth-first in schema order: dotted path,
-    type, whether its parent object requires it, its description."""
-    node = schema() if node is None else node
-    required = set(node.get("required", ()))
-    rows: list[dict] = []
-    for name, prop in node.get("properties", {}).items():
-        dotted = f"{path}.{name}" if path else name
-        rows.append({"path": dotted, "type": _type_of(prop), "required": name in required,
-                     "description": prop.get("description", ""), "depth": dotted.count(".")})
-        rows += fields(prop, dotted)
-        items = prop.get("items")
-        if isinstance(items, dict) and items.get("properties"):
-            rows += fields(items, dotted + "[]")
-    return rows
 
 
 def example_payload() -> dict:
@@ -79,58 +29,41 @@ def example_payload() -> dict:
     return payload.build("What would a High Option member pay at the ER?", route, [c])
 
 
-@lru_cache(maxsize=1)
-def mcp_tools() -> list[dict]:
-    """The tools the MCP server registers, read from the server itself."""
-    from raglab.mcp_server import mcp
-
-    tools = asyncio.run(mcp.list_tools())
-    out = []
-    for t in tools:
-        input_schema = getattr(t, "input_schema", None) or getattr(t, "inputSchema", None) or {}
-        params = list(input_schema.get("properties", {}))
-        required = set(input_schema.get("required", ()))
-        out.append({"name": t.name, "params": [(p, p in required) for p in params],
-                    "description": inspect.cleandoc(t.description or "")})
-    return out
-
-
-def sources(conn: psycopg.Connection) -> list[dict]:
-    rows = conn.execute(
-        "SELECT key, doc_type, acl_tag, phi, versioned, member_scoped, event, chunk_profile, parser, display_name "
-        "FROM sources WHERE doc_type IS NOT NULL ORDER BY source_id").fetchall()
-    keys = ("key", "doc_type", "tier", "phi", "versioned", "member_scoped", "event", "chunking", "parser", "display_name")
-    return [dict(zip(keys, r, strict=True)) for r in rows]
-
-
-def groups() -> list[dict]:
-    return [{"group": g, "persona": persona, "warehouse_role": role or "—", "surfaces": ", ".join(surfaces),
-             "description": desc} for g, (persona, role, surfaces, desc) in identity.GROUPS.items()]
-
-
-def markers(text: str | None = None) -> list[str]:
-    text = DOC_PATH.read_text() if text is None else text
-    return MARKER.findall(text)
-
-
-def render(conn: psycopg.Connection, env) -> str:
-    """The document's prose as HTML with every generated section in place."""
-    text = DOC_PATH.read_text()
-    if text.startswith("# "):  # the page supplies the title; the repository copy keeps its own
-        text = text.split("\n", 1)[1]
-    body = markdown.markdown(text, extensions=["tables"])
-    parts = {
-        "payload_fields": env.get_template("partials/handoff_fields.html").render(
-            fields=fields(), spec_version=payload.SPEC_VERSION),
-        "example_payload": "<details class=\"example\"><summary>Example payload (spec %s), built by the current code</summary>"
-                           "<pre class=\"chunktext\">%s</pre></details>" % (
-                               payload.SPEC_VERSION, _escape(json.dumps(example_payload(), indent=2))),
-        "mcp_tools": env.get_template("partials/handoff_tools.html").render(tools=mcp_tools()),
-        "sources": env.get_template("partials/handoff_sources.html").render(sources=sources(conn)),
-        "groups": env.get_template("partials/handoff_groups.html").render(groups=groups()),
-    }
-    return MARKER.sub(lambda m: parts.get(m.group(1), m.group(0)), body)
-
-
-def _escape(s: str) -> str:
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+def example_composed_payload() -> dict:
+    """The composed shape: one question, a document leg and a warehouse leg,
+    one status — built by the current code so every part the payload page
+    describes is on the screen."""
+    question = "Why was the claim they called about on June 11, 2024 denied?"
+    note = Candidate(
+        chunk_id=2, content="record: call C0004417 · member [MEMBER_ID-0212] · claim CLM-8464384463 · 2024-06-11 · BENEFITS\n\n"
+        "Member called about a denied claim for an office visit on 2024-06-03. Explained the provider is out of network "
+        "for the member's plan; advised on the appeal process and the timely-filing window. Disposition: resolved.",
+        section="", doc_title="Call C0004417 (2024-06-11)", source_path="data/internal/call_notes/C0004417.md",
+        plan_code=None, year=2024, acl_tag="member_services", pages=[1], vector_rank=1, text_rank=1,
+        rrf_score=0.0328, rerank_score=0.97, content_hash="9c1d3e5f7a2b4c6d8e0f1a3b5c7d9e1f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c2d",
+        record={"call_id": "C0004417", "member_id": "[MEMBER_ID-0212]", "claim_id": "CLM-8464384463",
+                "call_date": "2024-06-11", "reason_code": "BENEFITS", "disposition": "resolved"},
+        doc_type="call_note", recipe="markdown|2000/1500/250|template|deid:tokenize:v2|abbr:v1|boiler:0.02|dedup:v2|rec:v1",
+        embedding_model="text-embedding-3-small",
+    )
+    single = payload.build(question, Route(scope="in_scope", years=(2024,), plan_codes=("71-006",)), [note])
+    chunk = single["chunks"][0]
+    plan = {"shape": "compound", "origin": "model", "model": "claude-haiku-4-5-20251001", "widened": False, "enforced": [],
+            "legs": [
+                {"name": "call_note", "kind": "doc_probe", "text": "call about the denied claim on June 11, 2024",
+                 "sources": ["call_note"], "query_name": None, "slots": [], "required": True},
+                {"name": "claim_adjudication", "kind": "member_query", "text": None, "sources": [],
+                 "query_name": "claim_adjudication", "slots": ["claim_id"], "required": True},
+            ]}
+    sub_results = [{"leg": "call_note", "status": "ok", "confidence": chunk["scores"]["rerank"],
+                    "router": single["router"], "chunk_indexes": [0], "widened": False, "reason": None}]
+    warehouse_results = [{"leg": "claim_adjudication", "status": "ok", "query_name": "claim_adjudication", "reason": None,
+                          "columns": ["CLAIM_ID", "STATUS", "DECISION_DATE", "DENIAL_REASON", "POLICY_ID"],
+                          "rows": [["CLM-8464384463", "denied", "2024-06-20", "out_of_network", None]],
+                          "row_count": 1, "masked_columns": []}]
+    composed = payload.compose(question, plan, sub_results, warehouse_results, [chunk], subject="M445350895",
+                               unresolved=[], as_of_defaulted=False, router=single["router"])
+    composed["payload_id"] = "3f2a9c1e-0000-4000-8000-000000000000"
+    composed["persona"] = "member_services"
+    composed["member_context"] = "M445350895"
+    return composed

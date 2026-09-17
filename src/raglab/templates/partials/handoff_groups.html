@@ -1,7 +1,0 @@
-<div class="scroll"><table class="fields">
-  <thead><tr><th>Group</th><th>Document persona</th><th>Warehouse role</th><th>Surfaces</th><th>Who</th></tr></thead>
-  <tbody>{% for g in groups %}<tr>
-    <td><code>{{ g.group }}</code></td><td>{{ g.persona }}</td><td>{{ g.warehouse_role }}</td><td>{{ g.surfaces }}</td><td>{{ g.description }}</td>
-  </tr>{% endfor %}</tbody>
-</table></div>
-<p class="note">{{ groups | length }} identity groups, read from the code's registry.</p>

@@ -1,9 +1,0 @@
-<div class="scroll"><table class="fields">
-  <thead><tr><th>Source</th><th>Type</th><th>Tier</th><th>PHI</th><th>Versioned</th><th>Member-scoped</th><th>Event</th><th>Chunking</th><th>Parser</th></tr></thead>
-  <tbody>{% for s in sources %}<tr>
-    <td><code>{{ s.key }}</code><br><small>{{ s.display_name }}</small></td><td>{{ s.doc_type }}</td><td>{{ s.tier }}</td>
-    <td>{{ "yes" if s.phi else "" }}</td><td>{{ "yes" if s.versioned else "" }}</td><td>{{ "yes" if s.member_scoped else "" }}</td><td>{{ "yes" if s.event else "" }}</td>
-    <td>{{ s.chunking }}</td><td>{{ s.parser }}</td>
-  </tr>{% endfor %}</tbody>
-</table></div>
-<p class="note">{{ sources | length }} document sources, read from the <code>sources</code> registry table.</p>

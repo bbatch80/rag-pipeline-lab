@@ -1,0 +1,49 @@
+{% extends "layout.html" %}
+{% block title %}The data{% endblock %}
+{% block content %}
+<article class="datapage">
+<hgroup><h2>The data</h2><p>One corpus: about 10,800 documents in Postgres, and the same members' structured records in Snowflake beside them. Every answer on this site is drawn from these and nothing else.</p></hgroup>
+
+<div class="datagrid">
+  <section class="datacard">
+    <header><h3>Real public documents</h3><span class="store">Postgres</span></header>
+    <p class="cardnote">Parsed from the published PDFs.</p>
+    <ul class="datarows">
+      <li><span class="label">GEHA plan brochures<small>six plans, six years, 2021 to 2026</small></span><span class="num">23</span></li>
+      <li><span class="label">OPM carrier letters<small>2023 to 2026</small></span><span class="num">73</span></li>
+    </ul>
+  </section>
+
+  <section class="datacard">
+    <header><h3>Synthetic internal documents</h3><span class="store">Postgres</span></header>
+    <p class="cardnote">Generated with the structure of the real thing: versions, effective dates, record fields.</p>
+    <ul class="datarows">
+      <li><span class="label">Standard operating procedures</span><span class="num">16</span></li>
+      <li><span class="label">Claims bulletins</span><span class="num">24</span></li>
+      <li><span class="label">Formulary editions</span><span class="num">11</span></li>
+      <li><span class="label">Knowledge-base articles</span><span class="num">24</span></li>
+      <li><span class="label">Clinical policy versions</span><span class="num">86</span></li>
+      <li><span class="label">Member call notes</span><span class="num">9,949</span></li>
+      <li><span class="label">Appeal documents<small>including the determination letters</small></span><span class="num">340</span></li>
+      <li><span class="label">Clinical notes</span><span class="num">250</span></li>
+    </ul>
+  </section>
+
+  <section class="datacard">
+    <header><h3>Structured member data</h3><span class="store">Snowflake</span></header>
+    <p class="cardnote">The same members, under row-access and masking policies.</p>
+    <ul class="datarows">
+      <li><span class="label">Members</span><span class="num">11,519</span></li>
+      <li><span class="label">Claim lines<small>one per healthcare encounter</small></span><span class="num">676,859</span></li>
+      <li><span class="label">Adjudications</span><span class="num">127,498</span></li>
+      <li><span class="label">Enrollment rows</span><span class="num">59,620</span></li>
+      <li><span class="label">Call-log rows</span><span class="num">10,030</span></li>
+      <li><span class="label">Appeals</span><span class="num">300</span></li>
+      <li><span class="label">Providers<small>with network status by plan</small></span><span class="num">1,145</span></li>
+    </ul>
+  </section>
+</div>
+
+<p class="closing">No real person is in any of it, and the pipeline treats it as PHI anyway: de-identified before indexing, walled by role. Six roles log in, and each sees only what its role is entitled to.</p>
+</article>
+{% endblock %}

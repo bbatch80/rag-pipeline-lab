@@ -43,6 +43,21 @@ def test_provenance_line_under_each_chunk():
     assert p["chunks"][0]["source"]["content_hash"][:8] in html
 
 
+def test_data_page_is_public_and_linked_above_how_it_works(app):
+    client = TestClient(app)  # no login
+    page = client.get("/data")
+    assert page.status_code == 200
+    for text in ("23", "676,859", "11,519", "No real person is in any of it"):
+        assert text in page.text, text
+    portal = TestClient(app)
+    from raglab import identity as _i
+    portal.post("/ui/login", data={"username": "admin", "password": PASSWORD}, follow_redirects=False)
+    html = portal.get("/").text
+    assert html.index('href="/data"') < html.index('href="/codebase"') < html.index('href="/payload"'), "data, then How it works, then the payload"
+    page = client.get("/payload")
+    assert page.status_code == 200 and "spec_version" in page.text and "provenance" in page.text  # the JSON is HTML-escaped in the page
+
+
 def test_codebase_page_is_public_and_linked(app):
     client = TestClient(app)  # no login
     page = client.get("/codebase")
@@ -423,7 +438,11 @@ def test_console_health_audit_and_payload_page(surfaces, db, monkeypatch, tmp_pa
 
     admin = _session(surfaces, "admin")
     page = admin.get("/console").text
-    assert "Platform Console" in page and "documents" in page and "gate baseline" in page and "/console/dashboard" in page
+    assert "Platform Console" in page and "documents" in page and "gate baseline" in page
+    assert 'href="/dashboard"' in page and "Dashboard" in page  # the top nav, admin only, right of Console
+    assert '<iframe' not in page  # the scorecard is no longer embedded in the Console
+    rep = _session(surfaces, "member_services")
+    assert 'href="/dashboard"' not in rep.get("/ask").text and rep.get("/dashboard").status_code == 403
     rows = admin.get("/ui/console/audit", params={"username": "member_services"}).text
     assert "member_services" in rows and "member_services" in rows and pid[:8] in rows and "secret facts" in rows
     assert "No disclosures match" in admin.get("/ui/console/audit", params={"username": "nobody"}).text
@@ -434,6 +453,8 @@ def test_console_health_audit_and_payload_page(surfaces, db, monkeypatch, tmp_pa
     assert admin.get("/console/payload/00000000-0000-0000-0000-000000000000").status_code == 404
     # the scorecard: the dashboard file as the last full run wrote it, or a pointer when none exists
     monkeypatch.setattr(dashboard, "OUT_PATH", tmp_path / "none.html")
-    assert "No dashboard yet" in admin.get("/console/dashboard").text
+    assert "No dashboard yet" in admin.get("/dashboard/scorecard").text
     (tmp_path / "none.html").write_text("<title>raglab — evaluation dashboard</title><p>scorecard</p>")
-    assert "scorecard" in admin.get("/console/dashboard").text
+    assert "scorecard" in admin.get("/dashboard/scorecard").text
+    assert '/dashboard/scorecard' in admin.get("/dashboard").text  # its own page, framing the scorecard
+    assert admin.get("/console/dashboard", follow_redirects=False).status_code == 308  # the old address still works

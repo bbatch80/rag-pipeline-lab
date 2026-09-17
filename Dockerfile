@@ -41,7 +41,6 @@ RUN HF_HUB_OFFLINE=0 /app/.venv/bin/python -c \
 COPY src ./src
 COPY eval/golden.jsonl eval/baseline.json ./eval/
 COPY db ./db
-COPY docs ./docs
 COPY README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-default-groups --group rerank

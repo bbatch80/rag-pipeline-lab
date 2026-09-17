@@ -167,24 +167,6 @@ iframe.dashboard { width: 100%; height: 70vh; border: 1px solid var(--line); bor
   .provenance { margin-left: 0; }
 }
 
-/* hand-off specification page */
-.handoff { max-width: 72rem; }
-.handoff h2 { font-size: 1.25rem; margin-top: 2rem; }
-.handoff h3 { font-size: 1.05rem; margin-top: 1.4rem; }
-.handoff p, .handoff li { max-width: 68ch; }
-.handoff table.fields { font-size: .82rem; table-layout: fixed; width: 100%; }
-.handoff table.payload th:nth-child(1) { width: 27%; } .handoff table.payload th:nth-child(2) { width: 15%; } .handoff table.payload th:nth-child(3) { width: 7%; }
-.handoff table.fields td { overflow-wrap: anywhere; }
-.handoff table.fields td, .handoff table.fields th { padding: .3rem .5rem; vertical-align: top; }
-.handoff table.fields td.type { color: var(--steel); }
-.handoff table.fields td.req { color: var(--muted); }
-.handoff table.fields tr.d1 td:first-child { padding-left: 1.4rem; }
-.handoff table.fields tr.d2 td:first-child { padding-left: 2.6rem; }
-.handoff table.fields tr.d3 td:first-child { padding-left: 3.8rem; }
-.handoff .tool header { padding: .4rem .8rem; }
-.handoff .tool pre.doc { white-space: pre-wrap; font-size: .8rem; line-height: 1.45; margin: 0; padding: .6rem .8rem; background: var(--code); color: var(--ink); }
-.handoff details.example summary { cursor: pointer; font-weight: 600; }
-
 /* /codebase — how the codebase is connected (public) */
 .codebase { max-width: 46rem; }
 .codebase hgroup p { font-size: 1.02rem; color: var(--ink); }
@@ -207,3 +189,38 @@ iframe.dashboard { width: 100%; height: 70vh; border: 1px solid var(--line); bor
 .howlink { display: inline-block; font-size: 1.05rem; font-weight: 600; color: var(--navy); text-decoration: none; border: 1px solid var(--line); border-radius: 8px; padding: .6rem 1.1rem; background: var(--card); }
 .howlink:hover { border-color: var(--gold); }
 @media (max-width: 40rem) { .codebase .lookup { grid-template-columns: 1fr; } }
+/* /data — what every answer is drawn from (public) */
+.datapage { max-width: 72rem; }
+.datapage hgroup p { max-width: 70ch; font-size: 1.02rem; color: var(--ink); }
+.datagrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin: 1.2rem 0 1.4rem; align-items: start; }
+.datacard { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: .9rem 1.1rem 1rem; }
+.datacard header { display: flex; align-items: baseline; justify-content: space-between; gap: .6rem; margin-bottom: .2rem; }
+.datacard h3 { font-size: 1.05rem; margin: 0; }
+.datacard .store { font-size: .68rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--steel); background: var(--code); padding: .15rem .5rem; border-radius: 1rem; white-space: nowrap; }
+.datacard .cardnote { color: var(--muted); font-size: .84rem; margin: 0 0 .6rem; }
+.datacard ul.datarows { list-style: none; margin: 0; padding: 0; }
+.datacard ul.datarows li { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; padding: .42rem 0; border-top: 1px solid var(--line); }
+.datacard ul.datarows li:last-child { border-bottom: 1px solid var(--line); }
+.datacard .label { font-size: .92rem; }
+.datacard .label small { display: block; color: var(--muted); font-size: .78rem; margin-top: .1rem; }
+.datacard .num { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 1rem; color: var(--navy); white-space: nowrap; min-width: 4.5rem; text-align: right; }
+.datapage .closing { max-width: 70ch; color: var(--ink); }
+@media (max-width: 60rem) { .datagrid { grid-template-columns: 1fr; } }
+.howlink-block + .howlink-block { margin-top: .6rem; }
+
+/* /payload — the payload itself (public) */
+.payloadpage { max-width: 76rem; }
+.payloadpage hgroup p { max-width: 70ch; font-size: 1.02rem; color: var(--ink); }
+.payloadgrid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1.2rem; align-items: start; margin-top: 1rem; }
+.payloadjson { background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.payloadjson header { display: flex; justify-content: space-between; align-items: baseline; padding: .5rem .9rem; border-bottom: 1px solid var(--line); font-size: .78rem; letter-spacing: .05em; text-transform: uppercase; color: var(--steel); font-weight: 600; }
+.payloadjson header a { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.payloadjson pre { margin: 0; padding: .9rem 1rem; font-size: .78rem; line-height: 1.45; white-space: pre; overflow-x: auto; max-height: 70vh; background: var(--code); color: var(--ink); }
+.payloadkeys h3 { font-size: 1.05rem; margin: 0 0 .5rem; }
+.payloadkeys dl { margin: 0; }
+.payloadkeys dt { margin-top: .7rem; }
+.payloadkeys dd { margin: .15rem 0 0; font-size: .9rem; color: var(--ink); }
+.payloadkeys .note { margin-top: 1rem; font-size: .85rem; }
+@media (max-width: 60rem) { .payloadgrid { grid-template-columns: 1fr; } }
+
+iframe.dashboard-page { height: calc(100vh - 7.5rem); border: 1px solid var(--line); }

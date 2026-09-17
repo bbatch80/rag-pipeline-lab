@@ -1,0 +1,26 @@
+{% extends "layout.html" %}
+{% block title %}The payload{% endblock %}
+{% block content %}
+<article class="payloadpage">
+<hgroup><h2>The payload</h2><p>Every answer on this site, every MCP tool call, and every evaluation run receives the same object: one versioned JSON payload. This is one, built by the current code for a real question.</p></hgroup>
+
+<div class="payloadgrid">
+  <section class="payloadjson">
+    <header><span>Example payload · spec {{ spec_version }}</span><a href="/payload.schema.json">JSON Schema</a></header>
+    <pre>{{ example }}</pre>
+  </section>
+  <section class="payloadkeys">
+    <h3>What each part is</h3>
+    <dl>
+      <dt><code>status</code></dt><dd>Decided upstream, never by the consumer: <code>ok</code>, <code>insufficient_evidence</code>, or <code>out_of_scope</code>. The consumer relays a refusal; it never invents one.</dd>
+      <dt><code>router</code></dt><dd>What the platform actually searched: the plan years and plan codes, the as-of date. Not what a model guessed.</dd>
+      <dt><code>chunks[]</code></dt><dd>The evidence, ranked. Each chunk is a complete citation unit: the text, its <code>source</code> (title, pages, section, content hash), the <code>acl_basis</code> that admitted it for this caller, and its <code>provenance</code> (document version, parse recipe, embedding model).</dd>
+      <dt><code>plan</code></dt><dd>The legs the platform ran (at most three, one pass) and who decided them: the model, the rules, or the caller.</dd>
+      <dt><code>warehouse_results[]</code></dt><dd>Rows from named Snowflake queries, run as the caller's role, with the columns the policy masked named as such.</dd>
+      <dt><code>payload_id</code></dt><dd>Joins this payload to its disclosure record: who asked, as which role, what exactly was delivered.</dd>
+    </dl>
+    <p class="note">Consumers pin against <code>spec_version</code>; additive changes bump the minor number. The normative definition is the JSON Schema linked above.</p>
+  </section>
+</div>
+</article>
+{% endblock %}

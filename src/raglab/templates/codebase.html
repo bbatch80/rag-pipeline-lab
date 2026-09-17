@@ -24,7 +24,7 @@
 
 <h3><span class="kicker">Flow 3</span>Proving it works</h3>
 <p><code>eval_retrieval.py</code> runs the golden set through the real pipeline per persona; <code>checks.py</code> scores each item by its declared shape (pages, values, rows, refusal); <code>taxonomy.py</code> groups items by the kind of work they ask for; the ratchet compares against <code>eval/baseline.json</code>.</p>
-<p><code>benchmark.py</code> measures index recall, <code>recall-rls</code> recall per persona, <code>drift.py</code> embedding drift, <code>ablation.py</code> the funnel with stages removed, <code>rerankbakeoff.py</code> and <code>tablebakeoff.py</code> the model and parser comparisons. <code>dashboard.py</code> renders the scorecard, <code>console.py</code> the health and audit views, <code>handoff.py</code> the specification page. <code>smoke.py</code> checks the live site after a deploy.</p>
+<p><code>benchmark.py</code> measures index recall, <code>recall-rls</code> recall per persona, <code>drift.py</code> embedding drift, <code>ablation.py</code> the funnel with stages removed, <code>rerankbakeoff.py</code> and <code>tablebakeoff.py</code> the model and parser comparisons. <code>dashboard.py</code> renders the scorecard, <code>console.py</code> the health and audit views. <code>smoke.py</code> checks the live site after a deploy.</p>
 
 <h3><span class="kicker">Throughout</span>The governance layer</h3>
 <p>It runs through all three flows: RLS policies and migrations in <code>db/</code>, <code>deid.py</code> with its owner-only vault, <code>identity.py</code>, and the disclosure log.</p>

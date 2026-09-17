@@ -6,7 +6,7 @@
   <title>{% block title %}raglab{% endblock %} · raglab</title>
   <link rel="stylesheet" href="/static/pico.min.css">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="/static/raglab.css?v=geha-16">
+  <link rel="stylesheet" href="/static/raglab.css?v=geha-22">
   <script src="/static/htmx.min.js"></script>
 </head>
 <body>
@@ -18,6 +18,9 @@
       {% for surface in surface_titles if surface in me.surfaces %}
       <li><a href="/{{ surface }}" {% if surface == current %}aria-current="page"{% endif %}>{{ surface_titles[surface] }}</a></li>
       {% endfor %}
+      {% if "console" in me.surfaces %}
+      <li><a href="/dashboard" title="The evaluation scorecard from the last full run: pass rate by category and group against the baseline, payload health, latency, recall" {% if current == "dashboard" %}aria-current="page"{% endif %}>Dashboard</a></li>
+      {% endif %}
       {% endif %}
     </ul>
     <ul>

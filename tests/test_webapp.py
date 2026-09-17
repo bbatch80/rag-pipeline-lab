@@ -314,27 +314,10 @@ def test_console_reads_are_admin_only(client):
     assert client.get("/status").status_code == 401
 
 
-def test_handoff_page_is_generated_for_the_console_and_denied_elsewhere(client, db):
-    from raglab import handoff, identity, payload
-
-    _login(client, "member_services")
-    assert client.get("/console/handoff").status_code == 403
-    _login(client, "admin")
-    page = client.get("/console/handoff")
-    assert page.status_code == 200, page.text[:300]
-    html = page.text
-    assert payload.SPEC_VERSION in html
-    for row in handoff.fields():
-        assert f"<code>{row['path']}</code>" in html, row["path"]
-    for group in identity.GROUPS:
-        assert f"<code>{group}</code>" in html, group
-    for src in handoff.sources(db):
-        assert f"<code>{src['key']}</code>" in html, src["key"]
-    for tool in ("compose_context", "search_documents", "query_member_data"):
-        assert f"<code>{tool}(" in html, tool
-    assert "<!-- generated:" not in html, "a marker was left unrendered"
-    schema = client.get("/console/handoff/payload.schema.json")
+def test_payload_schema_is_served_beside_the_payload_page(client):
+    schema = client.get("/payload.schema.json")
     assert schema.status_code == 200 and schema.json()["title"] == "raglab context payload"
+    assert client.get("/handoff").status_code == 404
 
 
 @pytest.mark.clean_corpus

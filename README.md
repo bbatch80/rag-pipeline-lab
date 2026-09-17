@@ -547,11 +547,8 @@ Both lanes surface through one contract and one thin server.
 
 Every retrieval — CLI, evaluation, or MCP — returns the same versioned
 JSON payload (spec `1.2.0`, additive over `1.1.0` and `1.0.0`; normative
-schema at `db/payload.schema.json`, validated in CI). The hand-off
-specification for a team taking the platform over — contract, sources and
-recipes, entitlement rules, reproducibility, acceptance — is
-`docs/HANDOFF.md`, and a test fails when it drifts from the code. Key
-properties:
+schema at `db/payload.schema.json`, validated in CI; the site's `/payload`
+page shows one built by the current code). Key properties:
 
 - `status` (`ok` | `insufficient_evidence` | `out_of_scope`) is decided
   upstream by the abstention threshold and scope gate — the consumer

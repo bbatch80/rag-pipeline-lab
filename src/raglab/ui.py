@@ -157,6 +157,11 @@ def mount(app: FastAPI) -> None:
             return RedirectResponse("/login", status_code=303)
         return _page("portal.html", request, me)
 
+    @app.get("/data", response_class=HTMLResponse)
+    def data_page(request: Request):
+        """What every answer is drawn from — public, for a reader who has not logged in."""
+        return _page("data.html", request, me_or_none(request), current="data")
+
     @app.get("/codebase", response_class=HTMLResponse)
     def codebase_page(request: Request):
         """How the codebase is connected — public, for a reader who has not logged in."""
@@ -304,29 +309,39 @@ def mount(app: FastAPI) -> None:
         return _page("payload_page.html", request, _me(ident), current="console", rec=rec,
                      rendered=render_payload(rec["payload"]))
 
-    @app.get("/console/handoff", response_class=HTMLResponse)
-    def console_handoff(request: Request, ident: identity.Identity = Depends(require_surface("console"))):
-        """The hand-off specification, generated at request time (raglab.handoff)."""
-        from raglab import handoff
+    @app.get("/payload", response_class=HTMLResponse)
+    def payload_spec_page(request: Request):
+        """The payload itself — one example built by the current code, and what each part is. Public."""
+        import json
 
-        with app.state.connect() as conn:
-            body = handoff.render(conn, env)
-        return _page("handoff.html", request, _me(ident), current="console", body=body)
+        from raglab import handoff, payload as payload_mod
 
-    @app.get("/console/handoff/payload.schema.json")
-    def console_handoff_schema(ident: identity.Identity = Depends(require_surface("console"))):
+        return _page("payload_spec.html", request, me_or_none(request), current="payload",
+                     example=json.dumps(handoff.example_composed_payload(), indent=2), spec_version=payload_mod.SPEC_VERSION)
+
+    @app.get("/payload.schema.json")
+    def payload_schema():
         from raglab import handoff
 
         return FileResponse(handoff.SCHEMA_PATH, media_type="application/schema+json", filename="payload.schema.json")
 
-    @app.get("/console/dashboard")
-    def console_dashboard(ident: identity.Identity = Depends(require_surface("console"))):
-        """The evaluation dashboard as the last full run wrote it."""
+    @app.get("/dashboard", response_class=HTMLResponse)
+    def dashboard_page(request: Request, ident: identity.Identity = Depends(require_surface("console"))):
+        """The evaluation dashboard on its own page (admin): the scorecard the last full run wrote."""
+        return _page("dashboard_page.html", request, _me(ident), current="dashboard")
+
+    @app.get("/dashboard/scorecard")
+    def dashboard_scorecard(ident: identity.Identity = Depends(require_surface("console"))):
+        """The dashboard file as the last full run wrote it."""
         from raglab.dashboard import OUT_PATH
 
         if not OUT_PATH.exists():
             return HTMLResponse("<p>No dashboard yet: run <code>raglab eval-retrieval</code> or <code>raglab dashboard</code>.</p>")
         return FileResponse(OUT_PATH, media_type="text/html")
+
+    @app.get("/console/dashboard")
+    def console_dashboard_redirect():
+        return RedirectResponse("/dashboard", status_code=308)
 
     @app.post("/ui/ask", response_class=HTMLResponse)
     def ask_fragment(question: str = Form(...), ident: identity.Identity = Depends(require_surface("ask"))):

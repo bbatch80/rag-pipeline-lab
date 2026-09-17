@@ -1,7 +1,0 @@
-<div class="scroll"><table class="fields payload">
-  <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Meaning</th></tr></thead>
-  <tbody>{% for f in fields %}<tr class="d{{ f.depth }}">
-    <td><code>{{ f.path }}</code></td><td class="type">{{ f.type }}</td><td class="req">{{ "yes" if f.required else "" }}</td><td>{{ f.description }}</td>
-  </tr>{% endfor %}</tbody>
-</table></div>
-<p class="note">{{ fields | length }} fields, spec {{ spec_version }}, generated from <code>db/payload.schema.json</code> at request time. <a href="/console/handoff/payload.schema.json">Download the JSON Schema</a> for your own validators.</p>

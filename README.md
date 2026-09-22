@@ -1,6 +1,6 @@
 # rag-pipeline-lab
 
-VIDEO_URL
+https://github.com/user-attachments/assets/e11f2e70-c473-4fc1-97fc-23ba1b1af58a
 
 *The five surfaces answering questions as six roles, with the disclosure
 log and the evaluation dashboard behind them (5:52, no audio). Full
